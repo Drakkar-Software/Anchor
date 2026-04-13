@@ -68,12 +68,27 @@ export function useLinkedQuery<T>(
      * `initialData` to serve cached records instantly.
      */
     mergeToStore?: StoreApi<TableStore<any, any, any>>
+    /**
+     * Time in ms before data is considered stale. When data is fresh (fetched
+     * within this window), mount- and dep-change-triggered refetches are skipped
+     * and `isLoading` stays `false` — serving the existing data as stale-while-
+     * revalidate. Defaults to `0` (always refetch, existing behaviour).
+     *
+     * Refetches triggered by a linked store mutation always bypass this guard
+     * so optimistic writes stay reactive.
+     *
+     * Note: the timer resets on component unmount because it is held in a ref.
+     * For cross-remount SWR (e.g. back-navigation), combine with `initialData`
+     * reading from the store's persisted records.
+     */
+    staleTime?: number
   },
 ): UseLinkedQueryResult<T> {
   const enabled = options?.enabled ?? true
   const deps = options?.deps ?? []
   const linkedStores = options?.stores ?? []
   const mergeToStore = options?.mergeToStore
+  const staleTime = options?.staleTime ?? 0
 
   const resolveInitialData = (): T | undefined => {
     const raw = options?.initialData
@@ -94,6 +109,12 @@ export function useLinkedQuery<T>(
   mergeToStoreRef.current = mergeToStore
   // Flag to suppress store subscription during own mergeToStore writes
   const isMergingRef = useRef(false)
+  // Tracks whether we already have data to display (suppresses isLoading during background SWR refetch)
+  const hasDataRef = useRef(hasInitialData)
+  // Timestamp of last successful fetch — used for staleTime guard
+  const lastFetchedAtRef = useRef<number | null>(null)
+  // Tracks storeVersion at last effect execution to detect store-mutation-driven refetches
+  const prevStoreVersionRef = useRef(0)
 
   // Track store mutation version — increments when any linked store's records change
   const [storeVersion, setStoreVersion] = useState(0)
@@ -122,12 +143,16 @@ export function useLinkedQuery<T>(
 
   const refetch = useCallback(async () => {
     const gen = ++generationRef.current
-    setIsLoading(true)
+    if (!hasDataRef.current) {
+      setIsLoading(true)
+    }
     setError(null)
     try {
       const result = await queryFnRef.current()
       if (gen === generationRef.current) {
         setData(result)
+        hasDataRef.current = result !== undefined
+        lastFetchedAtRef.current = Date.now()
         if (mergeToStoreRef.current && Array.isArray(result)) {
           isMergingRef.current = true
           mergeToStoreRef.current.getState().mergeRecords(result)
@@ -151,9 +176,19 @@ export function useLinkedQuery<T>(
       setIsLoading(false)
       return
     }
+    const storeVersionChanged = prevStoreVersionRef.current !== storeVersion
+    prevStoreVersionRef.current = storeVersion
+    if (
+      !storeVersionChanged &&
+      staleTime > 0 &&
+      lastFetchedAtRef.current !== null &&
+      Date.now() - lastFetchedAtRef.current < staleTime
+    ) {
+      return
+    }
     refetch()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, refetch, storeVersion, ...deps])
+  }, [enabled, refetch, staleTime, storeVersion, ...deps])
 
   return { data, isLoading, error, refetch }
 }

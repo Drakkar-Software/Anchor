@@ -88,13 +88,42 @@ function TodoList() {
 | **Store factories** | `createTableStore`, `createSupabaseStores`, `createViewStore` |
 | **Mutations** | Optimistic insert/update/upsert/remove, batch ops, offline queue |
 | **Query** | Filter DSL (`eq`, `gt`, `ilike`, ...), fluent builder, cursor pagination |
-| **Hooks** | `useQuery`, `useMutation`, `useAuth`, `useRealtime`, `useInfiniteQuery`, `useSuspenseQuery`, `useLinkedQuery`, `useRpc`, `useEdgeFunction`, `useStorage`, `useSyncStatus` |
+| **Hooks** | `useQuery`, `useMutation`, `useAuth`, `useRealtime`, `useInfiniteQuery`, `useSuspenseQuery`, `useLinkedQuery` (with `staleTime`, `initialData`, `mergeToStore`), `useRpc`, `useEdgeFunction`, `useStorage`, `useSyncStatus` |
 | **Sync** | Cross-tab, multi-device, incremental, selective, background |
 | **Conflict resolution** | `remote-wins`, `local-wins`, `last-write-wins`, `field-merge`, custom |
 | **Persistence** | Pluggable adapters, encrypted storage, schema versioning, quota management |
 | **Auth** | Auth store, session gate, RLS error detection |
 | **Resilience** | Retry with backoff, circuit breaker, rate limiter |
 | **Server** | RSC prefetch, RPC actions, Edge Functions |
+
+## `useLinkedQuery` — joins & complex queries with SWR
+
+Use when you need a custom Supabase query (join, aggregation, complex select) that should still react to optimistic mutations on related stores.
+
+```tsx
+const { data, isLoading } = useLinkedQuery(
+  () => supabase.from('offers').select('*, applications(*)').eq('id', offerId).single(),
+  {
+    stores: [stores.applications], // re-fetch when applications change
+    deps: [offerId],
+    enabled: !!offerId,
+    staleTime: 30_000,             // skip refetch if data is <30s old
+    initialData: () => stores.offers.getState().records.get(offerId), // instant cache
+    mergeToStore: stores.offers,   // write results back so detail views get initialData
+  },
+)
+```
+
+### Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `stores` | `[]` | Zustand table stores to watch — refetches when any store's records change |
+| `deps` | `[]` | Additional React deps (like filter params) that trigger a refetch |
+| `enabled` | `true` | Disable fetching conditionally |
+| `initialData` | — | Seed data before first fetch (value or `() => T \| undefined`). With initial data, `isLoading` starts `false` and the fetch fires in the background (SWR). |
+| `mergeToStore` | — | Write array results into this store via `mergeRecords()` — list queries populate the store so detail views can use `initialData` |
+| `staleTime` | `0` | ms before cached data is considered stale. Fresh data → refetch skipped, `isLoading` stays `false`. Store mutations always bypass this guard. Resets on unmount. |
 
 ## Tree-Shakeable Imports
 

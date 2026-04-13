@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.3.3] - 2026-04-13
+
+### Features
+
+- **`staleTime` option for `useLinkedQuery()`**: Skip mount/dep-change refetches when data is fresh (fetched within `staleTime` ms). `isLoading` stays `false` while existing data is served — stale-while-revalidate without a skeleton flash. Defaults to `0` (always refetch, existing behavior). Refetches driven by a linked store mutation always bypass this guard to keep optimistic updates reactive.
+
 ## [1.3.2] - 2026-04-13
 
 ### Bug Fixes

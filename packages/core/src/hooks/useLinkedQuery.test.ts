@@ -283,6 +283,117 @@ describe("useLinkedQuery - store subscription pattern", () => {
     expect(storeVersion).toBe(1)
   })
 
+  // ─── staleTime ────────────────────────────────────────────────────────────
+
+  it("staleTime: fetch is skipped when data is fresh", () => {
+    // Simulate: lastFetchedAt is recent, staleTime is 5000ms, no store mutation
+    const lastFetchedAt = Date.now() - 100 // fetched 100ms ago
+    const staleTime = 5000
+    const storeVersion = 0
+    let prevStoreVersion = 0
+
+    const storeVersionChanged = prevStoreVersion !== storeVersion
+    prevStoreVersion = storeVersion
+
+    const shouldSkip =
+      !storeVersionChanged &&
+      staleTime > 0 &&
+      lastFetchedAt !== null &&
+      Date.now() - lastFetchedAt < staleTime
+
+    expect(shouldSkip).toBe(true)
+  })
+
+  it("staleTime: fetch runs when data is stale", () => {
+    const lastFetchedAt = Date.now() - 10_000 // fetched 10s ago
+    const staleTime = 5000
+    const storeVersion = 0
+    let prevStoreVersion = 0
+
+    const storeVersionChanged = prevStoreVersion !== storeVersion
+    prevStoreVersion = storeVersion
+
+    const shouldSkip =
+      !storeVersionChanged &&
+      staleTime > 0 &&
+      lastFetchedAt !== null &&
+      Date.now() - lastFetchedAt < staleTime
+
+    expect(shouldSkip).toBe(false)
+  })
+
+  it("staleTime: store mutation bypasses freshness guard", () => {
+    const lastFetchedAt = Date.now() - 100 // data is fresh
+    const staleTime = 5000
+    const storeVersion = 1 // store mutated
+    let prevStoreVersion = 0
+
+    const storeVersionChanged = prevStoreVersion !== storeVersion
+    prevStoreVersion = storeVersion
+
+    const shouldSkip =
+      !storeVersionChanged &&
+      staleTime > 0 &&
+      lastFetchedAt !== null &&
+      Date.now() - lastFetchedAt < staleTime
+
+    // Store mutation → storeVersionChanged = true → guard bypassed
+    expect(storeVersionChanged).toBe(true)
+    expect(shouldSkip).toBe(false)
+  })
+
+  it("staleTime=0: always fetches regardless of lastFetchedAt", () => {
+    const lastFetchedAt = Date.now() - 1 // nearly instant ago
+    const staleTime = 0
+    const storeVersion = 0
+    let prevStoreVersion = 0
+
+    const storeVersionChanged = prevStoreVersion !== storeVersion
+    prevStoreVersion = storeVersion
+
+    const shouldSkip =
+      !storeVersionChanged &&
+      staleTime > 0 &&
+      lastFetchedAt !== null &&
+      Date.now() - lastFetchedAt < staleTime
+
+    expect(shouldSkip).toBe(false)
+  })
+
+  it("staleTime: isLoading stays false when data exists (SWR background fetch)", () => {
+    // hasDataRef starts true (from initialData or prior fetch)
+    let hasData = true
+    let isLoading = false
+
+    // Simulate refetch() with SWR guard
+    const startLoading = () => {
+      if (!hasData) isLoading = true
+    }
+    const finishFetch = () => {
+      hasData = true
+      isLoading = false
+    }
+
+    startLoading()
+    expect(isLoading).toBe(false) // data exists → skeleton suppressed
+
+    finishFetch()
+    expect(isLoading).toBe(false)
+    expect(hasData).toBe(true)
+  })
+
+  it("staleTime: isLoading is true when no data yet (cold start)", () => {
+    let hasData = false
+    let isLoading = false
+
+    const startLoading = () => {
+      if (!hasData) isLoading = true
+    }
+
+    startLoading()
+    expect(isLoading).toBe(true) // no data → show skeleton
+  })
+
   it("generation counter pattern discards stale results", async () => {
     let generationRef = 0
     const results: string[] = []
