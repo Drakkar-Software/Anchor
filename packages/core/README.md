@@ -123,7 +123,8 @@ const { data, isLoading } = useLinkedQuery(
 | `enabled` | `true` | Disable fetching conditionally |
 | `initialData` | — | Seed data before first fetch (value or `() => T \| undefined`). With initial data, `isLoading` starts `false` and the fetch fires in the background (SWR). |
 | `mergeToStore` | — | Write array results into this store via `mergeRecords()` — list queries populate the store so detail views can use `initialData` |
-| `staleTime` | `0` | ms before cached data is considered stale. Fresh data → refetch skipped, `isLoading` stays `false`. Store mutations always bypass this guard. Resets on unmount. |
+| `staleTime` | `0` | ms before cached data is considered stale. Fresh data → refetch skipped, `isLoading` stays `false`. Store mutations always bypass this guard. Combine with `queryKey` for cross-remount SWR. |
+| `queryKey` | — | Stable string key for cross-remount SWR. When set with `staleTime > 0`, data and fetch timestamp survive component unmount — back-navigation won't re-fetch fresh data. Must be unique per query (e.g. `"offers:${userId}"`). |
 
 ## Tree-Shakeable Imports
 

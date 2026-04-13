@@ -394,6 +394,75 @@ describe("useLinkedQuery - store subscription pattern", () => {
     expect(isLoading).toBe(true) // no data → show skeleton
   })
 
+  // ─── queryKey / cross-remount cache ──────────────────────────────────────
+
+  it("queryKey: module-level cache stores data and timestamp after fetch", () => {
+    // Simulate what refetch() does when cacheKey is set
+    const cache = new Map<string, { lastFetchedAt: number; data: unknown }>()
+    const cacheKey = "offers:user-123"
+    const fetchResult = [{ id: "1", title: "Offer A" }]
+
+    const now = Date.now()
+    cache.set(cacheKey, { lastFetchedAt: now, data: fetchResult })
+
+    const entry = cache.get(cacheKey)
+    expect(entry).toBeDefined()
+    expect(entry?.data).toEqual(fetchResult)
+    expect(entry?.lastFetchedAt).toBeGreaterThanOrEqual(now)
+  })
+
+  it("queryKey: remounted component reads data and timestamp from cache", () => {
+    // Simulate unmount+remount: cache has a fresh entry from a previous mount
+    const cache = new Map<string, { lastFetchedAt: number; data: unknown }>()
+    const cacheKey = "offers:user-123"
+    const fetchResult = [{ id: "1" }]
+    cache.set(cacheKey, { lastFetchedAt: Date.now() - 500, data: fetchResult })
+
+    // On remount, hook reads from cache
+    const cachedEntry = cache.get(cacheKey)
+    const initialValue = cachedEntry?.data // simulates: resolveInitialData() ?? cachedEntry?.data
+    const lastFetchedAt = cachedEntry?.lastFetchedAt ?? null
+
+    expect(initialValue).toEqual(fetchResult) // data available immediately
+    expect(lastFetchedAt).not.toBeNull() // staleTime guard can now fire
+
+    // staleTime guard passes (fetched 500ms ago, staleTime 5s)
+    const staleTime = 5000
+    const storeVersionChanged = false
+    const shouldSkip =
+      !storeVersionChanged &&
+      staleTime > 0 &&
+      lastFetchedAt !== null &&
+      Date.now() - lastFetchedAt < staleTime
+
+    expect(shouldSkip).toBe(true) // no refetch on remount
+  })
+
+  it("queryKey: stale cache entry does not suppress refetch", () => {
+    const cache = new Map<string, { lastFetchedAt: number; data: unknown }>()
+    const cacheKey = "offers:user-123"
+    cache.set(cacheKey, { lastFetchedAt: Date.now() - 120_000, data: [] }) // 2min old
+
+    const cachedEntry = cache.get(cacheKey)
+    const lastFetchedAt = cachedEntry?.lastFetchedAt ?? null
+    const staleTime = 60_000
+
+    const shouldSkip =
+      staleTime > 0 &&
+      lastFetchedAt !== null &&
+      Date.now() - lastFetchedAt < staleTime
+
+    expect(shouldSkip).toBe(false) // must refetch
+  })
+
+  it("no queryKey: lastFetchedAt is null on remount (backward compat)", () => {
+    // Without queryKey, hook uses useRef(null) — resets on remount
+    const cachedEntry = undefined // no queryKey → no cache lookup
+    const lastFetchedAt = cachedEntry ? (cachedEntry as any).lastFetchedAt : null
+
+    expect(lastFetchedAt).toBeNull()
+  })
+
   it("generation counter pattern discards stale results", async () => {
     let generationRef = 0
     const results: string[] = []

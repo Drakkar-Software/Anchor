@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.3.4] - 2026-04-13
+
+### Bug Fixes
+
+- **Fix `staleTime` not working across page navigation**: `useLinkedQuery` stored `lastFetchedAt` in a React ref (resets on unmount) and `data` in `useState` (also resets). Back-navigation always triggered a refetch even when data was fresh. Fixed by adding a module-level `queryCache` Map and a new `queryKey` option — when provided, timestamp and data survive unmount so the staleTime guard works correctly across remounts.
+
 ## [1.3.3] - 2026-04-13
 
 ### Features

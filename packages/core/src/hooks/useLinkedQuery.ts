@@ -11,6 +11,10 @@ export type UseLinkedQueryResult<T> = {
   refetch: () => Promise<void>
 }
 
+// Module-level cache: persists { data, lastFetchedAt } across component unmount/remount.
+// Keyed by queryKey option — survives back-navigation, avoids re-fetching fresh data.
+const queryCache = new Map<string, { lastFetchedAt: number; data: unknown }>()
+
 /**
  * Custom async query that auto-refetches when linked stores mutate.
  *
@@ -77,11 +81,18 @@ export function useLinkedQuery<T>(
      * Refetches triggered by a linked store mutation always bypass this guard
      * so optimistic writes stay reactive.
      *
-     * Note: the timer resets on component unmount because it is held in a ref.
-     * For cross-remount SWR (e.g. back-navigation), combine with `initialData`
-     * reading from the store's persisted records.
+     * Combine with `queryKey` for cross-remount SWR (e.g. back-navigation).
+     * Without `queryKey`, the timer resets on component unmount.
      */
     staleTime?: number
+    /**
+     * Stable string key for cross-remount staleTime tracking. When provided
+     * with `staleTime > 0`, the fetch timestamp and cached data survive
+     * component unmount so back-navigation doesn't re-fetch within the
+     * staleTime window. Must be unique across all `useLinkedQuery` calls —
+     * include entity type and any filter params (e.g. `"offers:${userId}"`).
+     */
+    queryKey?: string
   },
 ): UseLinkedQueryResult<T> {
   const enabled = options?.enabled ?? true
@@ -89,13 +100,17 @@ export function useLinkedQuery<T>(
   const linkedStores = options?.stores ?? []
   const mergeToStore = options?.mergeToStore
   const staleTime = options?.staleTime ?? 0
+  const cacheKey = options?.queryKey
+
+  const cachedEntry = cacheKey ? queryCache.get(cacheKey) : undefined
 
   const resolveInitialData = (): T | undefined => {
     const raw = options?.initialData
     return typeof raw === "function" ? (raw as () => T | undefined)() : raw
   }
 
-  const initialValue = resolveInitialData()
+  // initialData takes priority over cache; cache is the fallback for cross-remount SWR
+  const initialValue = resolveInitialData() ?? (cachedEntry?.data as T | undefined)
   const hasInitialData = initialValue !== undefined
 
   const [data, setData] = useState<T | undefined>(initialValue)
@@ -111,8 +126,8 @@ export function useLinkedQuery<T>(
   const isMergingRef = useRef(false)
   // Tracks whether we already have data to display (suppresses isLoading during background SWR refetch)
   const hasDataRef = useRef(hasInitialData)
-  // Timestamp of last successful fetch — used for staleTime guard
-  const lastFetchedAtRef = useRef<number | null>(null)
+  // Timestamp of last successful fetch — seeded from module-level cache for cross-remount SWR
+  const lastFetchedAtRef = useRef<number | null>(cachedEntry?.lastFetchedAt ?? null)
   // Tracks storeVersion at last effect execution to detect store-mutation-driven refetches
   const prevStoreVersionRef = useRef(0)
 
@@ -152,7 +167,11 @@ export function useLinkedQuery<T>(
       if (gen === generationRef.current) {
         setData(result)
         hasDataRef.current = result !== undefined
-        lastFetchedAtRef.current = Date.now()
+        const now = Date.now()
+        lastFetchedAtRef.current = now
+        if (cacheKey) {
+          queryCache.set(cacheKey, { lastFetchedAt: now, data: result })
+        }
         if (mergeToStoreRef.current && Array.isArray(result)) {
           isMergingRef.current = true
           mergeToStoreRef.current.getState().mergeRecords(result)
@@ -168,7 +187,9 @@ export function useLinkedQuery<T>(
         setIsLoading(false)
       }
     }
-  }, [])
+    // cacheKey is stable (comes from options literal), safe to include
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cacheKey])
 
   // Fetch on mount, when deps change, or when linked stores mutate
   useEffect(() => {
