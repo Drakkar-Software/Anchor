@@ -50,6 +50,7 @@ export function createSupabaseStores<
     tableOrder,
     fetchRemoteOnBoot = true,
     auth = true,
+    authGate: authGateOpts,
   } = options
 
   // Shared instances
@@ -144,6 +145,7 @@ export function createSupabaseStores<
       authStore,
       tableStoreList,
       {
+        ...authGateOpts,
         realtimeManager,
         offlineQueue,
         onAuthChange: (_event, session) => {

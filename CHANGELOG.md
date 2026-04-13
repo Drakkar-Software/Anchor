@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.3.2] - 2026-04-13
+
+### Bug Fixes
+
+- **Fix all stores refetching on sign-in**: `createSupabaseStores` now accepts an `authGate` option (`clearOnSignOut`, `refetchOnSignIn`) forwarded to the internal auth gate — previously both defaulted to `true` with no way to override, causing all table stores to fetch on session restore
+
 ## [1.3.1] - 2026-04-09
 
 ### Bug Fixes

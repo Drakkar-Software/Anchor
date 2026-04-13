@@ -570,6 +570,13 @@ export type CreateSupabaseStoresOptions<
 
   // Auth
   auth?: boolean
+  /** Options forwarded to the internal auth gate (only used when auth is true) */
+  authGate?: {
+    /** Clear all table stores on sign-out (defaults to true) */
+    clearOnSignOut?: boolean
+    /** Refetch all table stores on sign-in (defaults to true) */
+    refetchOnSignIn?: boolean
+  }
 }
 
 /** Return type of createSupabaseStores */
