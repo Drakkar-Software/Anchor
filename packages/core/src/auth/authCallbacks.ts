@@ -35,6 +35,53 @@ export type AuthCallbackResult = {
   type: AuthCallbackType
 }
 
+/**
+ * Maps auth-callback types to post-login destination routes.
+ * Used with the `routes` option of `useAuthCallback`.
+ *
+ * @example
+ * const routes: AuthCallbackRoutes = {
+ *   recovery: '/settings/security',
+ *   signup:   '/onboarding',
+ *   default:  '/home',
+ * }
+ */
+export type AuthCallbackRoutes = {
+  recovery?: string
+  signup?: string
+  magiclink?: string
+  email?: string
+  email_change?: string
+  invite?: string
+  /** Fallback for any type without an explicit entry. */
+  default?: string
+  [type: string]: string | undefined
+}
+
+/**
+ * Resolves a post-login destination path from a callback type and a routes map.
+ *
+ * Returns the type-specific route if present, otherwise `routes.default`,
+ * otherwise `null` (no navigation should occur).
+ *
+ * @example
+ * resolveAuthRedirect('recovery', { recovery: '/settings/security', default: '/home' })
+ * // => '/settings/security'
+ *
+ * resolveAuthRedirect('signup', { default: '/home' })
+ * // => '/home'
+ *
+ * resolveAuthRedirect('email', { recovery: '/settings/security' })
+ * // => null
+ */
+export function resolveAuthRedirect(
+  type: AuthCallbackType,
+  routes: AuthCallbackRoutes | undefined,
+): string | null {
+  if (!routes) return null
+  return routes[type] ?? routes.default ?? null
+}
+
 // ─── URL Parsing ──────────────────────────────────────────────────────────────
 
 /**

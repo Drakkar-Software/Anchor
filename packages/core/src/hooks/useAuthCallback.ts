@@ -6,7 +6,9 @@ import type { SupabaseClient } from "@supabase/supabase-js"
 import type { AuthStore } from "../types.js"
 import {
   createSessionFromUrl,
+  resolveAuthRedirect,
   type AuthCallbackResult,
+  type AuthCallbackRoutes,
 } from "../auth/authCallbacks.js"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -28,6 +30,9 @@ export type UseAuthCallbackOptions = {
    * Called once when a session is successfully established from the URL.
    * Use this callback to navigate the user to the appropriate screen.
    *
+   * For simple type-based routing you can use `routes` + `redirect` instead
+   * of writing this switch by hand.
+   *
    * @example
    * onSuccess: ({ type }) => {
    *   if (type === 'recovery') router.replace('/reset-password')
@@ -41,6 +46,35 @@ export type UseAuthCallbackOptions = {
    * establishment fails.
    */
   onError?: (error: Error) => void
+
+  /**
+   * Declarative type-to-route map. When set, the hook automatically navigates
+   * after `onSuccess` fires. Provide a `default` entry as a fallback for types
+   * not listed explicitly.
+   *
+   * Requires `redirect` on native (no `window`); on web defaults to
+   * `window.location.replace` (so the back button cannot return to the
+   * token-bearing callback URL).
+   *
+   * @example
+   * routes: {
+   *   recovery: '/settings/security',
+   *   signup:   '/onboarding',
+   *   default:  '/home',
+   * }
+   */
+  routes?: AuthCallbackRoutes
+
+  /**
+   * Navigation primitive called with the resolved route path.
+   *
+   * Optional on web (defaults to `window.location.replace`).
+   * Required on native — pass your router's `replace` or `push` function.
+   *
+   * @example
+   * redirect: (path) => router.replace(path)
+   */
+  redirect?: (path: string) => void
 }
 
 export type UseAuthCallbackResult = {
@@ -64,7 +98,15 @@ export type UseAuthCallbackResult = {
  * Platform-specific URL retrieval is the caller's responsibility via `getUrl`.
  *
  * @example
- * // Web
+ * // Web — declarative routes (recommended)
+ * const { isProcessing } = useAuthCallback(supabase, authStore, {
+ *   getUrl: () => window.location.href,
+ *   routes: { recovery: '/settings/security', default: '/home' },
+ *   // redirect defaults to window.location.replace on web
+ * })
+ *
+ * @example
+ * // Web — manual onSuccess
  * const { isProcessing } = useAuthCallback(supabase, authStore, {
  *   getUrl: () => window.location.href,
  *   onSuccess: ({ type }) => {
@@ -74,13 +116,12 @@ export type UseAuthCallbackResult = {
  * })
  *
  * @example
- * // Native (Expo)
+ * // Native (Expo) — declarative routes
  * const url = useURL() // expo-linking
  * const { isProcessing } = useAuthCallback(supabase, authStore, {
  *   getUrl: () => url,
- *   onSuccess: ({ type }) => {
- *     router.replace(type === 'recovery' ? '/settings/security' : '/home')
- *   },
+ *   routes:   { recovery: '/settings/security', default: '/home' },
+ *   redirect: (path) => router.replace(path), // required on native
  * })
  */
 export function useAuthCallback(
@@ -119,6 +160,25 @@ export function useAuthCallback(
         })
 
         options.onSuccess?.(result)
+
+        // Declarative routing: resolve route from `routes` map and navigate.
+        // `onSuccess` fires first so analytics/state updates run before navigation.
+        const path = resolveAuthRedirect(result.type, options.routes)
+        if (path) {
+          const redirect =
+            options.redirect ??
+            (typeof window !== "undefined"
+              ? (p: string) => window.location.replace(p)
+              : undefined)
+          if (redirect) {
+            redirect(path)
+          } else {
+            console.warn(
+              "[anchor] useAuthCallback: `routes` set but no `redirect` provided " +
+                "and no browser environment detected — navigation skipped.",
+            )
+          }
+        }
       })
       .catch((err: unknown) => {
         const wrapped = err instanceof Error ? err : new Error(String(err))

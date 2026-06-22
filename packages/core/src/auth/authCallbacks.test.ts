@@ -5,6 +5,7 @@ import {
   createSessionFromUrl,
   sendPasswordRecovery,
   verifyRecoveryOTP,
+  resolveAuthRedirect,
 } from "./authCallbacks.js"
 
 // ─── parseAuthCallbackUrl ─────────────────────────────────────────────────────
@@ -315,5 +316,51 @@ describe("verifyRecoveryOTP", () => {
     expect(session).toBeNull()
     expect(error).toBeInstanceOf(Error)
     expect(error?.message).toBe("OTP expired")
+  })
+})
+
+// ─── resolveAuthRedirect ──────────────────────────────────────────────────────
+
+describe("resolveAuthRedirect", () => {
+  it("returns the type-specific route for recovery", () => {
+    expect(
+      resolveAuthRedirect("recovery", { recovery: "/settings/security", default: "/home" }),
+    ).toBe("/settings/security")
+  })
+
+  it("falls back to default when type has no explicit entry", () => {
+    expect(
+      resolveAuthRedirect("email", { recovery: "/settings/security", default: "/home" }),
+    ).toBe("/home")
+  })
+
+  it("returns null when type has no entry and no default", () => {
+    expect(resolveAuthRedirect("email", { recovery: "/settings/security" })).toBeNull()
+  })
+
+  it("returns null when routes is undefined", () => {
+    expect(resolveAuthRedirect("recovery", undefined)).toBeNull()
+  })
+
+  it("returns null for empty routes map", () => {
+    expect(resolveAuthRedirect("recovery", {})).toBeNull()
+  })
+
+  it("resolves a custom/unknown type via the index signature", () => {
+    expect(
+      resolveAuthRedirect("sso", { sso: "/dashboard", default: "/home" }),
+    ).toBe("/dashboard")
+  })
+
+  it("resolves signup route explicitly", () => {
+    expect(
+      resolveAuthRedirect("signup", { signup: "/onboarding", default: "/home" }),
+    ).toBe("/onboarding")
+  })
+
+  it("resolves magiclink to default when no specific entry", () => {
+    expect(
+      resolveAuthRedirect("magiclink", { recovery: "/settings/security", default: "/home" }),
+    ).toBe("/home")
   })
 })

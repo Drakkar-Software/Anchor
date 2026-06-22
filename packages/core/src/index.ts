@@ -110,11 +110,13 @@ export {
   getWebAuthRedirectTo,
   sendPasswordRecovery,
   verifyRecoveryOTP,
+  resolveAuthRedirect,
 } from "./auth/authCallbacks.js"
 export type {
   AuthCallbackType,
   ParsedAuthCallback,
   AuthCallbackResult,
+  AuthCallbackRoutes,
 } from "./auth/authCallbacks.js"
 
 // ─── Persistence ─────────────────────────────────────────────────────

@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.5.0] - 2026-06-22
+
+### Features
+
+- **Declarative redirects for `useAuthCallback`**: new optional `routes` and `redirect` options on `UseAuthCallbackOptions`. Set `routes: { recovery: '/settings/security', default: '/home' }` and the hook automatically navigates after the session is established — no hand-written `onSuccess` type-switch needed. `redirect` defaults to `window.location.replace` on web; pass your router's `replace`/`push` on native. Navigation fires after `onSuccess` (if provided) so analytics/state updates run first.
+- **`resolveAuthRedirect(type, routes)`** — new exported pure helper that resolves a destination path from an `AuthCallbackRoutes` map. Returns the type-specific route, then `routes.default`, then `null`. Reusable with `verifyRecoveryOTP` or any custom auth flow.
+- **`AuthCallbackRoutes`** — new exported type for the route map (`recovery`, `signup`, `magiclink`, `email`, `email_change`, `invite`, `default`, plus index signature for custom types).
+
+Fully backward-compatible: omitting both new options reproduces the existing `onSuccess`-only behavior.
+
 ## [1.4.1] / [1.2.1] / [1.3.1] - 2026-06-22
 
 ### Maintenance
