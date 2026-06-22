@@ -103,6 +103,19 @@ export { bindRealtimeToStore } from "./realtime/realtimeBindings.js"
 // ─── Auth ────────────────────────────────────────────────────────────
 export { createAuthStore } from "./auth/authStore.js"
 export { setupAuthGate, isRlsError } from "./auth/authGate.js"
+export {
+  parseAuthCallbackUrl,
+  hasAuthCallbackParams,
+  createSessionFromUrl,
+  getWebAuthRedirectTo,
+  sendPasswordRecovery,
+  verifyRecoveryOTP,
+} from "./auth/authCallbacks.js"
+export type {
+  AuthCallbackType,
+  ParsedAuthCallback,
+  AuthCallbackResult,
+} from "./auth/authCallbacks.js"
 
 // ─── Persistence ─────────────────────────────────────────────────────
 export { MemoryAdapter } from "./persistence/persistenceAdapter.js"
@@ -206,6 +219,8 @@ export { useLinkedQuery } from "./hooks/useLinkedQuery.js"
 export type { UseLinkedQueryResult } from "./hooks/useLinkedQuery.js"
 export { useInfiniteQuery } from "./hooks/useInfiniteQuery.js"
 export type { UseInfiniteQueryOptions, UseInfiniteQueryResult } from "./hooks/useInfiniteQuery.js"
+export { useAuthCallback } from "./hooks/useAuthCallback.js"
+export type { UseAuthCallbackOptions, UseAuthCallbackResult } from "./hooks/useAuthCallback.js"
 
 // ─── Server ──────────────────────────────────────────────────────────
 export { prefetch, serializePrefetchResult, deserializePrefetchResult } from "./server/prefetch.js"

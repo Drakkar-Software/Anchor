@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.4.0] - 2026-06-22
+
+### Features
+
+- **Auth callback utilities** (`@drakkar.software/anchor/auth/callbacks` or main entry):
+  - `parseAuthCallbackUrl(url)` — pure URL parser; extracts `accessToken`, `refreshToken`, `code`, `type`, `error`, `errorDescription` from both implicit-flow hash fragments and PKCE query params
+  - `hasAuthCallbackParams(url)` — quick check whether a URL contains Supabase auth params (useful to detect root-URL legacy redirects)
+  - `createSessionFromUrl(supabase, url)` — establishes a session from a callback URL; handles implicit flow (`setSession`) and PKCE flow (`exchangeCodeForSession`); returns `{ session, type }` or `null` if no auth params are present; throws on errors
+  - `getWebAuthRedirectTo(path?)` — builds the auth redirect URL from `window.location.origin` (web-only); defaults to `origin/auth-callback`
+  - `sendPasswordRecovery(supabase, email, options?)` — thin wrapper around `resetPasswordForEmail` with typed return (`{ error }`)
+  - `verifyRecoveryOTP(supabase, email, otp)` — verifies a 6-digit OTP code from a recovery email (`verifyOtp({ type: 'recovery' })`); returns `{ session, error }`
+  - New types: `AuthCallbackType`, `ParsedAuthCallback`, `AuthCallbackResult`
+
+- **`useAuthCallback(supabase, authStore, options)` hook** (main entry + `@drakkar.software/anchor/hooks`):
+  - One-shot React hook that processes a Supabase auth callback URL and establishes a session
+  - Platform-agnostic: caller provides `getUrl` (e.g. `() => window.location.href` on web; `() => url` from `expo-linking`'s `useURL()` on native)
+  - Updates anchor auth store via `setState`; fires `onSuccess(result)` or `onError(error)` once
+  - Returns `{ isProcessing, error }`
+  - New types: `UseAuthCallbackOptions`, `UseAuthCallbackResult`
+
 ## [1.3.4] - 2026-04-13
 
 ### Bug Fixes

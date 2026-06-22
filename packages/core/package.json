@@ -1,6 +1,6 @@
 {
   "name": "@drakkar.software/anchor",
-  "version": "1.3.4",
+  "version": "1.4.0",
   "description": "Anchor: auto-generated Zustand stores for Supabase, offline-first, realtime, type-safe",
   "repository": {
     "type": "git",
@@ -33,6 +33,11 @@
       "types": "./dist/auth/authStore.d.ts",
       "import": "./dist/auth/authStore.mjs",
       "require": "./dist/auth/authStore.js"
+    },
+    "./auth/callbacks": {
+      "types": "./dist/auth/authCallbacks.d.ts",
+      "import": "./dist/auth/authCallbacks.mjs",
+      "require": "./dist/auth/authCallbacks.js"
     },
     "./realtime": {
       "types": "./dist/realtime/realtimeManager.d.ts",

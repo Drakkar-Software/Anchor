@@ -9,6 +9,7 @@ export default defineConfig({
     "query/pagination": "src/query/pagination.ts",
     "auth/authStore": "src/auth/authStore.ts",
     "auth/authGate": "src/auth/authGate.ts",
+    "auth/authCallbacks": "src/auth/authCallbacks.ts",
     "realtime/realtimeManager": "src/realtime/realtimeManager.ts",
     "persistence/persistenceAdapter": "src/persistence/persistenceAdapter.ts",
     "rpc/rpcAction": "src/rpc/rpcAction.ts",
