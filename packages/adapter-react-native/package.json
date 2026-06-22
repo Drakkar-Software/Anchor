@@ -1,6 +1,6 @@
 {
   "name": "@drakkar.software/anchor-adapter-react-native",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "React Native platform adapters for Anchor (expo-sqlite, AsyncStorage)",
   "repository": {
     "type": "git",
@@ -67,10 +67,11 @@
     }
   },
   "devDependencies": {
-    "@supabase/supabase-js": "^2.49.0",
-    "@types/node": "^25.5.2",
+    "@supabase/supabase-js": "^2.108.2",
+    "@types/node": "^26.0.0",
     "tsup": "^8.0.0",
-    "typescript": "^5.7.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9",
     "@drakkar.software/anchor": "workspace:*"
   },
   "license": "MIT"

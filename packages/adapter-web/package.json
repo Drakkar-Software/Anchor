@@ -1,6 +1,6 @@
 {
   "name": "@drakkar.software/anchor-adapter-web",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Web platform adapters for Anchor (localStorage, IndexedDB)",
   "repository": {
     "type": "git",
@@ -34,7 +34,7 @@
   },
   "devDependencies": {
     "@drakkar.software/anchor": "workspace:*",
-    "typescript": "^5.7.0",
+    "typescript": "^6.0.3",
     "tsup": "^8.0.0"
   },
   "license": "MIT"

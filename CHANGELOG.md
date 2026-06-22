@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.1] / [1.2.1] / [1.3.1] - 2026-06-22
+
+### Maintenance
+
+- Bump devDependencies across all packages: `zustand` → 5.0.14, `@supabase/supabase-js` → 2.108.2, `typescript` → 6.0.3, `vitest` → 4.1.9, `react` + `@types/react` → 19.2.x, `@types/node` → 26.0.0
+- Add `vitest` as a devDependency of `adapter-react-native` and fix `expoOAuth.test.ts` to match the current `createExpoOAuthHandler(supabase, Linking, options?)` API (Linking was made an explicit parameter in v1.3.0)
+- Exclude test files from `adapter-react-native` tsconfig (consistent with `core`)
+
 ## [1.4.0] - 2026-06-22
 
 ### Features
