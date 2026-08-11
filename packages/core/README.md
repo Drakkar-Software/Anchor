@@ -46,7 +46,10 @@ import { createSupabaseStores } from '@drakkar.software/anchor'
 import { LocalStorageAdapter, WebNetworkStatus } from '@drakkar.software/anchor-adapter-web'
 import type { Database } from './database.types'
 
-const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_ANON_KEY)
+// SUPABASE_PUBLISHABLE_KEY: sb_publishable_... (new format) or the legacy anon key.
+// Edge Functions no longer accept a new-format key as `Authorization: Bearer` --
+// function code must read `apikey`, or the call must carry a real user JWT.
+const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)
 
 const stores = createSupabaseStores<Database>({
   supabase,
