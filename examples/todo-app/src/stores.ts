@@ -19,6 +19,7 @@ import {
   SyncMetrics,
   isPending,
   eq,
+  gt,
 } from "@drakkar.software/anchor"
 import { setupAppLifecycle } from "@drakkar.software/anchor/lifecycle"
 import { LocalStorageAdapter, WebNetworkStatus, WebAppLifecycle } from "@drakkar.software/anchor-adapter-web"
@@ -26,9 +27,10 @@ import type { Database } from "./database.types"
 
 // ─── Supabase Client ─────────────────────────────────────────────────
 
+// VITE_SUPABASE_PUBLISHABLE_KEY: sb_publishable_... (new format) or the legacy anon key
 const supabase = createClient<Database>(
   import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY,
+  import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
 )
 
 // ─── Sync Metrics ────────────────────────────────────────────────────
@@ -48,7 +50,15 @@ export const stores = createSupabaseStores<Database>({
   tableOptions: {
     todos: {
       defaultSort: [{ column: "created_at", ascending: false }],
-      realtime: { events: ["INSERT", "UPDATE", "DELETE"] },
+      realtime: {
+        events: ["INSERT", "UPDATE", "DELETE"],
+        // Server-side column projection (realtime-js 2.109.0): only these
+        // columns are sent over the wire. Must include the primary key.
+        select: ["id", "title", "completed", "priority", "updated_at"],
+        // Typed filter built from Anchor's own FilterDescriptor DSL instead
+        // of a hand-written PostgREST filter string.
+        filter: [gt("priority", 0)],
+      },
       cacheStrategy: "merge", // accumulate records across filtered fetches
       conflict: {
         strategy: "last-write-wins",

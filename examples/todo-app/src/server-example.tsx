@@ -14,10 +14,11 @@ import type { Database } from "./database.types"
 
 type TodoRow = Database["public"]["Tables"]["todos"]["Row"]
 
-// Server-side Supabase client (uses service role or cookies)
+// Server-side Supabase client (uses service role or cookies).
+// SUPABASE_PUBLISHABLE_KEY: sb_publishable_... (new format) or the legacy anon key
 const serverSupabase = createClient<Database>(
   process.env.SUPABASE_URL!,
-  process.env.SUPABASE_ANON_KEY!,
+  process.env.SUPABASE_PUBLISHABLE_KEY!,
 )
 
 export default async function TodosPage() {
