@@ -420,6 +420,9 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
       }
     },
     removeChannel(channel: any) {},
+    realtime: {
+      async setAuth(_token: string | null) {},
+    },
 
     // Test helpers
     _tables: tables,

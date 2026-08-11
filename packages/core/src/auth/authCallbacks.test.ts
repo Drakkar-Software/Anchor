@@ -31,6 +31,15 @@ describe("parseAuthCallbackUrl", () => {
     expect(result.accessToken).toBeNull()
     expect(result.refreshToken).toBeNull()
     expect(result.error).toBeNull()
+    expect(result.flowId).toBeNull()
+  })
+
+  it("parses sb_flow_id from query params (multi-flow PKCE)", () => {
+    const url =
+      "https://app.example.com/auth-callback?code=pkce_code_abc&sb_flow_id=flow_123&type=signup"
+    const result = parseAuthCallbackUrl(url)
+    expect(result.code).toBe("pkce_code_abc")
+    expect(result.flowId).toBe("flow_123")
   })
 
   it("parses error and error_description from hash", () => {
@@ -167,9 +176,21 @@ describe("createSessionFromUrl", () => {
 
     const result = await createSessionFromUrl(supabase, url)
 
-    expect(supabase.auth.exchangeCodeForSession).toHaveBeenCalledWith("pkce123")
+    expect(supabase.auth.exchangeCodeForSession).toHaveBeenCalledWith("pkce123", undefined)
     expect(result?.type).toBe("signup")
     expect(result?.session).toBeDefined()
+  })
+
+  it("forwards sb_flow_id to exchangeCodeForSession when present", async () => {
+    const supabase = makeSupabase()
+    const url =
+      "https://app.example.com/auth-callback?code=pkce123&sb_flow_id=flow_abc&type=signup"
+
+    await createSessionFromUrl(supabase, url)
+
+    expect(supabase.auth.exchangeCodeForSession).toHaveBeenCalledWith("pkce123", {
+      flowId: "flow_abc",
+    })
   })
 
   it("defaults type to 'email' when not present", async () => {

@@ -20,6 +20,14 @@ export type ParsedAuthCallback = {
   refreshToken: string | null
   /** authorization code from query params (PKCE flow) */
   code: string | null
+  /**
+   * `sb_flow_id` from query params — present only when the client that
+   * started the flow set `appendPkceFlowIdToRedirects: true`. Identifies
+   * which concurrent PKCE flow (e.g. two OAuth providers started in
+   * different tabs) this callback belongs to; forwarded to
+   * `exchangeCodeForSession` so the right verifier is used.
+   */
+  flowId: string | null
   /** auth flow type (recovery, signup, magiclink, email, email_change, invite) */
   type: AuthCallbackType | null
   /** OAuth/Supabase error code */
@@ -106,6 +114,7 @@ export function parseAuthCallbackUrl(url: string): ParsedAuthCallback {
     accessToken: hashParams.get("access_token"),
     refreshToken: hashParams.get("refresh_token"),
     code: queryParams.get("code"),
+    flowId: queryParams.get("sb_flow_id"),
     type: hashParams.get("type") ?? queryParams.get("type"),
     error: hashParams.get("error") ?? queryParams.get("error"),
     errorDescription:
@@ -168,10 +177,18 @@ export async function createSessionFromUrl(
     return { session: data.session, type }
   }
 
-  // PKCE flow: exchange authorization code for session
+  // PKCE flow: exchange authorization code for session.
+  // parsed.flowId (from `sb_flow_id`) is only present when the client that
+  // started the flow set `appendPkceFlowIdToRedirects: true` — pass it
+  // through so overlapping flows (e.g. two OAuth providers started in
+  // different tabs) don't fight over the same verifier slot. On web,
+  // supabase-js also reads `sb_flow_id` off `window.location.href` itself
+  // when no explicit `flowId` is given; passing it here matters most where
+  // `window.location` doesn't exist, i.e. React Native deep links.
   if (parsed.code) {
     const { data, error } = await supabase.auth.exchangeCodeForSession(
       parsed.code,
+      parsed.flowId ? { flowId: parsed.flowId } : undefined,
     )
     if (error) throw new Error(error.message)
     if (!data.session) throw new Error("Session could not be established")
