@@ -154,4 +154,140 @@ describe("RealtimeManager", () => {
     expect(supabase.removeChannel).toHaveBeenCalledTimes(2)
     expect(manager.getStatus().size).toBe(0)
   })
+
+  it("registers one distinct postgres_changes binding per requested event", () => {
+    // realtime-js 2.112.2+ silently drops a second postgres_changes binding
+    // that matches on (event, schema, table, filter, select). Anchor must
+    // register one binding per distinct event value, never a repeated one,
+    // or events would go missing without Anchor's code ever knowing.
+    const supabase = createMockSupabase()
+    const manager = new RealtimeManager({ supabase })
+
+    manager.subscribe({
+      table: "todos",
+      primaryKey: "id",
+      events: ["INSERT", "UPDATE", "DELETE"],
+      onInsert: vi.fn(),
+      onUpdate: vi.fn(),
+      onDelete: vi.fn(),
+      onStatus: vi.fn(),
+    })
+
+    const channel = supabase._channels[0]
+    expect(channel._listeners).toHaveLength(3)
+    const events = channel._listeners.map((l: any) => l.filter.event)
+    expect(new Set(events).size).toBe(3)
+    expect(events.sort()).toEqual(["DELETE", "INSERT", "UPDATE"])
+  })
+
+  it("applies select as a server-side column projection", () => {
+    const supabase = createMockSupabase()
+    const manager = new RealtimeManager({ supabase })
+
+    manager.subscribe({
+      table: "todos",
+      primaryKey: "id",
+      select: ["id", "title"],
+      onInsert: vi.fn(),
+      onUpdate: vi.fn(),
+      onDelete: vi.fn(),
+      onStatus: vi.fn(),
+    })
+
+    const channel = supabase._channels[0]
+    expect(channel._listeners[0].filter.select).toEqual(["id", "title"])
+  })
+
+  it("throws if select omits the primary key", () => {
+    const supabase = createMockSupabase()
+    const manager = new RealtimeManager({ supabase })
+
+    expect(() =>
+      manager.subscribe({
+        table: "todos",
+        primaryKey: "id",
+        select: ["title"],
+        onInsert: vi.fn(),
+        onUpdate: vi.fn(),
+        onDelete: vi.fn(),
+        onStatus: vi.fn(),
+      }),
+    ).toThrow(/primary key/)
+  })
+
+  it("converts a FilterDescriptor[] filter into a postgres_changes filter string", () => {
+    const supabase = createMockSupabase()
+    const manager = new RealtimeManager({ supabase })
+
+    manager.subscribe({
+      table: "todos",
+      primaryKey: "id",
+      filter: [
+        { column: "status", op: "eq", value: "open" },
+        { column: "priority", op: "gt", value: 2 },
+      ],
+      onInsert: vi.fn(),
+      onUpdate: vi.fn(),
+      onDelete: vi.fn(),
+      onStatus: vi.fn(),
+    })
+
+    const channel = supabase._channels[0]
+    expect(channel._listeners[0].filter.filter).toBe("status=eq.open,priority=gt.2")
+  })
+
+  it("passes a string filter through unchanged", () => {
+    const supabase = createMockSupabase()
+    const manager = new RealtimeManager({ supabase })
+
+    manager.subscribe({
+      table: "todos",
+      primaryKey: "id",
+      filter: "status=eq.open",
+      onInsert: vi.fn(),
+      onUpdate: vi.fn(),
+      onDelete: vi.fn(),
+      onStatus: vi.fn(),
+    })
+
+    const channel = supabase._channels[0]
+    expect(channel._listeners[0].filter.filter).toBe("status=eq.open")
+  })
+
+  it("rejects a FilterDescriptor operator Realtime cannot evaluate", () => {
+    const supabase = createMockSupabase()
+    const manager = new RealtimeManager({ supabase })
+
+    expect(() =>
+      manager.subscribe({
+        table: "todos",
+        primaryKey: "id",
+        filter: [{ column: "tags", op: "contains", value: ["a"] }],
+        onInsert: vi.fn(),
+        onUpdate: vi.fn(),
+        onDelete: vi.fn(),
+        onStatus: vi.fn(),
+      }),
+    ).toThrow(/not supported/)
+  })
+
+  it("does not map match to Realtime's regex match operator", () => {
+    // Anchor's "match" is PostgREST multi-column equality; Realtime's "match"
+    // is a POSIX regex operator. A hand-built { op: "match" } descriptor must
+    // be rejected, not silently reinterpreted as a regex filter.
+    const supabase = createMockSupabase()
+    const manager = new RealtimeManager({ supabase })
+
+    expect(() =>
+      manager.subscribe({
+        table: "todos",
+        primaryKey: "id",
+        filter: [{ column: "title", op: "match", value: "^foo" }],
+        onInsert: vi.fn(),
+        onUpdate: vi.fn(),
+        onDelete: vi.fn(),
+        onStatus: vi.fn(),
+      }),
+    ).toThrow(/not supported/)
+  })
 })

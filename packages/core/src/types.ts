@@ -485,7 +485,9 @@ export type CreateTableStoreOptions<
   realtime?: {
     enabled?: boolean
     events?: RealtimeEvent[]
-    filter?: string
+    filter?: string | FilterDescriptor<Row>[]
+    /** Restrict the postgres_changes payload to these columns. Must include the table's primary key. */
+    select?: string[]
   }
 
   // Conflict
@@ -556,7 +558,9 @@ export type CreateSupabaseStoresOptions<
         realtime?: {
           enabled?: boolean
           events?: RealtimeEvent[]
-          filter?: string
+          filter?: string | FilterDescriptor[]
+          /** Restrict the postgres_changes payload to these columns. Must include the table's primary key. */
+          select?: string[]
         }
         conflict?: ConflictConfig
         cacheStrategy?: CacheStrategy

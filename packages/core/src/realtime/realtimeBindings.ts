@@ -6,6 +6,7 @@ import type {
   ConflictContext,
   RealtimeEvent,
   QueuedMutation,
+  FilterDescriptor,
 } from "../types.js"
 import { RealtimeManager } from "./realtimeManager.js"
 import { resolveConflict } from "../mutation/conflictResolution.js"
@@ -15,7 +16,9 @@ type BindRealtimeOptions<Row> = {
   schema?: string
   primaryKey: string
   events?: RealtimeEvent[]
-  filter?: string
+  filter?: string | FilterDescriptor[]
+  /** Restrict the postgres_changes payload to these columns. Must include `primaryKey`. */
+  select?: string[]
   conflict?: ConflictConfig<Row>
   /** Optional getter for pending mutations (from OfflineQueue) to populate ConflictContext */
   getPendingMutations?: (table: string) => QueuedMutation[]
@@ -34,7 +37,7 @@ export function bindRealtimeToStore<
   store: StoreApi<TableStore<Row, InsertRow, UpdateRow>>,
   options: BindRealtimeOptions<Row>,
 ): () => void {
-  const { table, schema, primaryKey, events, filter, conflict, getPendingMutations } = options
+  const { table, schema, primaryKey, events, filter, select, conflict, getPendingMutations } = options
 
   return manager.subscribe<Row>({
     table,
@@ -42,6 +45,7 @@ export function bindRealtimeToStore<
     primaryKey,
     events,
     filter,
+    select,
 
     onInsert(row: Row) {
       store.setState((prev: any) => {
