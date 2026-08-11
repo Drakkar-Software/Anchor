@@ -92,6 +92,19 @@ describe("createExpoOAuthHandler", () => {
 
       expect(supabase.auth.exchangeCodeForSession).toHaveBeenCalledWith(
         "abc123",
+        undefined,
+      )
+    })
+
+    it("forwards sb_flow_id to exchangeCodeForSession when present", async () => {
+      const handler = createExpoOAuthHandler(supabase, mockLinking)
+      await handler.handleRedirect(
+        "myapp://auth/callback?code=abc123&sb_flow_id=flow_xyz",
+      )
+
+      expect(supabase.auth.exchangeCodeForSession).toHaveBeenCalledWith(
+        "abc123",
+        { flowId: "flow_xyz" },
       )
     })
 

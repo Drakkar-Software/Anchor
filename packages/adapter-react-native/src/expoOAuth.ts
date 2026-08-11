@@ -58,10 +58,15 @@ export function createExpoOAuthHandler(
       const parsed = Linking.parse(url)
       const params = parsed.queryParams ?? {}
 
-      // Handle PKCE flow (code exchange)
+      // Handle PKCE flow (code exchange). `sb_flow_id` (present only when the
+      // client set `appendPkceFlowIdToRedirects: true`) is forwarded so
+      // overlapping flows don't fight over the same verifier slot -- this is
+      // the one place that matters most, since `window.location` doesn't
+      // exist here for supabase-js to read it automatically.
       if (params.code) {
         const { error } = await supabase.auth.exchangeCodeForSession(
           params.code as string,
+          params.sb_flow_id ? { flowId: params.sb_flow_id as string } : undefined,
         )
         if (error) throw error
         return

@@ -75,7 +75,12 @@ export function setupAuthGate(
       }
 
       if (event === "TOKEN_REFRESHED") {
-        // Token refreshed — no action needed, Supabase client auto-uses new token
+        // REST/Storage/Functions requests auto-use the new token, but private
+        // (RLS-checked) realtime channels need an explicit re-auth or they
+        // keep running under the stale token until reconnect.
+        supabase.realtime.setAuth(session?.access_token ?? null).catch(() => {
+          // Best-effort: a dropped connection will re-auth on reconnect anyway
+        })
       }
     },
   )
