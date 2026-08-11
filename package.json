@@ -6,7 +6,9 @@
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
-    "clean": "pnpm -r clean"
+    "clean": "pnpm -r clean",
+    "publish:all": "pnpm build && pnpm -r publish",
+    "publish:all:dry": "pnpm build && pnpm -r publish --dry-run"
   },
   "engines": {
     "node": ">=22"
