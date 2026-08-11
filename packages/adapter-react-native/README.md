@@ -114,13 +114,25 @@ await oauth.signInWithGoogle()
 
 ```typescript
 import { createClient } from '@supabase/supabase-js'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { createSupabaseStores, setupAppLifecycle, setupBackgroundSync } from '@drakkar.software/anchor'
 import {
   ExpoSqliteAdapter, RNNetworkStatus, RNAppLifecycle, RNBackgroundSync,
 } from '@drakkar.software/anchor-adapter-react-native'
 import type { Database } from './database.types'
 
-const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_ANON_KEY)
+// SUPABASE_PUBLISHABLE_KEY: sb_publishable_... (new format) or the legacy anon key.
+// `auth.storage`/`autoRefreshToken`/`persistSession`/`detectSessionInUrl` are supabase-js
+// client options -- Anchor's AsyncStorageAdapter above is for *table* persistence only and
+// does not wire auth session storage; set this up yourself as shown here.
+const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+  auth: {
+    storage: AsyncStorage,
+    autoRefreshToken: true,
+    persistSession: true,
+    detectSessionInUrl: false,
+  },
+})
 
 const stores = createSupabaseStores<Database>({
   supabase,
