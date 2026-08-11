@@ -1,6 +1,6 @@
 {
   "name": "@drakkar.software/anchor",
-  "version": "1.5.0",
+  "version": "2.0.0",
   "description": "Anchor: auto-generated Zustand stores for Supabase, offline-first, realtime, type-safe",
   "repository": {
     "type": "git",
@@ -118,7 +118,7 @@
   },
   "peerDependencies": {
     "zustand": ">=4.5.0",
-    "@supabase/supabase-js": ">=2.0.0"
+    "@supabase/supabase-js": ">=2.111.0"
   },
   "peerDependenciesMeta": {
     "immer": {
@@ -130,12 +130,15 @@
   },
   "devDependencies": {
     "zustand": "^5.0.14",
-    "@supabase/supabase-js": "^2.108.2",
+    "@supabase/supabase-js": "^2.112.3",
     "typescript": "^6.0.3",
     "tsup": "^8.0.0",
     "vitest": "^4.1.9",
     "react": "^19.2.7",
     "@types/react": "^19.2.17"
+  },
+  "engines": {
+    "node": ">=22"
   },
   "license": "MIT",
   "keywords": [
