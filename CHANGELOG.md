@@ -1,5 +1,30 @@
 # Changelog
 
+## [2.0.0] - 2026-08-11
+
+Bumps `@supabase/supabase-js` 2.108.2 → 2.112.3 across `core` and `adapter-react-native`. Verified via a direct source diff of all six lockstep packages (`supabase-js`, `auth-js`, `postgrest-js`, `realtime-js`, `storage-js`, `functions-js`) — see `docs/supabase-api-coverage.md` for the full investigation and gap inventory.
+
+### Breaking changes
+
+- **Peer dependency floor raised**: `@supabase/supabase-js` peer range `>=2.0.0` → `>=2.111.0` in `core` and `adapter-react-native` (the true feature minimum: `postgres_changes` filter builder + `select` are 2.109.0, PKCE `flowId` is 2.111.0). The old `>=2.0.0` was already inaccurate — `fromTable()`'s `.schema()` call needs `>=2.39`.
+- **`engines.node` raised to `>=22`** on `core`, `adapter-web`, and `adapter-react-native` (previously `>=18` on the workspace root only), matching supabase-js 2.112's own floor. supabase-js prints a runtime deprecation warning on Node ≤20.
+- **`@drakkar.software/anchor-adapter-web`/`-react-native` peer on `@drakkar.software/anchor`**: `>=1.0.0` → `>=2.0.0`.
+
+None of the above require code changes in consumers — only environment/lockfile updates.
+
+### Features
+
+- **Realtime column projection**: `select?: string[]` on `RealtimeManager.subscribe()`, `bindRealtimeToStore()`, and the `realtime` option in both `CreateTableStoreOptions` and `CreateSupabaseStoresOptions.tableOptions` (realtime-js 2.109.0's server-side column projection). Throws if `select` omits the table's primary key — `records`/`order` are keyed on it, and `onInsert`/`onUpdate` had no guard against a missing key.
+- **Typed realtime filters**: `realtime.filter` now also accepts a `FilterDescriptor[]` (Anchor's own filter DSL), converted internally to a `RealtimePostgresFilterBuilder` via realtime-js 2.109.0's `postgresChangesFilter()`. Previously `filter` was a raw PostgREST string with no path in from `FilterDescriptor` at all. Supports `eq`/`neq`/`gt`/`gte`/`lt`/`lte`/`like`/`ilike`/`is`/`in`; other operators (including `match`, which means something different in PostgREST vs. Realtime) are rejected rather than silently dropped or misinterpreted.
+- **Multi-flow PKCE**: `createSessionFromUrl` and `adapter-react-native`'s `createExpoOAuthHandler` now forward `sb_flow_id` (parsed from the callback URL/deep link) to `exchangeCodeForSession(code, { flowId })`, so two concurrent PKCE flows (e.g. two OAuth providers started in different tabs) no longer clobber each other's verifier (auth-js 2.111.0). Requires the client that started the flow to set `appendPkceFlowIdToRedirects: true`.
+- **`authGate`'s `TOKEN_REFRESHED` handler now re-authenticates realtime**: previously a no-op; private/RLS-checked realtime channels now get `supabase.realtime.setAuth()` on token refresh instead of running under a stale token until reconnect.
+
+### Documentation
+
+- `docs/supabase-api-coverage.md` — new: a coverage matrix of the full supabase-js surface vs. what Anchor wires, for scoping future work.
+- All `createClient` snippets (root, `core`, `adapter-web`, `adapter-react-native` READMEs and `examples/todo-app`) updated for Supabase's new `sb_publishable_`/`sb_secret_` API key format, with a note that Edge Functions no longer accept a new-format key as `Authorization: Bearer` (must read `apikey`, or the call must carry a real user JWT).
+- `adapter-react-native` README: added the canonical Supabase-RN `createClient` auth block (`storage: AsyncStorage, autoRefreshToken, persistSession, detectSessionInUrl: false`) — previously undocumented and easy to miss, since Anchor's `AsyncStorageAdapter` covers table persistence only, not auth session storage.
+
 ## [1.5.0] - 2026-06-22
 
 ### Features

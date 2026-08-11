@@ -20,7 +20,7 @@ A complete example demonstrating all @drakkar.software/anchor features.
 4. Set environment variables:
    ```
    VITE_SUPABASE_URL=your-project-url
-   VITE_SUPABASE_ANON_KEY=your-anon-key
+   VITE_SUPABASE_PUBLISHABLE_KEY=your-publishable-key
    ```
 5. Install dependencies and run
 
