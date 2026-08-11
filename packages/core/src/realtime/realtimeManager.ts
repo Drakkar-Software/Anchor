@@ -1,6 +1,7 @@
 import type { SupabaseClient, RealtimeChannel } from "@supabase/supabase-js"
-import type { SyncLogger, RealtimeEvent } from "../types.js"
+import type { SyncLogger, RealtimeEvent, FilterDescriptor } from "../types.js"
 import { noopLogger } from "../types.js"
+import { toRealtimeFilter } from "./realtimeFilter.js"
 
 type SubscriptionStatus = "disconnected" | "connecting" | "connected" | "error"
 
@@ -17,7 +18,13 @@ type SubscribeOptions<Row> = {
   schema?: string
   primaryKey: string
   events?: RealtimeEvent[]
-  filter?: string
+  filter?: string | FilterDescriptor[]
+  /**
+   * Restrict the postgres_changes payload to these columns (server-side
+   * projection). Must include `primaryKey` — Anchor's records/order maps are
+   * keyed on it, and a payload missing it cannot be applied to the store.
+   */
+  select?: string[]
   onInsert: (row: Row) => void
   onUpdate: (row: Row) => void
   onDelete: (oldRow: Partial<Row>) => void
@@ -50,14 +57,25 @@ export class RealtimeManager {
     const {
       table,
       schema = "public",
-      primaryKey: _primaryKey,
+      primaryKey,
       events = ["*"],
       filter,
+      select,
       onInsert,
       onUpdate,
       onDelete,
       onStatus,
     } = options
+
+    // select is a server-side column projection: a payload missing the
+    // primary key cannot be applied to records/order, so require it up front
+    // rather than corrupting store state on the first event.
+    if (select && !select.includes(primaryKey)) {
+      throw new Error(
+        `[anchor] realtime subscribe(${table}): "select" must include the primary key ("${primaryKey}") — ` +
+          `payloads without it cannot be keyed into the store.`,
+      )
+    }
 
     // Unsubscribe from existing subscription for this table
     this.unsubscribe(table)
@@ -67,15 +85,23 @@ export class RealtimeManager {
 
     onStatus("connecting")
 
+    const resolvedFilter =
+      typeof filter === "string" || filter === undefined
+        ? filter
+        : toRealtimeFilter(filter).build()
+
     // Register postgres_changes listeners
     for (const event of events) {
-      const eventFilter: Record<string, string> = {
+      const eventFilter: Record<string, string | string[]> = {
         event: event === "*" ? "*" : event,
         schema,
         table,
       }
-      if (filter) {
-        eventFilter["filter"] = filter
+      if (resolvedFilter) {
+        eventFilter["filter"] = resolvedFilter
+      }
+      if (select) {
+        eventFilter["select"] = select
       }
 
       channel.on(

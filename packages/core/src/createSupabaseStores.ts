@@ -124,6 +124,7 @@ export function createSupabaseStores<
           primaryKey: (tableOpts?.primaryKey as string) ?? "id",
           events: tableRealtime.events,
           filter: tableRealtime.filter,
+          select: tableRealtime.select,
           conflict: (tableOpts?.conflict as any) ?? conflict,
           getPendingMutations: (t) => offlineQueue.pendingMutations.filter((m) => m.table === t),
         },
