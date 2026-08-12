@@ -126,11 +126,15 @@ Also untouched: `httpSend()` (needs Realtime server ≥ v2.97.0), `.on('system')
 
 `realtime/realtimeManager.ts` maps unknown channel statuses to `"connecting"`, so `TIMED_OUT` reports as connecting forever; `subscribe()`'s second `err` callback argument is dropped.
 
-## Error handling — the highest-leverage future refactor
+## Error handling — partly done in 2.1.0
 
-Every boundary does `new Error(error.message)`, discarding `code`/`details`/`hint`/`status`: `query/queryExecutor.ts` (×3), `rpc/rpcAction.ts`, `functions/edgeFunctions.ts`, `storage/storageActions.ts` (×6), `mutation/mutationPipeline.ts` (×4), `mutation/batchOperations.ts` (×2), `sync/incrementalSync.ts`, `createTableStore.ts` (×9), all of `auth/authStore.ts`/`auth/authCallbacks.ts`.
+`errors.ts` adds `AnchorError extends Error` with `code`/`details`/`hint`/`status`, and `fromSupabaseError()` to build one from whatever a supabase-js call put in `error` (duck-typed: the same shape arrives from postgrest-js, storage-js, functions-js and auth-js, which share no base class). It is still an `Error`, so `TableStoreState.error` keeps its `Error | null` type and no consumer catch changes.
 
-Consequence: no consumer can branch on `23505` (unique violation), `23503` (FK violation), `PGRST116` (no rows), or `42501` (insufficient privilege) — and `auth/authGate.ts`'s `isRlsError` is forced to **substring-match the literal string `"42501"` inside the message text**, rather than reading a structured `code`.
+**Routed in 2.1.0:** `query/queryExecutor.ts` (×3), `createTableStore.ts` (×13 — six mutation sites, each of which writes state *and* throws), `mutation/mutationPipeline.ts` (×4), `rpc/rpcAction.ts`, `auth/authStore.ts` (×10). A consumer can now branch on `23505` (unique violation), `23503` (FK violation), `PGRST116` (no rows) and `42501` (insufficient privilege) for every store read, every store write, every queued mutation replayed offline, every RPC and every auth call.
+
+`auth/authGate.ts`'s `isRlsError` reads `code === "42501"` first. Its message arms stay as a fallback, because a consumer can hand it an error caught straight from supabase-js that never passed through this package.
+
+**Still bare `new Error(error.message)`:** `functions/edgeFunctions.ts` (which also collapses `FunctionsHttpError`/`RelayError`/`FetchError` and drops `FunctionsHttpError.context`), `storage/storageActions.ts` (×5 plus a `getPublicUrl` guard throw), `mutation/batchOperations.ts` (×2), `sync/incrementalSync.ts`, `server/prefetch.ts`, `query/aggregation.ts`, `auth/authCallbacks.ts` (×4). None of them are on the store read/write path; they are the next slice, not a regression.
 
 Worth noting the upstream side of this refactor is now better supported than when Anchor's pattern was written: 2.112.0 added `code` to `StorageApiError`, and recent versions added `toJSON` to `FunctionsError`/`WebAuthnError`.
 

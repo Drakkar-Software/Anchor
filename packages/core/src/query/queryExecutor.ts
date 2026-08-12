@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 import type { FilterDescriptor, SortDescriptor, FetchOptions } from "../types.js"
+import { fromSupabaseError } from "../errors.js"
 
 /**
  * Returns a schema-aware query builder for a table.
@@ -133,7 +134,7 @@ export async function executeQuery<Row>(
     try {
       const result = await options.queryFn(builder)
       const r = result as { data: Row[] | null; count: number | null; error: any }
-      if (r.error) return { data: [], count: null, error: new Error(r.error.message) }
+      if (r.error) return { data: [], count: null, error: fromSupabaseError(r.error) }
       return { data: r.data ?? [], count: r.count, error: null }
     } catch (err) {
       return {
@@ -167,7 +168,7 @@ export async function executeQuery<Row>(
   const { data, error, count } = await builder
 
   if (error) {
-    return { data: [], count: null, error: new Error(error.message) }
+    return { data: [], count: null, error: fromSupabaseError(error) }
   }
 
   return { data: (data ?? []) as Row[], count, error: null }
@@ -190,7 +191,7 @@ export async function executeQueryOne<Row>(
     .maybeSingle()
 
   if (error) {
-    return { data: null, error: new Error(error.message) }
+    return { data: null, error: fromSupabaseError(error) }
   }
 
   return { data: data as Row | null, error: null }

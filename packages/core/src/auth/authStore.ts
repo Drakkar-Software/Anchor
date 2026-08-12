@@ -1,6 +1,7 @@
 import type { SupabaseClient, Session } from "@supabase/supabase-js"
 import { createStore, type StoreApi } from "zustand/vanilla"
 import type { AuthStore } from "../types.js"
+import { fromSupabaseError } from "../errors.js"
 
 type CreateAuthStoreOptions = {
   supabase: SupabaseClient
@@ -53,7 +54,7 @@ export function createAuthStore(
           session,
           user: session?.user ?? null,
           isLoading: false,
-          error: error ? new Error(error.message) : null,
+          error: error ? fromSupabaseError(error) : null,
           claims: parseJwtClaims(session),
         })
       } catch (err) {
@@ -71,8 +72,8 @@ export function createAuthStore(
         await supabase.auth.signInWithPassword({ email, password })
 
       if (error) {
-        set({ isLoading: false, error: new Error(error.message) })
-        throw new Error(error.message)
+        set({ isLoading: false, error: fromSupabaseError(error) })
+        throw fromSupabaseError(error)
       }
 
       set({
@@ -92,8 +93,8 @@ export function createAuthStore(
       })
 
       if (error) {
-        set({ isLoading: false, error: new Error(error.message) })
-        throw new Error(error.message)
+        set({ isLoading: false, error: fromSupabaseError(error) })
+        throw fromSupabaseError(error)
       }
 
       set({
@@ -110,8 +111,8 @@ export function createAuthStore(
       const { error } = await supabase.auth.signOut()
 
       if (error) {
-        set({ isLoading: false, error: new Error(error.message) })
-        throw new Error(error.message)
+        set({ isLoading: false, error: fromSupabaseError(error) })
+        throw fromSupabaseError(error)
       }
 
       set({
@@ -131,8 +132,8 @@ export function createAuthStore(
       })
 
       if (error) {
-        set({ error: new Error(error.message), isLoading: false })
-        throw new Error(error.message)
+        set({ error: fromSupabaseError(error), isLoading: false })
+        throw fromSupabaseError(error)
       }
 
       // OAuth redirects away; reset loading for SPA/webview contexts
@@ -144,7 +145,7 @@ export function createAuthStore(
         const { data, error } = await supabase.auth.refreshSession()
 
         if (error) {
-          set({ error: new Error(error.message) })
+          set({ error: fromSupabaseError(error) })
           return
         }
 

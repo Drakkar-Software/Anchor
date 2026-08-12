@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js"
 import type { TableStore, AuthStore } from "../types.js"
 import type { RealtimeManager } from "../realtime/realtimeManager.js"
 import type { OfflineQueue } from "../mutation/offlineQueue.js"
+import { PG_INSUFFICIENT_PRIVILEGE } from "../errors.js"
 
 export type AuthGateOptions = {
   /** Clear all table stores on sign-out */
@@ -19,9 +20,18 @@ export type AuthGateOptions = {
 
 /**
  * Detect if a Supabase error is an RLS policy violation.
+ *
+ * Reads `code` first: an `AnchorError` from any boundary in this package now
+ * carries Postgres' own `42501`, which is the fact this function wants. The
+ * message arms below are the fallback, and they are still needed — a consumer
+ * can hand us an error caught straight from supabase-js, or from a wrapper of
+ * its own, and neither is an `AnchorError`. They were the ONLY mechanism before
+ * structured codes existed, which meant this reduced to substring-matching the
+ * literal text "42501" inside prose written for a log file.
  */
 export function isRlsError(error: Error | null): boolean {
   if (!error) return false
+  if ((error as { code?: unknown }).code === PG_INSUFFICIENT_PRIVILEGE) return true
   const msg = error.message.toLowerCase()
   return (
     msg.includes("row-level security") ||

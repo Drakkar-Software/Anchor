@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.1.0] - 2026-08-12
+
+### Features
+
+- **Structured errors**: new `AnchorError extends Error` carrying `code`, `details`, `hint` and `status`, plus `fromSupabaseError()` to build one from whatever a supabase-js call returned in `error`. Exported alongside the four constants worth branching on: `PG_INSUFFICIENT_PRIVILEGE` (`42501`), `PG_UNIQUE_VIOLATION` (`23505`), `PG_FOREIGN_KEY_VIOLATION` (`23503`), `PGRST_NO_ROWS` (`PGRST116`). Every boundary on the store read/write path now returns or throws one: both `executeQuery` paths and `executeQueryOne`, all six store mutations (`insert`, `insertMany`, `update`, `upsert`, `remove`, `removeWhere`), the offline queue's replay pipeline, `callRpc`, and the auth store. Previously all of them did `new Error(error.message)`, so a write refused by an RLS policy and a write refused by a unique constraint were indistinguishable without reading English prose written for a log file. `AnchorError` is an `Error` and `TableStoreState.error` keeps its `Error | null` type, so this is additive: no consumer catch, `instanceof` check or `.message` read changes.
+- **`isRlsError` reads the code**: it had no access to one, and instead substring-matched the literal text `"42501"` inside the message. It now reads the structured code first and keeps the message arms as a fallback, for errors a consumer caught straight from supabase-js without passing through this package.
+
+`docs/supabase-api-coverage.md` lists which boundaries were routed and which still return a bare `Error` — Storage, Edge Functions, batch operations, incremental sync and the auth *callback* helpers are not on the store path and are the next slice.
+
 ## [2.0.0] - 2026-08-11
 
 Bumps `@supabase/supabase-js` 2.108.2 → 2.112.3 across `core` and `adapter-react-native`. Verified via a direct source diff of all six lockstep packages (`supabase-js`, `auth-js`, `postgrest-js`, `realtime-js`, `storage-js`, `functions-js`) — see `docs/supabase-api-coverage.md` for the full investigation and gap inventory.

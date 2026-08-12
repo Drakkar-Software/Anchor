@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 import { withRetry, type RetryOptions } from "../utils/retry.js"
+import { fromSupabaseError } from "../errors.js"
 
 export type RpcResult<T> = {
   data: T | null
@@ -82,7 +83,7 @@ export async function callRpc<
 
   const execute = async (): Promise<RpcResult<T>> => {
     const { data, error } = await supabase.rpc(functionName, args as any)
-    if (error) return { data: null, error: new Error(error.message) }
+    if (error) return { data: null, error: fromSupabaseError(error) }
     return { data: data as T, error: null }
   }
 

@@ -6,6 +6,7 @@ import type {
 } from "../types.js"
 import { isTempId } from "../types.js"
 import { fromTable } from "../query/queryExecutor.js"
+import { fromSupabaseError } from "../errors.js"
 
 /**
  * Execute a remote mutation against Supabase.
@@ -58,7 +59,7 @@ export async function executeRemoteMutation(
         .select(select ?? "*")
         .single()
 
-      if (error) throw new Error(error.message)
+      if (error) throw fromSupabaseError(error)
 
       const d = data as unknown as Record<string, unknown>
       const serverId = d[primaryKey]
@@ -72,7 +73,7 @@ export async function executeRemoteMutation(
         .select(select ?? "*")
         .single()
 
-      if (error) throw new Error(error.message)
+      if (error) throw fromSupabaseError(error)
       return { data: data as unknown as Record<string, unknown> }
     }
 
@@ -82,7 +83,7 @@ export async function executeRemoteMutation(
         .select(select ?? "*")
         .single()
 
-      if (error) throw new Error(error.message)
+      if (error) throw fromSupabaseError(error)
 
       const d = data as unknown as Record<string, unknown>
       const serverId = d[primaryKey]
@@ -94,7 +95,7 @@ export async function executeRemoteMutation(
         .delete()
         .eq(primaryKey, pkValue as any)
 
-      if (error) throw new Error(error.message)
+      if (error) throw fromSupabaseError(error)
       return { data: null }
     }
 

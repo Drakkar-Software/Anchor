@@ -85,6 +85,16 @@ export type { CursorPaginationOptions, PaginationState } from "./query/paginatio
 export { aggregateRpc, aggregateLocal } from "./query/aggregation.js"
 export type { AggregateFunction, AggregateResult } from "./query/aggregation.js"
 
+// ─── Errors ──────────────────────────────────────────────────────────
+export {
+  AnchorError,
+  fromSupabaseError,
+  PG_INSUFFICIENT_PRIVILEGE,
+  PG_UNIQUE_VIOLATION,
+  PG_FOREIGN_KEY_VIOLATION,
+  PGRST_NO_ROWS,
+} from "./errors.js"
+
 // ─── Mutation ────────────────────────────────────────────────────────
 export { OfflineQueue } from "./mutation/offlineQueue.js"
 export type { FlushResult, MutationExecutor } from "./mutation/offlineQueue.js"

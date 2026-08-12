@@ -12,6 +12,7 @@ import type {
 } from "./types.js"
 import { noopLogger, createTempId } from "./types.js"
 import { runValidation } from "./mutation/validation.js"
+import { fromSupabaseError } from "./errors.js"
 import { executeQuery, executeQueryOne, fromTable, applyFilters } from "./query/queryExecutor.js"
 
 type StoreSet<Row, InsertRow, UpdateRow> = StoreApi<
@@ -385,9 +386,9 @@ export function createTableStore<
             const records = new Map(prev.records)
             const order = prev.order.filter((o) => o !== tempId)
             records.delete(tempId as string | number)
-            return { ...prev, records, order, error: new Error(error.message) }
+            return { ...prev, records, order, error: fromSupabaseError(error) }
           })
-          throw new Error(error.message)
+          throw fromSupabaseError(error)
         }
 
         const serverRow = data as unknown as Row
@@ -468,9 +469,9 @@ export function createTableStore<
               (o) => !tempIdSet.has(o),
             )
             for (const id of tempIds) records.delete(id)
-            return { ...prev, records, order, error: new Error(error.message) }
+            return { ...prev, records, order, error: fromSupabaseError(error) }
           })
-          throw new Error(error.message)
+          throw fromSupabaseError(error)
         }
 
         // Confirm: replace optimistic with server responses
@@ -550,9 +551,9 @@ export function createTableStore<
             if (current?._anchor_mutationId === mutationId && snapshot) {
               records.set(id, snapshot)
             }
-            return { ...prev, records, error: new Error(error.message) }
+            return { ...prev, records, error: fromSupabaseError(error) }
           })
-          throw new Error(error.message)
+          throw fromSupabaseError(error)
         }
 
         // Confirm with server response
@@ -614,7 +615,7 @@ export function createTableStore<
               const current = records.get(optimisticId)
               // Only roll back if this mutation's write is still current
               if (current?._anchor_mutationId !== mutationId) {
-                return { ...prev, error: new Error(error.message) }
+                return { ...prev, error: fromSupabaseError(error) }
               }
               if (snapshot) {
                 records.set(optimisticId, snapshot)
@@ -623,10 +624,10 @@ export function createTableStore<
                 const idx = order.indexOf(optimisticId)
                 if (idx >= 0) order.splice(idx, 1)
               }
-              return { ...prev, records, order, error: new Error(error.message) }
+              return { ...prev, records, order, error: fromSupabaseError(error) }
             })
           }
-          throw new Error(error.message)
+          throw fromSupabaseError(error)
         }
 
         const serverRow = data as unknown as Row
@@ -686,9 +687,9 @@ export function createTableStore<
               records.set(id, snapshot)
               if (!order.includes(id)) order.push(id)
             }
-            return { ...prev, records, order, error: new Error(error.message) }
+            return { ...prev, records, order, error: fromSupabaseError(error) }
           })
-          throw new Error(error.message)
+          throw fromSupabaseError(error)
         }
 
         logger.mutationSuccess(table, "DELETE", Date.now() - start)
@@ -741,9 +742,9 @@ export function createTableStore<
               records.set(id, snapshot)
               if (!order.includes(id)) order.push(id)
             }
-            return { ...prev, records, order, error: new Error(error.message) }
+            return { ...prev, records, order, error: fromSupabaseError(error) }
           })
-          throw new Error(error.message)
+          throw fromSupabaseError(error)
         }
 
         logger.mutationSuccess(table, "DELETE", Date.now() - start)
