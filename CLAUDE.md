@@ -100,6 +100,24 @@ When passed to standalone `createTableStore()`, these trigger a `console.warn`. 
 - Mock Supabase client in `src/__tests__/mockSupabase.ts`
 - Use `MemoryAdapter` for persistence tests
 - Test files excluded from tsconfig (avoids noUnusedLocals on test imports)
+- **A type assertion in a `.test.ts` file is checked by nothing.** tsconfig
+  excludes them and `vitest.config.ts` sets no `typecheck` block, so
+  `expectTypeOf` there — or a `createFoo<DB>()` call whose only purpose is to
+  prove an inference — passes whatever the types happen to do. Put them in
+  `src/types.check.ts`, which `tsc --noEmit` does read: `Expect<Eq<A, B>>` for
+  types, and an exported, never-called probe function carrying
+  `@ts-expect-error` lines for a generic function's call-site behaviour. Verify a
+  new assertion by breaking what it guards and watching `tsc` go red — an `Eq<>`
+  alias that nothing constrains to `true` compiles either way.
+- **A negative assertion needs its positive counterpart in the same test.** "No
+  realtime channel names the view" and "the queue holds nothing for the view" are
+  both true of a library that has stopped subscribing and stopped queueing
+  altogether, so on their own they report a total regression as a passing
+  exclusion. Three tests shipped that way in the views work and none could fail.
+- **Model the generator's real output, not the tidier equivalent.** `supabase gen
+  types` writes `Args: never` for a zero-argument function (not
+  `Record<string, never>`) and a bare `Views: {}` for a schema with no views. A
+  fixture using the neater shape asserts something no consuming app produces.
 
 ## Change Process
 
@@ -114,3 +132,14 @@ When passed to standalone `createTableStore()`, these trigger a `console.warn`. 
 - **Don't use reference equality for echo prevention** — use boolean flags (`receiving`).
 - **Composite PKs**: `createTableStore` throws at runtime for array PKs with >1 column. Use `encodeKey`/`applyPkFilters` utilities directly.
 - **`fromTable()` helper**: Always use for Supabase queries to support non-public schemas.
+- **`order` is the one PostgREST parameter that accumulates.** `.order()` appends
+  to whatever is already in the query string; `.limit()`/`.range()` overwrite, and
+  filters compose as AND. So anything pre-applied to a builder before handing it
+  to caller code can be narrowed or replaced by that caller — except the sort,
+  which the caller can then only add a tiebreaker to. That is why `executeQuery`
+  applies filters, `select` and pagination to a `queryFn`'s builder and leaves the
+  ordering alone.
+- **A row keyed on a nullish primary key collapses onto another row.** `records`
+  is a Map, so `rowsToMap`/the merge branch throw rather than silently keeping one
+  of N rows and filling `order` with copies of `undefined`. Views are where this
+  is reachable normally: view columns carry no NOT NULL inference.
