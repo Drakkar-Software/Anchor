@@ -39,6 +39,7 @@ export function createSupabaseStores<
     supabase,
     schema,
     tables,
+    views = [],
     persistence,
     network,
     realtime,
@@ -47,11 +48,27 @@ export function createSupabaseStores<
     devtools,
     logger,
     tableOptions = {},
+    viewOptions = {},
     tableOrder,
     fetchRemoteOnBoot = true,
     auth = true,
     authGate: authGateOpts,
   } = options
+
+  // Both loops write into one flat map, views second, so a name in both lists
+  // would leave `stores.foo` pointing at the read-only store while realtime and
+  // the offline-queue executor stayed wired to the writable one nobody holds —
+  // every write rejected with `Cannot mutate view`, live updates landing
+  // nowhere, and two boot fetches for the same relation. Refuse it instead.
+  const duplicated = (views as string[]).filter((v) =>
+    (tables as string[]).includes(v),
+  )
+  if (duplicated.length > 0) {
+    throw new Error(
+      `createSupabaseStores: ${duplicated.map((d) => `"${d}"`).join(", ")} ` +
+      `named in both "tables" and "views". A relation belongs to one of them.`,
+    )
+  }
 
   // Shared instances
   const realtimeManager = new RealtimeManager({
@@ -133,6 +150,41 @@ export function createSupabaseStores<
     }
   }
 
+  // Views. Same store, same persistence, same auth gate — but no offline-queue
+  // *executor*, because a view is not writable, and no realtime subscription,
+  // because Postgres publishes changes under the underlying table's name and a
+  // channel on the view's name would simply never fire.
+  //
+  // The queue itself is still handed over. Nothing can enqueue for a view (all
+  // four mutators are behind `assertNotView`), so `getQueueSize()` is a truthful
+  // 0 rather than a hardcoded one, `flushQueue()` flushes the shared queue like
+  // it does from any other store instead of resolving to nothing, and the
+  // factory stops warning that options it passed itself "require
+  // createSupabaseStores()" — that warning is gated on the queue being absent.
+  for (const viewName of views) {
+    const viewOpts = (viewOptions as Record<string, any>)[viewName as string] as
+      | Record<string, unknown>
+      | undefined
+
+    stores[viewName as string] = createTableStore<DB, any, any, any>({
+      supabase,
+      table: viewName as string,
+      schema: schema as string | undefined,
+      isView: true,
+      primaryKey: (viewOpts?.primaryKey as string) ?? "id",
+      defaultFilters: viewOpts?.defaultFilters as any,
+      defaultSort: viewOpts?.defaultSort as any,
+      defaultSelect: viewOpts?.defaultSelect as string,
+      persistence: persistence ? { adapter: persistence.adapter } : undefined,
+      network,
+      cacheStrategy: (viewOpts?.cacheStrategy as any) ?? options.cacheStrategy,
+      immer,
+      devtools,
+      logger,
+      _queue: offlineQueue,
+    })
+  }
+
   // Create auth store
   const authStore = auth
     ? createAuthStore({ supabase: supabase as SupabaseClient, devtools: !!devtools })
@@ -174,9 +226,9 @@ export function createSupabaseStores<
 
   // Fetch remote data on boot
   if (fetchRemoteOnBoot) {
-    for (const tableName of orderedTables) {
-      stores[tableName as string]?.getState().fetch().catch((err: unknown) => {
-        logger?.fetchError?.(tableName as string, err instanceof Error ? err.message : String(err))
+    for (const name of [...orderedTables, ...views]) {
+      stores[name as string]?.getState().fetch().catch((err: unknown) => {
+        logger?.fetchError?.(name as string, err instanceof Error ? err.message : String(err))
       })
     }
   }
@@ -189,8 +241,8 @@ export function createSupabaseStores<
     _destroy: () => {
       for (const fn of cleanupFns) fn()
       // Clean up cross-tab sync for each store
-      for (const tableName of orderedTables) {
-        const s = stores[tableName as string] as any
+      for (const name of [...orderedTables, ...views]) {
+        const s = stores[name as string] as any
         if (s?._destroyCrossTab) s._destroyCrossTab()
       }
       realtimeManager.destroy()

@@ -58,7 +58,7 @@ Not a client gap, but worth documenting for anyone writing the function side: su
 
 ## RPC
 
-No third options argument is ever passed to `.rpc()` (`rpc/rpcAction.ts:84`, `query/aggregation.ts:35`) → `head`, `get`, `count` are all unreachable. `.rpc()` is only ever called on the root client — **RPCs in non-public schemas are unreachable even from a schema-scoped store**. `types.ts` has no `Functions` extractor (only `Tables`/`Views`/`Enums`), so RPC args and returns are `as any` / `data as T`.
+No third options argument is ever passed to `.rpc()` (`rpc/rpcAction.ts:84`, `query/aggregation.ts:35`) → `head`, `get`, `count` are all unreachable. `.rpc()` is only ever called on the root client — **RPCs in non-public schemas are unreachable even from a schema-scoped store**. `types.ts` has no `Functions` extractor, so RPC args and returns are `as any` / `data as T`. (It did not have a `Views` extractor either until 2.1.0 — that one is now `ViewNames`/`ViewRow`, behind `createSupabaseStores`' `views:` option.)
 
 `aggregation.ts:27-38` builds RPC names by the convention `zs_{fn}_{table}_{column}`, requiring user-authored SQL functions, rather than using PostgREST's native aggregate select syntax (`count()`, `sum()`, `avg()` inline in `.select()`).
 

@@ -19,6 +19,33 @@ export type TableNames<
   SchemaName extends string & keyof DB = "public" & keyof DB,
 > = string & keyof ExtractSchema<DB, SchemaName>["Tables"]
 
+/**
+ * Extract view names from a schema.
+ *
+ * A generated Supabase `Database` type keeps views in their own `Views` block,
+ * so they are not reachable through `TableNames` at all. Resolves to `never`
+ * for a schema with no views, which is what the generator emits as `Views: {}`.
+ */
+export type ViewNames<
+  DB,
+  SchemaName extends string & keyof DB = "public" & keyof DB,
+> = ExtractSchema<DB, SchemaName> extends { Views: infer V }
+  ? string & keyof V
+  : never
+
+/** Extract the Row type for a specific view */
+export type ViewRow<
+  DB,
+  ViewName extends ViewNames<DB, SchemaName>,
+  SchemaName extends string & keyof DB = "public" & keyof DB,
+> = ExtractSchema<DB, SchemaName> extends { Views: infer V }
+  ? ViewName extends keyof V
+    ? V[ViewName] extends { Row: infer R }
+      ? R
+      : never
+    : never
+  : never
+
 /** Extract Row type for a specific table */
 export type TableRow<
   DB,
@@ -579,6 +606,22 @@ export type CreateSupabaseStoresOptions<
   supabase: SupabaseClient<DB>
   schema?: SchemaName
   tables: TableNames<DB, SchemaName>[]
+  /**
+   * Views to back with a read-only store.
+   *
+   * A view is the route to a join here: `records` is keyed on a primary key and
+   * realtime writes the flat `postgres_changes` payload into it, so an embedded
+   * child collection is dropped by the first event after a fetch. A view is
+   * flat, so it survives.
+   *
+   * They get the same store, persistence and auth-gate wiring as a table, minus
+   * the two things that cannot apply: no offline-queue executor (a view is not
+   * writable) and no realtime subscription (Postgres publishes changes under
+   * the underlying TABLE's name, never the view's — subscribing to the view
+   * would register a channel that never fires). A view whose freshness matters
+   * needs a refetch trigger of its own.
+   */
+  views?: ViewNames<DB, SchemaName>[]
 
   // Global defaults
   persistence?: { adapter: PersistenceAdapter }
@@ -613,6 +656,34 @@ export type CreateSupabaseStoresOptions<
     >
   >
 
+  /**
+   * Per-view overrides. The five keys that mean anything for a read-only
+   * store — `realtime` and `conflict` are absent because neither applies.
+   *
+   * `primaryKey` is worth setting explicitly on almost every view: a generated
+   * `Database` type marks every view column nullable, since Postgres infers no
+   * NOT NULL through one, so the default `"id"` is not something to lean on. A
+   * row that reaches the store without it fails the fetch rather than collapsing
+   * onto another row's key.
+   *
+   * It is a single column, unlike `tableOptions`' — an aggregate or join view is
+   * exactly where a composite key is tempting, and `createTableStore` throws on
+   * one, which from inside this factory takes down every other store with it.
+   * Point it at a column that is unique in the view's own output.
+   */
+  viewOptions?: Partial<
+    Record<
+      ViewNames<DB, SchemaName>,
+      {
+        primaryKey?: string
+        defaultFilters?: FilterDescriptor[]
+        defaultSort?: SortDescriptor[]
+        defaultSelect?: string
+        cacheStrategy?: CacheStrategy
+      }
+    >
+  >
+
   // Hydration
   tableOrder?: TableNames<DB, SchemaName>[]
   fetchRemoteOnBoot?: boolean
@@ -639,6 +710,14 @@ export type SupabaseStores<
       TableInsert<DB, TableName, SchemaName>,
       TableUpdate<DB, TableName, SchemaName>
     >
+  >
+} & {
+  // A view store is a `TableStore` whose mutators throw, rather than a narrower
+  // type: the runtime object is the same one, and typing the writes away would
+  // hide `setRecord`/`mergeRecords`, which a view legitimately uses when
+  // another store's write should show up in it before the next fetch.
+  [ViewName in ViewNames<DB, SchemaName>]: StoreApi<
+    TableStore<ViewRow<DB, ViewName, SchemaName>, never, never>
   >
 } & {
   auth: StoreApi<AuthStore>

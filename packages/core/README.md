@@ -54,6 +54,15 @@ const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)
 const stores = createSupabaseStores<Database>({
   supabase,
   tables: ['todos', 'profiles'],
+  // Read-only stores over Postgres views. Same persistence, auth gate and
+  // cleanup as a table -- but nothing can be written to them, and no realtime:
+  // Postgres publishes changes under the underlying TABLE's name, so a channel
+  // on a view's name would register and never fire. Give a view its own refetch
+  // trigger if its freshness matters.
+  views: ['todo_summary'],
+  // Views carry no NOT NULL inference, so name the column that identifies a row
+  // rather than leaning on the default "id".
+  viewOptions: { todo_summary: { primaryKey: 'owner_id' } },
   persistence: { adapter: new LocalStorageAdapter() },
   network: new WebNetworkStatus(),
   realtime: { enabled: true },
@@ -88,7 +97,7 @@ function TodoList() {
 
 | Category | Highlights |
 |----------|-----------|
-| **Store factories** | `createTableStore`, `createSupabaseStores`, `createViewStore` |
+| **Store factories** | `createTableStore`, `createSupabaseStores` (tables + views) |
 | **Mutations** | Optimistic insert/update/upsert/remove, batch ops, offline queue |
 | **Query** | Filter DSL (`eq`, `gt`, `ilike`, ...), fluent builder, cursor pagination |
 | **Hooks** | `useQuery`, `useMutation`, `useAuth`, `useRealtime`, `useInfiniteQuery`, `useSuspenseQuery`, `useLinkedQuery` (with `staleTime`, `initialData`, `mergeToStore`), `useRpc`, `useEdgeFunction`, `useStorage`, `useSyncStatus` |

@@ -41,6 +41,17 @@ export type CreateViewStoreOptions<DB, Row extends Record<string, unknown>> = {
 /**
  * Creates a read-only Zustand store for a database view.
  * Mutations are disabled — only fetch operations are available.
+ *
+ * @deprecated Name the view in `createSupabaseStores({ views: [...] })` instead.
+ * A store built here is outside the shared persistence, auth gate, offline queue
+ * and cleanup the factory wires up, and there is no way to reach them from a
+ * standalone call. `ViewStore<Row>` is also narrower than the store actually is:
+ * it hides `resolveFetchOptions`, `retainQuery` and `releaseQuery`, which
+ * `useQuery` calls, so a store typed this way cannot be read with the hook the
+ * rest of the library is built around. The factory's view stores are typed
+ * `TableStore<Row, never, never>` for that reason — read-only through the
+ * `never` argument, whole through everything else. This export stays for the
+ * consumers already on it.
  */
 export function createViewStore<
   DB,

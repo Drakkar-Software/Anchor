@@ -13,7 +13,7 @@ import type {
 } from "./types.js"
 import { noopLogger, createTempId } from "./types.js"
 import { runValidation } from "./mutation/validation.js"
-import { fromSupabaseError } from "./errors.js"
+import { AnchorError, fromSupabaseError } from "./errors.js"
 import { queryKey, isKeyable } from "./query/queryKey.js"
 import { selectAllRows, selectQueryRows } from "./query/selectRows.js"
 import { executeQuery, executeQueryOne, fromTable, applyFilters } from "./query/queryExecutor.js"
@@ -135,15 +135,40 @@ export function createTableStore<
       return selectAllRows<Row>({ records, order })
     }
 
+    /**
+     * A row's identity, or a hard failure.
+     *
+     * `records` is a Map keyed on this value, so a nullish key silently
+     * collapses every such row onto one entry: three rows arrive, one record is
+     * kept, `order` holds three copies of `undefined`, and every projection
+     * renders the last row three times. Nothing about that reads as broken.
+     *
+     * Views make it reachable in ordinary use — a generated `Database` marks
+     * every view column nullable, a LEFT JOIN really can produce a null id, and
+     * a `defaultSelect` that omits the key column produces the same shape — so
+     * this fails where the row arrives instead. Both call sites are inside the
+     * fetch/hydrate try, which turns it into a query error naming the column.
+     */
+    function rowId(row: Row): string | number {
+      const id = (row as Record<string, unknown>)[primaryKey]
+      if (id == null) {
+        const where = isView ? "viewOptions" : "tableOptions"
+        throw new AnchorError(
+          `${isView ? "View" : "Table"} "${table}" returned a row with no "${primaryKey}". ` +
+          `Set ${where}.${table}.primaryKey to a column that is present and unique, ` +
+          `and make sure defaultSelect includes it.`,
+        )
+      }
+      return id as string | number
+    }
+
     function rowsToMap(
       rows: Row[],
     ): { records: Map<string | number, TrackedRow<Row>>; order: (string | number)[] } {
       const records = new Map<string | number, TrackedRow<Row>>()
       const order: (string | number)[] = []
       for (const row of rows) {
-        const id = (row as Record<string, unknown>)[primaryKey] as
-          | string
-          | number
+        const id = rowId(row)
         records.set(id, row as TrackedRow<Row>)
         order.push(id)
       }
@@ -366,7 +391,7 @@ export function createTableStore<
               order = []
 
               for (const row of data) {
-                const id = (row as Record<string, unknown>)[primaryKey] as string | number
+                const id = rowId(row)
                 const existing = records.get(id)
                 if (existing?._anchor_pending) {
                   // Keep pending version but include in order

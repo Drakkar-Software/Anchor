@@ -147,19 +147,42 @@ stores.profiles.getState().fetch()
 stores._destroy() // Clean up all subscriptions
 ```
 
-#### `createViewStore(options)`
+#### Views
 
-Creates a read-only store for database views. Mutations throw an error.
+Name them in `createSupabaseStores`. A view store is read-only (every mutator
+throws) and otherwise a normal store: same persistence, same auth gate, same
+per-query scoping, readable with `useQuery`.
 
 ```typescript
-const statsStore = createViewStore<Database, StatsRow>({
+const stores = createSupabaseStores<Database>({
   supabase,
-  view: 'dashboard_stats',
+  tables: ['todos'],
+  views: ['dashboard_stats'],
+  viewOptions: {
+    // Worth setting on almost every view: a generated `Database` marks every
+    // view column nullable, so the default "id" is not safe to lean on, and a
+    // row that arrives without its key fails the fetch rather than collapsing
+    // onto another row's record.
+    dashboard_stats: { primaryKey: 'owner_id' },
+  },
 })
 
-const stats = await statsStore.getState().fetch()
-// statsStore.getState().insert({}) // Throws: "Cannot mutate view"
+const stats = await stores.dashboard_stats.getState().fetch()
+// stores.dashboard_stats.getState().insert({}) // Throws: "Cannot mutate view"
 ```
+
+A view gets no realtime subscription: Postgres publishes changes under the
+underlying *table's* name, so a channel on the view's name would register and
+never fire. Refetch it from the table store's events, or on foreground, if its
+freshness matters.
+
+#### `createViewStore(options)` — deprecated
+
+Superseded by `views:` above. A standalone view store cannot reach the factory's
+shared persistence, auth gate, offline queue or cleanup, and its `ViewStore<Row>`
+type hides the three actions `useQuery` calls (`resolveFetchOptions`,
+`retainQuery`, `releaseQuery`), so it cannot be read with the hook the rest of
+the library is built around.
 
 ### Store Actions
 
@@ -610,7 +633,8 @@ await store.getState().fetch({
 await store.getState().clearAndFetch()
 ```
 
-Also available on `createSupabaseStores()` (global and per-table) and `createViewStore()`.
+Also available on `createSupabaseStores()`, globally and per relation through
+`tableOptions` / `viewOptions`.
 
 ### Cross-Tab Sync
 

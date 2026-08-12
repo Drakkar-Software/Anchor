@@ -6,6 +6,8 @@ export type {
   TableRow,
   TableInsert,
   TableUpdate,
+  ViewNames,
+  ViewRow,
   DatabaseEnum,
   // Record tracking
   RecordMeta,
