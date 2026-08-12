@@ -99,6 +99,7 @@ export { selectAllRows, selectQueryRows, sortRows } from "./query/selectRows.js"
 export {
   AnchorError,
   fromSupabaseError,
+  isTransportError,
   PG_INSUFFICIENT_PRIVILEGE,
   PG_UNIQUE_VIOLATION,
   PG_FOREIGN_KEY_VIOLATION,

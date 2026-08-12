@@ -122,3 +122,67 @@ describe("OfflineQueue dependsOn enforcement", () => {
     expect(queue.pendingCount).toBe(0)
   })
 })
+
+/**
+ * `dependsOn` had no producer until `offlineQueue.queueWrites` (2.2.0) started
+ * setting it on every write to a row that already had one queued. These two
+ * cases strand a mutation in the queue permanently, and neither is reachable
+ * while nothing sets the field — which is why they survived this long.
+ */
+describe("a dependency that is no longer in the queue", () => {
+  it("does not strand its dependent when it succeeded in an earlier flush", async () => {
+    const queue = new OfflineQueue()
+    const parentId = "parent-1"
+    const childId = "child-1"
+
+    let call = 0
+    queue.registerExecutor("todos", async (m) => {
+      call++
+      // The child fails once, which stops the flush; the parent has already
+      // succeeded and is pruned before the retry.
+      if (m.id === childId && call === 2) throw new Error("transient")
+      return {}
+    })
+
+    // Two different rows: a dependency between mutations on the *same* row is
+    // coalesced away by compact() before flush ever sees it, so the same-row
+    // version of this proves nothing.
+    await queue.enqueue(
+      createMutation({ id: parentId, operation: "INSERT", primaryKey: { id: 1 } }),
+    )
+    await queue.enqueue(
+      createMutation({
+        id: childId,
+        operation: "INSERT",
+        primaryKey: { id: 2 },
+        dependsOn: parentId,
+      }),
+    )
+
+    await queue.flush()
+    const second = await queue.flush()
+
+    expect(second.succeeded).toContain(childId)
+    expect(queue.pendingCount).toBe(0)
+  })
+
+  it("does not strand a delete that compact() merged its dependency into", async () => {
+    // compact() turns UPDATE+DELETE on one row into the DELETE alone, keeping
+    // the DELETE's id — and the DELETE depends on the UPDATE it just replaced.
+    const queue = new OfflineQueue()
+    const executor = vi.fn().mockResolvedValue({})
+    queue.registerExecutor("todos", executor)
+
+    await queue.enqueue(
+      createMutation({ id: "u1", operation: "UPDATE", payload: { title: "B" } }),
+    )
+    await queue.enqueue(
+      createMutation({ id: "d1", operation: "DELETE", payload: null, dependsOn: "u1" }),
+    )
+
+    const result = await queue.flush()
+
+    expect(result.succeeded).toContain("d1")
+    expect(queue.pendingCount).toBe(0)
+  })
+})

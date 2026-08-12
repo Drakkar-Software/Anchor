@@ -466,7 +466,9 @@ const { data, pagination } = processCursorResults(rows, { cursorColumn: 'created
 
 ### Offline-First
 
-Mutations are queued when offline and automatically flushed on reconnect:
+Mutations can be queued when offline and flushed on reconnect. This is **opt-in**, via
+`offlineQueue.queueWrites`, and needs a `network` adapter to know when the server is
+unreachable:
 
 ```typescript
 const stores = createSupabaseStores<Database>({
@@ -474,23 +476,33 @@ const stores = createSupabaseStores<Database>({
   tables: ['todos'],
   persistence: { adapter: new LocalStorageAdapter() },
   network: new WebNetworkStatus(),
+  offlineQueue: { queueWrites: true },
 })
 
-// Works offline — mutation is queued
-await stores.todos.getState().insert({ title: 'Offline todo' })
+// Offline, this resolves rather than throwing — the mutation is queued
+const row = await stores.todos.getState().insert({ title: 'Offline todo' })
 
-// Queue status
+// …so the promise no longer tells you whether the server has it. The row does:
+row._anchor_pending // 'insert' while queued, undefined once confirmed
+
 stores.todos.getState().getQueueSize() // 1
-
-// Manual flush
 await stores.todos.getState().flushQueue()
 ```
+
+That last point is the reason the option is opt-in rather than the default. Without it, a
+write that cannot reach the server rejects: a caller's `catch` fires and the optimistic row
+disappears. With it, the same write resolves, and code that reads a resolved promise as
+"the server has it" will report success for something only queued. Check `_anchor_pending`
+on what the mutator returns.
+
+`insert`, `update`, `upsert` and `remove` queue. `insertMany` and `removeWhere` do not, and
+still roll back and throw — see their notes in `createTableStore.ts`.
 
 The queue supports:
 - **Coalescing** — insert+update becomes single insert; insert+delete cancels both
 - **Dependency tracking** — `dependsOn` field ensures parent mutations complete before children
 - **Exponential backoff** — retries with `base * 2^attempt + jitter`
-- **Rollback** — permanent failures restore the original state
+- **Rollback** — a write abandoned past `maxRetries` restores the row's previous state
 
 ### Conflict Resolution
 

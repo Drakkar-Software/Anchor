@@ -10,10 +10,14 @@ import type {
   FilterDescriptor,
   FetchOptions,
   QueryEntry,
+  MutationOperation,
+  QueuedMutation,
+  UpsertOptions,
 } from "./types.js"
 import { noopLogger, createTempId } from "./types.js"
+import type { OfflineQueue } from "./mutation/offlineQueue.js"
 import { runValidation } from "./mutation/validation.js"
-import { AnchorError, fromSupabaseError } from "./errors.js"
+import { AnchorError, fromSupabaseError, isTransportError } from "./errors.js"
 import { queryKey, isKeyable } from "./query/queryKey.js"
 import { selectAllRows, selectQueryRows } from "./query/selectRows.js"
 import { executeQuery, executeQueryOne, fromTable, applyFilters } from "./query/queryExecutor.js"
@@ -86,6 +90,21 @@ export function createTableStore<
     if (networkOpts) {
       console.warn(`[anchor:${table}] "network" option requires createSupabaseStores(). Use createSupabaseStores() or manually wire NetworkStatusAdapter.`)
     }
+  }
+
+  const queue = _queue as OfflineQueue | undefined
+
+  // Queuing needs all three: somewhere to put the mutation, a way to know the
+  // server is unreachable, and the caller having asked for it. Missing any one
+  // of them, every mutator behaves exactly as it did before this option existed
+  // — which is also why the flag is checked here once rather than at eight call
+  // sites that could each drift.
+  const queueWrites = !!offlineQueueOpts?.queueWrites && !!queue && !!networkOpts
+  if (offlineQueueOpts?.queueWrites && !queueWrites) {
+    console.warn(
+      `[anchor:${table}] "offlineQueue.queueWrites" needs both a queue and a "network" adapter — ` +
+      `writes will not be queued. Use createSupabaseStores() and pass "network".`,
+    )
   }
 
   // Per-query fetch bookkeeping, all keyed by `queryKey(opts)`.
@@ -241,6 +260,101 @@ export function createTableStore<
 
     function assertNotView(): void {
       if (isView) throw new Error(`Cannot mutate view "${table}"`)
+    }
+
+    // ── Offline write queuing ─────────────────────────────────────
+    //
+    // Off unless `offlineQueue.queueWrites` is set — see the option's docblock
+    // for why that is not a default.
+
+    /** Everything still queued for one row, oldest first. */
+    function pendingFor(id: string | number) {
+      return queue!.pendingMutations.filter(
+        (m) => m.table === table && m.primaryKey[primaryKey] === id,
+      )
+    }
+
+    /**
+     * This write has to go to the queue rather than to the server.
+     *
+     * Two reasons, and the second is not obvious. The server being unreachable
+     * is the expected one. The other is that **a row with a write already
+     * queued keeps queuing even while online**, because the queue flushes on a
+     * debounce: a direct write would reach Postgres first and then be
+     * overwritten seconds later by the older payload the drain replays, leaving
+     * the store and the server both holding the edit the user had already
+     * replaced. Ordering between two queued writes is `dependsOn`'s job; this
+     * is what stops a write escaping the ordering altogether.
+     */
+    function mustQueue(id: string | number): boolean {
+      if (!queueWrites) return false
+      return !networkOpts!.isOnline() || pendingFor(id).length > 0
+    }
+
+    /**
+     * The write reached the network layer and failed there rather than being
+     * refused. `status` comes from the response, not the error — postgrest-js
+     * reports both through the same `error` slot.
+     */
+    function failedInTransit(error: unknown, status: number | undefined): boolean {
+      return queueWrites && isTransportError(error, status)
+    }
+
+    /**
+     * Hand a write to the shared queue, having already applied it optimistically.
+     *
+     * `dependsOn` points at the last mutation still queued for this same row, so
+     * the drain replays them in the order they were made. Without it the queue
+     * would flush two writes to one row concurrently-ish and the older payload
+     * could land last — which for two check-ins on one day means the earlier
+     * answers overwrite the correction.
+     *
+     * `rollbackSnapshot` is what the row looked like before, and it is not
+     * optional bookkeeping: when a queued mutation exhausts its retries, the
+     * factory's `onRollback` is the only thing that takes the optimistic row
+     * back off the screen. Enqueue without it and a refused write stays visible,
+     * marked pending, forever.
+     *
+     * When a write is already queued for this row, its snapshot is **inherited**
+     * rather than taken fresh. The row in the store is that earlier write's
+     * optimistic value, so capturing it would make "before" mean a state the
+     * server never held: rolling the pair back would restore a row still
+     * flagged `_anchor_pending`, with intermediate values and nothing left in
+     * the queue that could ever clear the flag. The first snapshot in a chain is
+     * the only true one.
+     */
+    async function enqueueWrite(
+      operation: MutationOperation,
+      id: string | number,
+      payload: Record<string, unknown> | null,
+      rollbackSnapshot: TrackedRow<Row> | undefined,
+      upsertOptions?: UpsertOptions,
+    ): Promise<void> {
+      const priorForRow = pendingFor(id)
+      const inherited = priorForRow[0]
+      if (inherited) {
+        rollbackSnapshot = inherited.rollbackSnapshot as TrackedRow<Row> | undefined ?? undefined
+      }
+      const mutation: QueuedMutation = {
+        id: crypto.randomUUID(),
+        table,
+        operation,
+        payload,
+        primaryKey: { [primaryKey]: id },
+        dependsOn: priorForRow[priorForRow.length - 1]?.id,
+        createdAt: Date.now(),
+        status: "pending",
+        retryCount: 0,
+        rollbackSnapshot: (rollbackSnapshot as Record<string, unknown> | undefined) ?? null,
+        upsertOptions,
+      }
+      await queue!.enqueue(mutation)
+      logger.mutationQueued?.(table, operation)
+      // The optimistic row has to survive a relaunch too. Persisting only on
+      // success would leave the queue holding a mutation for a row the store no
+      // longer has: the entry vanishes on restart and reappears when the drain
+      // lands, which reads as data loss followed by a ghost.
+      persistIfConfigured()
     }
 
     // ── Initial state ─────────────────────────────────────────────
@@ -600,13 +714,28 @@ export function createTableStore<
           return { ...prev, records, order, error: null }
         })
 
+        // A queued insert keeps its temp id: `mutationPipeline`'s INSERT arm
+        // strips it before sending, and `onTempIdResolved` maps it to the
+        // server's on the drain.
+        const queueInsert = () =>
+          enqueueWrite("INSERT", tempId as string | number, { ...(row as object) }, undefined)
+
+        if (mustQueue(tempId as string | number)) {
+          await queueInsert()
+          return optimisticRow
+        }
+
         // Execute remote
-        const { data, error } = await fromTable(supabase as unknown as SupabaseClient, table, schema)
+        const { data, error, status } = await fromTable(supabase as unknown as SupabaseClient, table, schema)
           .insert(row as any)
           .select(defaultSelect ?? "*")
           .single()
 
         if (error) {
+          if (failedInTransit(error, status)) {
+            await queueInsert()
+            return optimisticRow
+          }
           // Rollback
           logger.mutationError(table, "INSERT", error.message)
           set((prev) => {
@@ -646,6 +775,17 @@ export function createTableStore<
         return serverRow as TrackedRow<Row>
       },
 
+      /**
+       * Not queued, even with `queueWrites` on: it rolls back and throws
+       * offline, exactly as it did before the queue was fed.
+       *
+       * `QueuedMutation` addresses one row — `payload` and `primaryKey` are both
+       * singular — so a batch would have to enter the queue as N independent
+       * INSERTs. That is not the same write: this one is a single statement the
+       * server accepts or rejects whole, and splitting it means a drain can
+       * half-succeed and leave the caller with no way to know which half.
+       * Failing honestly is better than a partial write nobody asked for.
+       */
       async insertMany(rows) {
         assertNotView()
         for (const row of rows) {
@@ -760,14 +900,47 @@ export function createTableStore<
           return { ...prev, records, error: null }
         })
 
+        const queueUpdate = () =>
+          enqueueWrite("UPDATE", id, { ...(changes as object) }, snapshot)
+
+        /**
+          * A queued update needs the row to be here, and this is the one place
+          * that can refuse.
+          *
+          * The optimistic apply above is a no-op when the store does not hold
+          * the row, so there is nothing to show as pending, nothing to roll back
+          * to, and nothing to return but a fabrication assembled from the
+          * caller's own payload — a row missing every column it did not write,
+          * absent from `records`, and invisible to `isPending`,
+          * `usePendingChanges` and every projection. Queuing under those
+          * conditions produces a write nobody can see the state of. Online this
+          * is fine and unchanged: PostgREST answers with the whole row.
+          */
+        const canQueue = () => get().records.has(id)
+
+        if (mustQueue(id)) {
+          if (!canQueue()) {
+            throw new AnchorError(
+              `Cannot queue an update to "${table}" row ${String(id)}: the store does not hold it. ` +
+              `Fetch the row first, or write while online.`,
+            )
+          }
+          await queueUpdate()
+          return get().records.get(id) as TrackedRow<Row>
+        }
+
         // Execute remote
-        const { data, error } = await fromTable(supabase as unknown as SupabaseClient, table, schema)
+        const { data, error, status } = await fromTable(supabase as unknown as SupabaseClient, table, schema)
           .update(changes as any)
           .eq(primaryKey, id as any)
           .select(defaultSelect ?? "*")
           .single()
 
         if (error) {
+          if (failedInTransit(error, status) && canQueue()) {
+            await queueUpdate()
+            return get().records.get(id) as TrackedRow<Row>
+          }
           // Compare-and-swap rollback: only roll back if this mutation's
           // optimistic write is still the current value (not overwritten
           // by a concurrent mutation)
@@ -786,8 +959,14 @@ export function createTableStore<
         // Confirm with server response
         set((prev) => {
           const records = new Map(prev.records)
+          const order = [...prev.order]
           records.set(id, data as unknown as TrackedRow<Row>)
-          return { ...prev, records }
+          // An update by id on a row the store had not fetched leaves the
+          // optimistic apply a no-op, so this is the first time the row exists
+          // locally and nothing else would put it in `order` — where every
+          // projection reads from.
+          if (!order.includes(id)) order.push(id)
+          return { ...prev, records, order }
         })
 
         logger.mutationSuccess(table, "UPDATE", Date.now() - start)
@@ -850,12 +1029,26 @@ export function createTableStore<
           return { ...prev, records, order, error: null }
         })
 
-        const { data, error } = await fromTable(supabase as unknown as SupabaseClient, table, schema)
+        // `options` rides along, or the drain conflicts on the primary key and
+        // writes a different row than this call would have.
+        const queueUpsert = () =>
+          enqueueWrite("UPSERT", optimisticId, { ...(row as object) }, snapshot, options)
+
+        if (mustQueue(optimisticId)) {
+          await queueUpsert()
+          return get().records.get(optimisticId) as TrackedRow<Row>
+        }
+
+        const { data, error, status } = await fromTable(supabase as unknown as SupabaseClient, table, schema)
           .upsert(row as any, options)
           .select(defaultSelect ?? "*")
           .single()
 
         if (error) {
+          if (failedInTransit(error, status)) {
+            await queueUpsert()
+            return get().records.get(optimisticId) as TrackedRow<Row>
+          }
           logger.mutationError(table, "UPSERT", error.message)
           // Compare-and-swap rollback
           set((prev) => {
@@ -932,12 +1125,27 @@ export function createTableStore<
           return { ...prev, records, order, error: null }
         })
 
+        // The row is already gone from `records` and `order`, so there is no
+        // pending tombstone to render and nothing for `selectQueryRows` to
+        // filter — a queued delete simply looks deleted until it drains, and
+        // `onRollback` puts the snapshot back if it never does.
+        const queueRemove = () => enqueueWrite("DELETE", id, null, snapshot)
+
+        if (mustQueue(id)) {
+          await queueRemove()
+          return
+        }
+
         // Execute remote
-        const { error } = await fromTable(supabase as unknown as SupabaseClient, table, schema)
+        const { error, status } = await fromTable(supabase as unknown as SupabaseClient, table, schema)
           .delete()
           .eq(primaryKey, id as any)
 
         if (error) {
+          if (failedInTransit(error, status)) {
+            await queueRemove()
+            return
+          }
           // Rollback — re-insert row into current order (preserves concurrent changes)
           logger.mutationError(table, "DELETE", error.message)
           set((prev) => {
@@ -956,6 +1164,15 @@ export function createTableStore<
         persistIfConfigured()
       },
 
+      /**
+       * Not queued either, and this one is a correctness rule rather than a
+       * shape mismatch. The optimistic pass below matches rows locally and is
+       * deliberately conservative — `default: return true` for every operator
+       * beyond `eq`/`neq`. That is safe for an optimistic hide the server
+       * immediately corrects, and unsafe as the basis of a replay: queuing it as
+       * N deletes-by-id would delete rows the server's own filter would have
+       * spared, permanently, with nothing to compare against by the time it runs.
+       */
       async removeWhere(filters) {
         assertNotView()
         const start = Date.now()

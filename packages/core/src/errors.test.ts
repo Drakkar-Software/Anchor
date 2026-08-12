@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest"
 import {
   AnchorError,
   fromSupabaseError,
+  isTransportError,
   PG_INSUFFICIENT_PRIVILEGE,
   PG_UNIQUE_VIOLATION,
 } from "./errors.js"
@@ -158,5 +159,52 @@ describe("the query boundary preserves the code", () => {
     )
     expect(data).toBeNull()
     expect(error).toBeNull()
+  })
+})
+
+/**
+ * `isTransportError` decides whether a failed write is queued for retry or
+ * thrown back at the caller, so it is worth pinning to the exact two shapes
+ * postgrest-js produces rather than to a message.
+ */
+describe("telling a dead network from a refusal", () => {
+  const transport = {
+    message: "TypeError: Network request failed",
+    details: "",
+    hint: "",
+    code: "",
+  }
+
+  it("recognises the shape postgrest-js gives a request that never arrived", () => {
+    expect(isTransportError(transport, 0)).toBe(true)
+  })
+
+  it("does not mistake a policy refusal for one", () => {
+    expect(isTransportError({ message: "denied", code: "42501" }, 403)).toBe(false)
+  })
+
+  it("does not mistake a server error with no code for one", () => {
+    // The request DID reach a server. Queuing it would retry a real rejection.
+    expect(isTransportError({ message: "Bad Gateway" }, 502)).toBe(false)
+  })
+
+  it("needs the status: an error alone does not say", () => {
+    expect(isTransportError(transport, undefined)).toBe(false)
+  })
+
+  it("is false when there is no error at all", () => {
+    expect(isTransportError(null, 0)).toBe(false)
+  })
+})
+
+describe("an empty code is no code", () => {
+  it("reads postgrest's `code: \"\"` as absent", () => {
+    // A consumer branching on `err.code` must see a fetch failure the same way
+    // it sees a thrown TypeError: without one.
+    expect(fromSupabaseError({ message: "boom", code: "" }).code).toBeUndefined()
+  })
+
+  it("still keeps a real code", () => {
+    expect(fromSupabaseError({ message: "denied", code: "42501" }).code).toBe("42501")
   })
 })

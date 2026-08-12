@@ -130,6 +130,15 @@ export class OfflineQueue {
   compact(): void {
     const compacted: QueuedMutation[] = []
     const seen = new Map<string, number>() // row key → index in compacted
+    // Which mutation absorbed each one that coalescing removes, so a third
+    // mutation pointing at a removed id can be repointed at whatever now
+    // carries its work. `undefined` means the work is gone entirely.
+    //
+    // Without this, `UPDATE + DELETE` alone is enough to wedge the queue: the
+    // DELETE replaces the UPDATE and keeps its own id, and its `dependsOn`
+    // still names the UPDATE that no longer exists — so `flush` skips it on
+    // every pass, waiting for a mutation that can never succeed.
+    const absorbedBy = new Map<MutationId, MutationId | undefined>()
 
     for (const mutation of this.queue) {
       if (mutation.status !== "pending") {
@@ -154,6 +163,7 @@ export class OfflineQueue {
         mutation.operation === "UPDATE"
       ) {
         existing.payload = { ...existing.payload, ...mutation.payload }
+        absorbedBy.set(mutation.id, existing.id)
         continue
       }
 
@@ -168,6 +178,8 @@ export class OfflineQueue {
           if (idx > existingIdx) seen.set(key, idx - 1)
         }
         seen.delete(rowKey)
+        absorbedBy.set(existing.id, undefined)
+        absorbedBy.set(mutation.id, undefined)
         continue
       }
 
@@ -177,6 +189,7 @@ export class OfflineQueue {
         mutation.operation === "UPDATE"
       ) {
         existing.payload = { ...existing.payload, ...mutation.payload }
+        absorbedBy.set(mutation.id, existing.id)
         continue
       }
 
@@ -189,12 +202,26 @@ export class OfflineQueue {
           ...mutation,
           rollbackSnapshot: existing.rollbackSnapshot,
         }
+        absorbedBy.set(existing.id, mutation.id)
         continue
       }
 
       // Default: keep both
       seen.set(rowKey, compacted.length)
       compacted.push(mutation)
+    }
+
+    // Repoint every dependency that coalescing moved or removed. Chains are
+    // followed (A absorbed into B, B into C) and bounded by the map's size, and
+    // a mutation that ends up depending on itself — which is what
+    // `UPDATE + DELETE` produces — depends on nothing.
+    for (const mutation of compacted) {
+      let target = mutation.dependsOn
+      for (let hops = 0; target != null && absorbedBy.has(target); hops++) {
+        if (hops > absorbedBy.size) { target = undefined; break }
+        target = absorbedBy.get(target)
+      }
+      mutation.dependsOn = target === mutation.id ? undefined : target
     }
 
     this.queue = compacted
@@ -272,10 +299,16 @@ export class OfflineQueue {
         try {
           const { serverId } = await executor(mutation, tempIdMap)
 
-          // Track temp ID resolution for all PK columns (supports composite keys)
+          // Track temp ID resolution for all PK columns (supports composite keys).
+          //
+          // UPSERT counts as well as INSERT: an upsert identified by `onConflict`
+          // carries no primary key, so the store mints a temp id for it exactly
+          // as it does for an insert. Registering only INSERTs left any later
+          // queued write to that row replaying `.eq(pk, '_temp:…')` against a
+          // uuid column, which errors on every flush and never resolves.
           if (
             serverId != null &&
-            mutation.operation === "INSERT"
+            (mutation.operation === "INSERT" || mutation.operation === "UPSERT")
           ) {
             for (const pkValue of Object.values(mutation.primaryKey)) {
               if (
@@ -292,6 +325,19 @@ export class OfflineQueue {
           mutation.status = "succeeded"
           result.succeeded.push(mutation.id)
           succeededIds.add(mutation.id)
+
+          // Release anything waiting on it, now, rather than relying on
+          // `succeededIds` still being around when that dependent runs.
+          // Succeeded mutations are pruned at the end of this flush, so a
+          // dependent that does not execute in the same pass — its own turn
+          // came after another mutation failed and broke the loop, or it failed
+          // once and is being retried — would find its dependency gone from
+          // both the queue and `succeededIds` and be skipped on every future
+          // flush. Stranded silently: no error, no rollback, `pendingCount`
+          // simply never reaching zero.
+          for (const other of this.queue) {
+            if (other.dependsOn === mutation.id) other.dependsOn = undefined
+          }
         } catch (err) {
           mutation.retryCount++
           const errorMessage =

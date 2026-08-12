@@ -70,10 +70,19 @@ export function setupAuthGate(
         }
         // Unsubscribe all realtime channels to prevent data leaks after sign-out
         realtimeManager?.destroy()
-        // Clear offline queue to prevent orphaned mutations executing under wrong user
-        offlineQueue?.clearQueue().catch(() => {
-          // Best-effort: persistence may already be cleared
-        })
+        // The queue is deliberately NOT cleared here. It used to be, on the
+        // grounds of "orphaned mutations executing under the wrong user" —
+        // which `enqueue` tagging every mutation with `userId` and `flush`
+        // filtering on the current one already prevent, without discarding
+        // anything. Once `offlineQueue.queueWrites` gave the queue real
+        // producers, clearing it became the destructive half: supabase-js emits
+        // SIGNED_OUT on its own when a refresh token finally fails to renew,
+        // which is how a long offline session ends, so every unsent write would
+        // be dropped from memory and from disk without ever running — no error,
+        // no `onRollback`, and the pre-edit server state waiting at the next
+        // sign-in as though the work had never happened. `clearQueue()` remains
+        // public for a caller who does want that.
+        void offlineQueue
       }
 
       if (event === "SIGNED_IN" && refetchOnSignIn) {

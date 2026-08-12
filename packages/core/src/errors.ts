@@ -60,7 +60,11 @@ export function fromSupabaseError(error: unknown, fallbackMessage = "Unknown err
       status?: unknown
     }
     return new AnchorError(typeof e.message === "string" ? e.message : fallbackMessage, {
-      code: typeof e.code === "string" ? e.code : undefined,
+      // An empty `code` is *absent*, not a code. postgrest-js writes `code: ""`
+      // on every failure Postgres never saw — see `isTransportError` — and a
+      // consumer branching on `err.code` wants those to read as "no code" the
+      // same way a thrown `TypeError` does.
+      code: typeof e.code === "string" && e.code !== "" ? e.code : undefined,
       details: typeof e.details === "string" ? e.details : undefined,
       hint: typeof e.hint === "string" ? e.hint : undefined,
       status: typeof e.status === "number" ? e.status : undefined,
@@ -68,6 +72,36 @@ export function fromSupabaseError(error: unknown, fallbackMessage = "Unknown err
   }
 
   return new AnchorError(typeof error === "string" ? error : fallbackMessage)
+}
+
+/**
+ * True when the request never reached Postgres — no network, DNS failure, the
+ * server unreachable, or the fetch aborted.
+ *
+ * **postgrest-js does not throw these**, which is the whole reason this
+ * function has to exist. `PostgrestBuilder.then` installs a `res.catch(...)`
+ * that turns a rejected fetch into the ordinary `{ data: null, error }` pair
+ * (`dist/index.cjs:328` on 2.108.2, `:394` on 2.112.3), so a dead network and a
+ * policy refusal arrive through exactly the same slot and are indistinguishable
+ * by shape. What separates them is what the server contributed: a refusal
+ * carries Postgres' own `code` and a real HTTP status, and a request that never
+ * completed carries `status: 0` with `code: ""`.
+ *
+ * The `status` is on the **response**, not on the error object, so callers pass
+ * both. Requiring `status === 0` rather than merely inferring from a missing
+ * code is deliberate and conservative: a 5xx with an unparseable body also
+ * arrives without a code, and that request *did* reach a server. Queuing it
+ * would retry a real rejection, and this decision is what stands between a
+ * queued write and telling someone their data was sent.
+ *
+ * Written against the two fields rather than the message text, which is
+ * `${name}: ${message}` from whatever `fetch` threw and differs per platform
+ * ("Failed to fetch" on web, "Network request failed" on React Native).
+ */
+export function isTransportError(error: unknown, status: number | undefined): boolean {
+  if (error == null || status !== 0) return false
+  const code = (error as { code?: unknown }).code
+  return typeof code !== "string" || code === ""
 }
 
 /** Postgres `insufficient_privilege` — what RLS returns when a policy refuses. */

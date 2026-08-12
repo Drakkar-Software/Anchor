@@ -53,6 +53,7 @@ export function createSupabaseStores<
     fetchRemoteOnBoot = true,
     auth = true,
     authGate: authGateOpts,
+    offlineQueue: offlineQueueOpts,
   } = options
 
   // Both loops write into one flat map, views second, so a name in both lists
@@ -76,17 +77,66 @@ export function createSupabaseStores<
     logger,
   })
 
+  // Declared before the queue because `onRollback` closes over it. Nothing
+  // reads it until a flush, which is long after both loops below have filled it.
+  const stores: Record<string, StoreApi<TableStore<any, any, any>>> = {}
+
   const offlineQueue = new OfflineQueue({
     adapter: persistence?.adapter,
     network,
     logger,
+    maxRetries: offlineQueueOpts?.maxRetries,
+    flushDebounceMs: offlineQueueOpts?.flushDebounceMs,
+    /**
+     * The last exit for a queued write that the server will never accept.
+     *
+     * `OfflineQueue` marks a mutation `rolled_back` once it exceeds
+     * `maxRetries` and then prunes it, so this callback is the only remaining
+     * chance to undo what the optimistic apply did. Unwired — as it was while
+     * nothing could enqueue — the row it belongs to stays on screen, still
+     * flagged pending, after the write has been abandoned: the interface
+     * showing a record the server refused, which is the exact failure this
+     * project has already shipped once.
+     *
+     * `rollbackSnapshot` is what the row was before. Its absence means there
+     * was no row before (an insert, or an upsert that turned out to be one), so
+     * the undo is a removal.
+     *
+     * **It undoes only a row that is still optimistic**, which is this path's
+     * equivalent of the compare-and-swap every rollback inside
+     * `createTableStore` performs against `_anchor_mutationId`. Minutes can pass
+     * between the enqueue and the queue giving up, and a realtime event, a
+     * refetch or a cross-tab merge can put a confirmed server row at that id in
+     * the meantime. Restoring over it would replace a value the server holds
+     * with an older one, and the `removeRecord` branch would delete a row this
+     * mutation never created — gone from every list until a full refetch. A row
+     * carrying no `_anchor_optimistic` flag is the server's answer, not ours to
+     * undo.
+     *
+     * It is also the last word on a write, so it says so. Nothing else reports
+     * that a queued mutation was abandoned, and a deleted row quietly
+     * reappearing in a list some minutes later is not something to leave
+     * unlogged.
+     */
+    onRollback: (mutation) => {
+      const store = stores[mutation.table]
+      logger?.mutationError?.(
+        mutation.table,
+        mutation.operation,
+        `Abandoned after ${mutation.retryCount} attempts: ${mutation.lastError ?? "unknown error"}`,
+      )
+      if (!store) return
+      const id = Object.values(mutation.primaryKey)[0] as string | number
+      const current = store.getState().records.get(id)
+      if (current && !current._anchor_optimistic) return
+      const snapshot = mutation.rollbackSnapshot
+      if (snapshot) store.getState().setRecord(id, snapshot as any)
+      else if (current) store.getState().removeRecord(id)
+    },
   })
 
   // Cleanup functions
   const cleanupFns: (() => void)[] = []
-
-  // Create stores for each table
-  const stores: Record<string, StoreApi<TableStore<any, any, any>>> = {}
 
   const orderedTables = tableOrder ?? tables
   for (const tableName of orderedTables) {
@@ -107,6 +157,7 @@ export function createSupabaseStores<
         ? { adapter: persistence.adapter }
         : undefined,
       network,
+      offlineQueue: offlineQueueOpts,
       conflict: (tableOpts?.conflict as any) ?? conflict,
       cacheStrategy: (tableOpts?.cacheStrategy as any) ?? options.cacheStrategy,
       immer,

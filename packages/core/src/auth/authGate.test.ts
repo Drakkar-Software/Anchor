@@ -29,15 +29,22 @@ describe("isRlsError", () => {
 
 describe("setupAuthGate", () => {
   function createMockTableStore() {
+    // One state object, not a fresh one per `getState()` call — otherwise every
+    // action is a brand-new spy and no assertion about what the gate called can
+    // ever see it.
+    const state = {
+      clearAll: vi.fn(),
+      fetch: vi.fn(() => Promise.resolve([])),
+    }
     const store = {
-      getState: vi.fn(() => ({
-        clearAll: vi.fn(),
-        fetch: vi.fn(() => Promise.resolve([])),
-      })),
+      getState: vi.fn(() => state),
       setState: vi.fn(),
       subscribe: vi.fn(),
+      _state: state,
     }
-    return store as unknown as StoreApi<TableStore<any, any, any>>
+    return store as unknown as StoreApi<TableStore<any, any, any>> & {
+      _state: typeof state
+    }
   }
 
   it("clears realtime on sign-out", async () => {
@@ -56,7 +63,13 @@ describe("setupAuthGate", () => {
     expect(realtimeManager.destroy).toHaveBeenCalledTimes(1)
   })
 
-  it("clears offline queue on sign-out", async () => {
+  it("KEEPS the offline queue on sign-out", async () => {
+    // It used to clear it. supabase-js emits SIGNED_OUT by itself when a
+    // refresh token finally fails to renew — the way a long offline session
+    // ends — so with `queueWrites` on, clearing here would discard every unsent
+    // write with no error and no rollback. Multi-user isolation does not need
+    // it: `enqueue` tags each mutation with `userId` and `flush` filters on the
+    // current one.
     const supabase = createMockSupabase()
     const authStore = createAuthStore({ supabase })
     const tableStore = createMockTableStore()
@@ -69,7 +82,9 @@ describe("setupAuthGate", () => {
     await supabase.auth.signInWithPassword({ email: "a@b.com", password: "x" })
     await supabase.auth.signOut()
 
-    expect(offlineQueue.clearQueue).toHaveBeenCalledTimes(1)
+    expect(offlineQueue.clearQueue).not.toHaveBeenCalled()
+    // The stores are still cleared, which is what sign-out is for.
+    expect(tableStore._state.clearAll).toHaveBeenCalledTimes(1)
   })
 
   it("does not clear realtime/queue when clearOnSignOut is false", async () => {
@@ -92,22 +107,15 @@ describe("setupAuthGate", () => {
     expect(offlineQueue.clearQueue).not.toHaveBeenCalled()
   })
 
-  it("handles clearQueue rejection gracefully", async () => {
+  it("signs out cleanly with no queue wired at all", async () => {
     const supabase = createMockSupabase()
     const authStore = createAuthStore({ supabase })
     const tableStore = createMockTableStore()
-    const offlineQueue = {
-      clearQueue: vi.fn(() => Promise.reject(new Error("persistence error"))),
-    }
 
-    setupAuthGate(supabase, authStore, [tableStore], {
-      offlineQueue: offlineQueue as any,
-    })
+    setupAuthGate(supabase, authStore, [tableStore], {})
 
-    // Should not throw
     await supabase.auth.signInWithPassword({ email: "a@b.com", password: "x" })
-    await supabase.auth.signOut()
-
-    expect(offlineQueue.clearQueue).toHaveBeenCalledTimes(1)
+    await expect(supabase.auth.signOut()).resolves.toBeDefined()
+    expect(tableStore._state.clearAll).toHaveBeenCalledTimes(1)
   })
 })

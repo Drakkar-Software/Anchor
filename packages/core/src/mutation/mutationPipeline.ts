@@ -164,6 +164,11 @@ export function createMutationExecutor(
 
         // Set confirmed server data (no _anchor_ metadata)
         records.set(id, data)
+        // `order` and `records` have to stay in step. The branch above only
+        // touches `order` when the id changed, so a replayed UPDATE — same id
+        // throughout — used to leave a row in `records` that no projection can
+        // reach, since `selectAllRows`/`selectQueryRows` walk `order` alone.
+        if (!order.includes(id)) order.push(id)
         return { ...prev, records, order }
       })
     }
