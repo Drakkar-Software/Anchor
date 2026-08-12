@@ -6,8 +6,9 @@ import { createMockSupabase } from "./mockSupabase.js"
  * silently ignores an argument makes every suite built on it agree with a
  * production path that would not.
  *
- * Both behaviours below were absent until 2.1.0 — `select` was recorded and
- * never read, and there was no `.rpc()` at all.
+ * Each block below covers a behaviour the mock did not have: `select` was
+ * recorded and never read, there was no `.rpc()` at all, and `count` was taken
+ * after the page was sliced.
  */
 describe("mockSupabase select projection", () => {
   function client() {
@@ -53,13 +54,13 @@ describe("mockSupabase select projection", () => {
     expect(Object.keys(data[0]).sort()).toEqual(["id", "steps"])
   })
 
-  it("counts the rows matched, not the rows projected", async () => {
+  it("counts the rows matched, not the columns projected", async () => {
     const { data, count } = await client()
       .from("todos")
       .select("id", { count: "exact" })
       .limit(1)
     expect(data).toHaveLength(1)
-    expect(count).toBe(1)
+    expect(count).toBe(2)
   })
 
   it("projects through single() too", async () => {
@@ -70,7 +71,7 @@ describe("mockSupabase select projection", () => {
 
 /**
  * Every store mutation appends `.select(defaultSelect ?? '*')`, so the write
- * builders take a select string too — and each one used to drop it. Reads and
+ * builders take a select string too — and each one dropped it. Reads and
  * writes go through different builders in this mock, so a projection test on
  * `.from().select()` proves nothing about them.
  */
@@ -127,6 +128,54 @@ describe("mockSupabase select projection on writes", () => {
   it("returns whole rows when a write does not call select at all", async () => {
     const { data } = await client().from("todos").insert({ title: "new", secret: "x" })
     expect(data[0]).toHaveProperty("secret")
+  })
+})
+
+/**
+ * `count` is the total matching the filters, independent of the page returned.
+ * The mock used to compute it after slicing, so `data.length < count` was
+ * unreachable — which made `createTableStore`'s truncation warning untestable
+ * and would make any assertion about a total pass whether or not the total was
+ * right.
+ */
+describe("mockSupabase count", () => {
+  function client() {
+    return createMockSupabase({
+      todos: [
+        { id: 1, title: "a", done: false },
+        { id: 2, title: "b", done: false },
+        { id: 3, title: "c", done: true },
+        { id: 4, title: "d", done: false },
+        { id: 5, title: "e", done: true },
+      ],
+    })
+  }
+
+  it("reports the full match count under a limit", async () => {
+    const { data, count } = await client().from("todos").select("*", { count: "exact" }).limit(2)
+    expect(data).toHaveLength(2)
+    expect(count).toBe(5)
+  })
+
+  it("reports the full match count under a range", async () => {
+    const { data, count } = await client().from("todos").select("*", { count: "exact" }).range(1, 2)
+    expect(data).toHaveLength(2)
+    expect(count).toBe(5)
+  })
+
+  it("counts only the rows the filters match", async () => {
+    const { data, count } = await client()
+      .from("todos")
+      .select("*", { count: "exact" })
+      .eq("done", false)
+      .limit(1)
+    expect(data).toHaveLength(1)
+    expect(count).toBe(3)
+  })
+
+  it("returns a null count when none was asked for", async () => {
+    const { count } = await client().from("todos").select("*").limit(2)
+    expect(count).toBeNull()
   })
 })
 

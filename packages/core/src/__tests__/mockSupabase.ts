@@ -235,13 +235,19 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
           let rows = applyFilters(getTable(tableName))
           rows = applySort(rows)
 
+          // PostgREST counts the rows MATCHING the filters, not the rows it
+          // returns: `range`/`limit` narrow `data` and leave `count` alone.
+          // Counting after the slice made `data.length < count` unreachable, so
+          // createTableStore's truncation warning could never fire in a test —
+          // and any assertion about a total would have passed vacuously.
+          const total = rows.length
+
           if (rangeStart != null && rangeEnd != null) {
             rows = rows.slice(rangeStart, rangeEnd + 1)
           } else if (limitVal != null) {
             rows = rows.slice(0, limitVal)
           }
 
-          const total = rows.length
           const projected = project(rows, selectColumns, tableName)
 
           if (singleMode) {
