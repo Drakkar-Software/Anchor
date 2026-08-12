@@ -45,6 +45,7 @@ export function createTableStore<
     defaultFilters,
     defaultSort,
     defaultSelect,
+    defaultQueryFn,
     persistence,
     offlineQueue: offlineQueueOpts,
     network: networkOpts,
@@ -340,7 +341,12 @@ export function createTableStore<
               supabase as SupabaseClient,
               table,
               schema,
-              opts,
+              // Filled in AFTER the key: a store-level `queryFn` is the same
+              // function for every query here, so it says nothing about which
+              // query this is, and putting it in `resolveFetchOptions` would
+              // make `isKeyable` false for all of them and cost the store its
+              // per-query scoping wholesale.
+              opts.queryFn ? opts : { ...opts, queryFn: defaultQueryFn },
             )
 
             if (error) {

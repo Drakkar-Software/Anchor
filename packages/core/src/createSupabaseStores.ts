@@ -102,6 +102,7 @@ export function createSupabaseStores<
       defaultFilters: tableOpts?.defaultFilters as any,
       defaultSort: tableOpts?.defaultSort as any,
       defaultSelect: tableOpts?.defaultSelect as string,
+      defaultQueryFn: tableOpts?.defaultQueryFn as any,
       persistence: persistence
         ? { adapter: persistence.adapter }
         : undefined,
@@ -175,6 +176,7 @@ export function createSupabaseStores<
       defaultFilters: viewOpts?.defaultFilters as any,
       defaultSort: viewOpts?.defaultSort as any,
       defaultSelect: viewOpts?.defaultSelect as string,
+      defaultQueryFn: viewOpts?.defaultQueryFn as any,
       persistence: persistence ? { adapter: persistence.adapter } : undefined,
       network,
       cacheStrategy: (viewOpts?.cacheStrategy as any) ?? options.cacheStrategy,

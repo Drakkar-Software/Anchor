@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { applyFilters, applySort } from "./queryExecutor.js"
+import { applyFilters, applySort, executeQuery } from "./queryExecutor.js"
 
 describe("applyFilters", () => {
   it("applies eq filter to a mock builder", () => {
@@ -132,5 +132,75 @@ describe("applySort", () => {
       method: "order",
       args: ["id", { ascending: true, nullsFirst: false }],
     })
+  })
+})
+
+/**
+ * Pagination, asserted on the calls rather than on the rows. `offset` is the one
+ * arm with arithmetic in it and the mock cannot tell an off-by-one in the range
+ * end from a correct one, so read what reached the builder.
+ */
+describe("executeQuery pagination", () => {
+  function recordingClient() {
+    const calls: Array<{ method: string; args: unknown[] }> = []
+    const builder: any = new Proxy(
+      { then: (resolve: (v: unknown) => void) => resolve({ data: [], error: null, count: null }) },
+      {
+        get(target, prop) {
+          if (prop === "then") return (target as any).then
+          return (...args: unknown[]) => {
+            calls.push({ method: String(prop), args })
+            return builder
+          }
+        },
+      },
+    )
+    return { calls, supabase: { from: () => builder } as any }
+  }
+
+  it("turns offset+limit into a single inclusive range", async () => {
+    const { calls, supabase } = recordingClient()
+    await executeQuery(supabase, "todos", "public", { offset: 20, limit: 10 })
+
+    // The end is inclusive, so a page of 10 starting at 20 is 20..29 — not 30,
+    // which would return 11 rows, and not 29 rows over a wrong base.
+    expect(calls.filter((c) => c.method === "range")).toEqual([
+      { method: "range", args: [20, 29] },
+    ])
+    // `range` covers both, so `limit` must NOT also be called: PostgREST would
+    // take the narrower of the two and the second page would come back empty.
+    expect(calls.some((c) => c.method === "limit")).toBe(false)
+  })
+
+  it("falls back to a 1000-row page when offset comes with no limit", async () => {
+    const { calls, supabase } = recordingClient()
+    await executeQuery(supabase, "todos", "public", { offset: 5 })
+
+    expect(calls.filter((c) => c.method === "range")).toEqual([
+      { method: "range", args: [5, 1004] },
+    ])
+  })
+
+  it("uses limit alone when there is no offset", async () => {
+    const { calls, supabase } = recordingClient()
+    await executeQuery(supabase, "todos", "public", { limit: 3 })
+
+    expect(calls.filter((c) => c.method === "limit")).toEqual([
+      { method: "limit", args: [3] },
+    ])
+    expect(calls.some((c) => c.method === "range")).toBe(false)
+  })
+
+  it("paginates the builder a queryFn is handed, before the callback sees it", async () => {
+    const { calls, supabase } = recordingClient()
+    await executeQuery(supabase, "todos", "public", {
+      offset: 20,
+      limit: 10,
+      queryFn: (builder: any) => builder,
+    })
+
+    expect(calls.filter((c) => c.method === "range")).toEqual([
+      { method: "range", args: [20, 29] },
+    ])
   })
 })

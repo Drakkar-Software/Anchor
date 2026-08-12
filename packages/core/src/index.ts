@@ -8,6 +8,9 @@ export type {
   TableUpdate,
   ViewNames,
   ViewRow,
+  FunctionNames,
+  RpcArgs,
+  RpcReturns,
   DatabaseEnum,
   // Record tracking
   RecordMeta,
@@ -152,7 +155,7 @@ export { createViewStore } from "./createViewStore.js"
 export type { ViewStore, CreateViewStoreOptions } from "./createViewStore.js"
 
 // ─── RPC ─────────────────────────────────────────────────────────────
-export { callRpc, createRpcAction, invalidateRpcCache } from "./rpc/rpcAction.js"
+export { callRpc, createRpcAction, createSchemaRpc, invalidateRpcCache } from "./rpc/rpcAction.js"
 export type { RpcResult, RpcCallOptions, RpcCacheOptions } from "./rpc/rpcAction.js"
 
 // ─── Edge Functions ──────────────────────────────────────────────────

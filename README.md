@@ -913,6 +913,29 @@ const result = await sendEmail({ body: { to: 'user@example.com', subject: 'Hello
 
 ### RPC (Postgres Functions)
 
+`createSchemaRpc` reads the function names, their arguments and their return
+types out of the generated `Database`, so none of the three is written twice:
+
+```typescript
+import { createSchemaRpc } from '@drakkar.software/anchor'
+
+const rpc = createSchemaRpc<Database>(supabase)   // supabase must be typed too
+
+const { data, error } = await rpc('get_dashboard_stats', { user_id: '123' })
+//      ^? the function's own Returns type
+
+await rpc('get_dashboard_stats')     // error: the function declares arguments
+await rpc('no_such_function')        // error: not in the schema
+await rpc('current_user_is_admin')   // fine: generated as `Args: never`
+```
+
+Pass the schema as the second type argument for a `Database` with no `public`
+key: `createSchemaRpc<Database, 'app'>(supabase)`.
+
+`callRpc` and `createRpcAction` take the name as a plain string and the return
+type as a type argument. They still work, and are what to use for a function the
+generated types do not cover:
+
 ```typescript
 import { createRpcAction } from '@drakkar.software/anchor'
 

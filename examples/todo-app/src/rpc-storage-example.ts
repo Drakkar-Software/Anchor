@@ -15,7 +15,7 @@
  */
 import { createClient } from "@supabase/supabase-js"
 import {
-  createRpcAction,
+  createSchemaRpc,
   createEdgeFunctionAction,
   createStorageActions,
   incrementalSync,
@@ -33,36 +33,37 @@ import { checkSchemaVersion } from "@drakkar.software/anchor/persistence/schemaV
 import { LocalStorageAdapter } from "@drakkar.software/anchor-adapter-web"
 import { stores, syncMetrics } from "./stores"
 import { eq } from "@drakkar.software/anchor"
+import type { Database } from "./database.types"
 
-const supabase = createClient(
+// Typed client, so `createSchemaRpc` below can read the function names, their
+// arguments and their return types out of the generated Database.
+const supabase = createClient<Database>(
   import.meta.env.VITE_SUPABASE_URL,
   import.meta.env.VITE_SUPABASE_ANON_KEY,
 )
 
 // ─── RPC: Call Postgres Functions ────────────────────────────────────
 
-type DashboardStats = {
-  total_todos: number
-  completed_todos: number
-  avg_priority: number
-}
-
-const getDashboardStats = createRpcAction<DashboardStats>(
-  supabase,
-  "get_dashboard_stats",
-)
+const rpc = createSchemaRpc<Database>(supabase)
 
 async function showDashboard() {
-  // withRetry wraps any async call with exponential backoff + jitter
+  // withRetry wraps any async call with exponential backoff + jitter.
+  // No type argument and no hand-written args type: the name is checked against
+  // the schema, `{ user_id }` is required because the function declares it, and
+  // `data` comes back as the function's own return type.
   const { data, error } = await withRetry(
-    () => getDashboardStats({ user_id: "123" }),
+    () => rpc("get_dashboard_stats", { user_id: "123" }),
     { maxRetries: 3, baseDelay: 1000 },
   )
   if (error) {
     console.error("RPC error:", error.message)
     return
   }
-  console.log("Dashboard:", data)
+  console.log("Dashboard:", data?.completed_todos, "of", data?.total_todos)
+
+  // A function the generator wrote as `Args: never` takes no argument object.
+  const { data: isAdmin } = await rpc("current_user_is_admin")
+  console.log("Admin:", isAdmin)
 }
 
 // ─── Edge Functions ──────────────────────────────────────────────────

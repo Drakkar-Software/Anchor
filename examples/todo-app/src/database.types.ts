@@ -50,8 +50,30 @@ export type Database = {
         }
       }
     }
-    Views: {}
-    Functions: {}
+    // A generated Database keeps views in their own block, and every column is
+    // nullable: Postgres infers no NOT NULL through a view.
+    Views: {
+      todo_summary: {
+        Row: {
+          user_id: string | null
+          username: string | null
+          open_count: number | null
+          next_due: string | null
+        }
+      }
+    }
+    Functions: {
+      get_dashboard_stats: {
+        Args: { user_id: string }
+        Returns: {
+          total_todos: number
+          completed_todos: number
+          avg_priority: number
+        }
+      }
+      // What the generator writes for a function that takes no arguments.
+      current_user_is_admin: { Args: never; Returns: boolean }
+    }
     Enums: {}
   }
 }

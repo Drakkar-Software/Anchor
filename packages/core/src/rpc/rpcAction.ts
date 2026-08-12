@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
+import type { FunctionNames, RpcArgs, RpcReturns } from "../types.js"
 import { withRetry, type RetryOptions } from "../utils/retry.js"
 import { fromSupabaseError } from "../errors.js"
 
@@ -126,4 +127,56 @@ export function createRpcAction<
 >(supabase: SupabaseClient, functionName: string, defaultOptions?: RpcCallOptions) {
   return (args?: Args, options?: RpcCallOptions): Promise<RpcResult<T>> =>
     callRpc<T, Args>(supabase, functionName, args, { ...defaultOptions, ...options })
+}
+
+/**
+ * The trailing parameters of a schema-typed RPC call.
+ *
+ * `args?` for every function would defeat the point: a function with required
+ * arguments would compile with none and fail at runtime with `PGRST202`, which
+ * reads like a missing grant. So the argument object is **required** unless the
+ * schema says it can be left out. Two shapes count as "can": `never`, which is
+ * what the generator emits for a zero-argument function, and an object all of
+ * whose properties are optional.
+ */
+type RpcCallParams<Args> = [Args] extends [never]
+  ? [args?: undefined, options?: RpcCallOptions]
+  : Record<string, never> extends Args
+    ? [args?: Args, options?: RpcCallOptions]
+    : [args: Args, options?: RpcCallOptions]
+
+/**
+ * `callRpc` with the function name, arguments and return type read from the
+ * generated `Database` instead of supplied by hand.
+ *
+ * ```typescript
+ * const rpc = createSchemaRpc<Database>(supabase)
+ * const { data } = await rpc("record_consent", { p_kind: "care", p_granted: true })
+ * ```
+ *
+ * Pass the schema as the second type argument for a `Database` with no `public`
+ * key — `createSchemaRpc<Database, "app">(supabase)` — or every function name
+ * resolves to `never` and no call compiles.
+ *
+ * A separate entry point rather than new generics on `callRpc`: the existing
+ * signature takes the return type as its first type argument, so making it
+ * generic over `DB` would bind `Database` where every existing
+ * `callRpc<Stats>(...)` call site means `Stats`.
+ */
+export function createSchemaRpc<
+  DB,
+  SchemaName extends string & keyof DB = "public" & keyof DB,
+>(supabase: SupabaseClient<DB>) {
+  return <FunctionName extends FunctionNames<DB, SchemaName>>(
+    functionName: FunctionName,
+    ...rest: RpcCallParams<RpcArgs<DB, FunctionName, SchemaName>>
+  ): Promise<RpcResult<RpcReturns<DB, FunctionName, SchemaName>>> => {
+    const [args, options] = rest
+    return callRpc<RpcReturns<DB, FunctionName, SchemaName>, Record<string, unknown>>(
+      supabase as SupabaseClient,
+      functionName,
+      args as Record<string, unknown> | undefined,
+      options,
+    )
+  }
 }

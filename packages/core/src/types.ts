@@ -46,6 +46,44 @@ export type ViewRow<
     : never
   : never
 
+/**
+ * Extract Postgres function names from a schema.
+ *
+ * A generated `Database` types every function with an `Args` and a `Returns`
+ * block, none of which the package read: `callRpc` took a bare `string` and an
+ * unparameterised client, so the name, the argument object and the return type
+ * were all unchecked. Resolves to `never` for a schema with no functions, which
+ * the generator emits as `Functions: {}`.
+ */
+export type FunctionNames<
+  DB,
+  SchemaName extends string & keyof DB = "public" & keyof DB,
+> = ExtractSchema<DB, SchemaName> extends { Functions: infer F }
+  ? string & keyof F
+  : never
+
+/** The argument object a Postgres function takes, from the generated types. */
+export type RpcArgs<
+  DB,
+  FunctionName extends FunctionNames<DB, SchemaName>,
+  SchemaName extends string & keyof DB = "public" & keyof DB,
+> = ExtractSchema<DB, SchemaName> extends { Functions: infer F }
+  ? F[FunctionName & keyof F] extends { Args: infer A }
+    ? A
+    : never
+  : never
+
+/** What a Postgres function returns, from the generated types. */
+export type RpcReturns<
+  DB,
+  FunctionName extends FunctionNames<DB, SchemaName>,
+  SchemaName extends string & keyof DB = "public" & keyof DB,
+> = ExtractSchema<DB, SchemaName> extends { Functions: infer F }
+  ? F[FunctionName & keyof F] extends { Returns: infer R }
+    ? R
+    : never
+  : never
+
 /** Extract Row type for a specific table */
 export type TableRow<
   DB,
@@ -154,7 +192,20 @@ export type FetchOptions<Row = Record<string, unknown>> = {
   offset?: number
   select?: string
   count?: "exact" | "planned" | "estimated"
-  /** Escape hatch: direct access to the PostgREST query builder */
+  /**
+   * Escape hatch: direct access to the PostgREST query builder. It arrives with
+   * `select`, the filters and the pagination already applied — but **not the
+   * sort**, which is the callback's own to set: `order` is the one PostgREST
+   * parameter that accumulates rather than overwrites, so pre-applying it would
+   * demote a `queryFn`'s `.order()` to a tiebreaker behind `defaultSort`.
+   *
+   * A `queryFn` passed here makes the fetch unkeyable — an opaque function
+   * cannot go in a value-based key — so the query reads the table's own loading
+   * and error flags instead of its own. Configure it once as the store's
+   * `defaultQueryFn` if it is a property of the source rather than of the query;
+   * that keeps per-query scoping, because the function is then the same for
+   * every query on the store and the rest of the options still identify them.
+   */
   queryFn?: (builder: unknown) => unknown
   /** Override the store's default cache strategy for this fetch */
   cacheStrategy?: CacheStrategy
@@ -533,6 +584,23 @@ export type CreateTableStoreOptions<
   defaultFilters?: FilterDescriptor<Row>[]
   defaultSort?: SortDescriptor<Row>[]
   defaultSelect?: string
+  /**
+   * Applied to every fetch that does not pass its own `queryFn`, for a source
+   * that always needs the escape hatch: a PostgREST modifier the filter DSL has
+   * no word for. Unlike a per-call `queryFn`, this one does not make queries
+   * unkeyable — it is the same function for all of them, so
+   * `filters`/`sort`/`select`/`limit`/`offset` still tell them apart and each
+   * keeps its own loading state, error and count.
+   *
+   * **It must not change the shape of a row.** Only `fetch` goes through it:
+   * `fetchOne` reads by primary key through its own builder, and each of the six
+   * mutations reads its row back with `defaultSelect`, and all of them write into
+   * the same `records` map every query then projects. A function that widens the
+   * row — an embed, an extra column — therefore holds two shapes in one store,
+   * and the narrow one is whatever the user just created or opened by id. Row
+   * shape belongs to `defaultSelect`, which every one of those paths honours.
+   */
+  defaultQueryFn?: (builder: unknown) => unknown
 
   // Cache strategy
   cacheStrategy?: CacheStrategy
@@ -643,6 +711,7 @@ export type CreateSupabaseStoresOptions<
         defaultFilters?: FilterDescriptor[]
         defaultSort?: SortDescriptor[]
         defaultSelect?: string
+        defaultQueryFn?: (builder: unknown) => unknown
         realtime?: {
           enabled?: boolean
           events?: RealtimeEvent[]
@@ -679,6 +748,7 @@ export type CreateSupabaseStoresOptions<
         defaultFilters?: FilterDescriptor[]
         defaultSort?: SortDescriptor[]
         defaultSelect?: string
+        defaultQueryFn?: (builder: unknown) => unknown
         cacheStrategy?: CacheStrategy
       }
     >

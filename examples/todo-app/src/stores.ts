@@ -42,6 +42,13 @@ export const syncMetrics = new SyncMetrics()
 export const stores = createSupabaseStores<Database>({
   supabase,
   tables: ["todos", "profiles"],
+  // A view is how a join reaches a store: `records` is keyed on a primary key
+  // and realtime writes the flat postgres_changes payload into it, so an
+  // embedded child collection is dropped by the first event after a fetch. A
+  // view is flat, so it survives. Read-only, and no realtime — Postgres
+  // publishes changes under the underlying table's name, so a channel on the
+  // view's name would register and never fire.
+  views: ["todo_summary"],
   persistence: { adapter: new LocalStorageAdapter() },
   network: new WebNetworkStatus(),
   realtime: { enabled: true },
@@ -67,6 +74,16 @@ export const stores = createSupabaseStores<Database>({
     },
     profiles: {
       realtime: { enabled: false },
+    },
+  },
+  viewOptions: {
+    // Name the column that identifies a row. Every view column is nullable in
+    // the generated types, so the default "id" is not safe to lean on — and a
+    // row that reaches the store without its key fails the fetch rather than
+    // collapsing onto another row's record.
+    todo_summary: {
+      primaryKey: "user_id",
+      defaultSort: [{ column: "open_count", ascending: false }],
     },
   },
 })

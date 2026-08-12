@@ -116,6 +116,16 @@ export function applySort(
   return q
 }
 
+function applyPagination<Row>(builder: any, options: FetchOptions<Row>): any {
+  if (options.offset != null) {
+    // range() handles both offset and limit — don't also call .limit()
+    const limit = options.limit ?? 1000
+    return builder.range(options.offset, options.offset + limit - 1)
+  }
+  if (options.limit != null) return builder.limit(options.limit)
+  return builder
+}
+
 /**
  * Execute a full query with filters, sort, and pagination.
  */
@@ -125,12 +135,32 @@ export async function executeQuery<Row>(
   schema: string,
   options: FetchOptions<Row> = {},
 ): Promise<{ data: Row[]; count: number | null; error: Error | null }> {
-  // Escape hatch: direct builder access
+  let builder = fromTable(supabase, table, schema).select(options.select ?? "*", {
+    count: options.count,
+  })
+
+  if (options.filters?.length) {
+    builder = applyFilters(builder, options.filters as FilterDescriptor[])
+  }
+
+  // The escape hatch gets everything EXCEPT the sort, and the asymmetry is not
+  // an oversight. `order` is the one PostgREST parameter that accumulates —
+  // `.order()` appends to whatever is already in the query string, while
+  // `limit`/`range` overwrite and filters compose as AND. So pre-applying the
+  // store's sort would silently demote a `queryFn`'s own `.order()` from being
+  // the query's ordering to a tiebreaker behind `defaultSort`, and ordering
+  // through a referenced table is one of the gaps the escape hatch exists for.
+  // Everything else pre-applies safely: a `queryFn` narrows what it is handed,
+  // and its own `limit`/`range` wins.
+  if (!options.queryFn) {
+    if (options.sort?.length) {
+      builder = applySort(builder, options.sort as SortDescriptor[])
+    }
+  }
+
+  builder = applyPagination(builder, options)
+
   if (options.queryFn) {
-    const builder = fromTable(supabase, table, schema)
-      .select(options.select ?? "*", {
-        count: options.count,
-      })
     try {
       const result = await options.queryFn(builder)
       const r = result as { data: Row[] | null; count: number | null; error: any }
@@ -143,26 +173,6 @@ export async function executeQuery<Row>(
         error: err instanceof Error ? err : new Error(String(err)),
       }
     }
-  }
-
-  let builder = fromTable(supabase, table, schema).select(options.select ?? "*", {
-    count: options.count,
-  })
-
-  if (options.filters?.length) {
-    builder = applyFilters(builder, options.filters as FilterDescriptor[])
-  }
-
-  if (options.sort?.length) {
-    builder = applySort(builder, options.sort as SortDescriptor[])
-  }
-
-  if (options.offset != null) {
-    // range() handles both offset and limit — don't also call .limit()
-    const limit = options.limit ?? 1000
-    builder = builder.range(options.offset, options.offset + limit - 1)
-  } else if (options.limit != null) {
-    builder = builder.limit(options.limit)
   }
 
   const { data, error, count } = await builder

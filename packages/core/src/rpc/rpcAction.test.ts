@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
-import { callRpc, createRpcAction, invalidateRpcCache } from "./rpcAction.js"
+import { callRpc, createRpcAction, createSchemaRpc, invalidateRpcCache } from "./rpcAction.js"
 
 function createMockSupabase(rpcResult: { data: any; error: any }) {
   return {
@@ -127,5 +127,61 @@ describe("RPC caching", () => {
     await callRpc(supabase, "bad_fn", undefined, { cache: { ttlMs: 5000 } })
 
     expect(supabase.rpc).toHaveBeenCalledTimes(2)
+  })
+})
+
+/**
+ * The name, the arguments and the return type come from the generated
+ * `Database` here rather than from the call site. The type half of that is
+ * asserted in `types.check.ts`, which `tsc` reads; this covers the runtime,
+ * which is `callRpc` with nothing added.
+ */
+describe("createSchemaRpc", () => {
+  type DB = {
+    public: {
+      Tables: Record<string, never>
+      Functions: {
+        record_consent: {
+          Args: { p_kind: string; p_granted: boolean }
+          Returns: string
+        }
+        current_day: { Args: Record<string, never>; Returns: number }
+      }
+    }
+  }
+
+  it("forwards the name and args to supabase.rpc", async () => {
+    const supabase = createMockSupabase({ data: "consent-1", error: null })
+    const rpc = createSchemaRpc<DB>(supabase)
+
+    const result = await rpc("record_consent", { p_kind: "care", p_granted: true })
+
+    expect(supabase.rpc).toHaveBeenCalledWith("record_consent", {
+      p_kind: "care",
+      p_granted: true,
+    })
+    expect(result.data).toBe("consent-1")
+    expect(result.error).toBeNull()
+  })
+
+  it("carries the same structured error as callRpc", async () => {
+    const supabase = createMockSupabase({
+      data: null,
+      error: { message: "permission denied for function", code: "42501" },
+    })
+    const rpc = createSchemaRpc<DB>(supabase)
+
+    const result = await rpc("current_day")
+
+    expect(result.data).toBeNull()
+    expect((result.error as { code?: string })?.code).toBe("42501")
+  })
+
+  it("takes a no-argument function without inventing an empty object", async () => {
+    const supabase = createMockSupabase({ data: 8, error: null })
+    const rpc = createSchemaRpc<DB>(supabase)
+
+    await rpc("current_day")
+    expect(supabase.rpc).toHaveBeenCalledWith("current_day", undefined)
   })
 })

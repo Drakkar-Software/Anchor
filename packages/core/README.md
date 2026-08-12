@@ -106,7 +106,7 @@ function TodoList() {
 | **Persistence** | Pluggable adapters, encrypted storage, schema versioning, quota management |
 | **Auth** | Auth store, session gate, RLS error detection |
 | **Resilience** | Retry with backoff, circuit breaker, rate limiter |
-| **Server** | RSC prefetch, RPC actions, Edge Functions |
+| **Server** | RSC prefetch, RPC actions (`createSchemaRpc` for schema-typed names, args and returns), Edge Functions |
 
 ## `useLinkedQuery` — joins & complex queries with SWR
 

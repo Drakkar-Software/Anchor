@@ -1,7 +1,7 @@
 /**
  * Compile-time assertions for the `Database`-extraction types.
  *
- * These have no runtime and no test: `packages/core/tsconfig.json` excludes
+ * Nothing here runs. `packages/core/tsconfig.json` excludes
  * `src/**\/*.test.ts`, and vitest is configured without a `typecheck` block, so
  * a type assertion written in a `.test.ts` file is read by neither. `tsc
  * --noEmit` does read this file, which is the only way an edit to
@@ -12,10 +12,19 @@
  * pair that distinguishes `never` and `any` from a real type, and `Expect`
  * constrains it to `true` so a failed comparison is an error rather than an
  * unused alias.
+ *
+ * `_schemaRpcProbe` at the bottom is the same idea for a function rather than a
+ * type: it is exported, never called, and its `@ts-expect-error` lines fail the
+ * build if what they mark stops being an error.
  */
 
+import type { SupabaseClient } from "@supabase/supabase-js"
+import { createSchemaRpc, type RpcResult } from "./rpc/rpcAction.js"
 import type {
   ExtractSchema,
+  FunctionNames,
+  RpcArgs,
+  RpcReturns,
   TableNames,
   TableRow,
   ViewNames,
@@ -47,7 +56,18 @@ type WithViews = {
         Row: { id: string | null; display_name: string | null }
       }
     }
-    Functions: Record<string, never>
+    Functions: {
+      record_consent: {
+        Args: { p_kind: string; p_granted: boolean }
+        Returns: string
+      }
+      // What `supabase gen types` actually writes for a zero-argument function:
+      // `never`, not `Record<string, never>`. metcare's generated schema has six
+      // of them (`is_admin`, `jwt_role`, `accessible_patients`, …), so a fixture
+      // using the tidier shape would assert something no real Database produces.
+      is_admin: { Args: never; Returns: boolean }
+      search_notes: { Args: { p_term?: string }; Returns: string[] }
+    }
     Enums: Record<string, never>
   }
 }
@@ -70,6 +90,85 @@ export type _StoresHaveBoth = Expect<
   Eq<keyof SupabaseStores<WithViews>,
     "patients" | "journey_overview" | "visible_profiles" | "auth" | "_supabase" | "_destroy">
 >
+
+// ── Postgres functions ────────────────────────────────────────────────
+
+export type _Functions = Expect<
+  Eq<FunctionNames<WithViews>, "record_consent" | "is_admin" | "search_notes">
+>
+export type _RpcArgs = Expect<
+  Eq<RpcArgs<WithViews, "record_consent">, { p_kind: string; p_granted: boolean }>
+>
+export type _RpcArgsNone = Expect<Eq<RpcArgs<WithViews, "is_admin">, never>>
+export type _RpcReturns = Expect<Eq<RpcReturns<WithViews, "record_consent">, string>>
+export type _RpcReturnsScalar = Expect<Eq<RpcReturns<WithViews, "is_admin">, boolean>>
+
+/** A schema with no functions: the generator writes `Functions: {}`. */
+type NoFunctions = {
+  public: {
+    Tables: { patients: { Row: { id: string }; Insert: { id?: string }; Update: { id?: string } } }
+    // eslint-disable-next-line @typescript-eslint/ban-types
+    Functions: {}
+  }
+}
+export type _NoFunctions = Expect<Eq<FunctionNames<NoFunctions>, never>>
+
+/** …and a hand-written one with no `Functions` key at all. */
+type NoFunctionsKey = {
+  public: {
+    Tables: { patients: { Row: { id: string }; Insert: { id?: string }; Update: { id?: string } } }
+  }
+}
+export type _NoFunctionsKey = Expect<Eq<FunctionNames<NoFunctionsKey>, never>>
+
+/**
+ * `createSchemaRpc` itself, exercised where the compiler can see it. Its calls
+ * in `rpc/rpcAction.test.ts` are invisible to `tsc` (tsconfig excludes
+ * `*.test.ts`) and vitest does not typecheck, so without this the whole value of
+ * the export — rejecting an unknown name, rejecting or requiring arguments,
+ * inferring the return — could be widened to `any` with every build still green.
+ *
+ * Never called. Exported so `noUnusedLocals` does not strip the reason it exists.
+ */
+export async function _schemaRpcProbe(
+  supabase: SupabaseClient<WithViews>,
+  scoped: SupabaseClient<ScopedSchema>,
+): Promise<void> {
+  const rpc = createSchemaRpc<WithViews>(supabase)
+
+  // The return type comes from the schema, not from a type argument.
+  const consent: RpcResult<string> = await rpc("record_consent", {
+    p_kind: "care",
+    p_granted: true,
+  })
+  const admin: RpcResult<boolean> = await rpc("is_admin")
+  void consent
+  void admin
+
+  // @ts-expect-error not a function in this schema
+  await rpc("no_such_function")
+  // @ts-expect-error record_consent's arguments are required
+  await rpc("record_consent")
+  // @ts-expect-error p_kind is a string
+  await rpc("record_consent", { p_kind: 1, p_granted: true })
+  // @ts-expect-error is_admin takes none
+  await rpc("is_admin", { p_kind: "care" })
+  // Every property optional, so the object itself may be left out.
+  await rpc("search_notes")
+
+  // A Database with no `public` key needs its schema named, or every function
+  // resolves to `never`.
+  const scopedRpc = createSchemaRpc<ScopedSchema, "app">(scoped)
+  const day: RpcResult<number> = await scopedRpc("current_day")
+  void day
+}
+
+type ScopedSchema = {
+  app: {
+    Tables: { notes: { Row: { id: string }; Insert: { id?: string }; Update: { id?: string } } }
+    Functions: { current_day: { Args: never; Returns: number } }
+  }
+}
 
 // ── The empty shapes the generator actually emits ─────────────────────
 
