@@ -2,6 +2,35 @@
 
 ## [2.1.0] - 2026-08-12
 
+### Behaviour change
+
+**`useQuery` now returns its own query's rows.** It used to project the entire store through `order` and hand back everything the table held, whatever filters it was given. Two components reading one table with different filters collided four ways, all of them from the store keeping a single global answer: the second component's fetch was suppressed by the first's `lastFetchedAt`, the single in-flight promise handed it the first's rows without issuing its own request, a shared generation counter let one query's response discard another's, and `isLoading`/`error` were the table's rather than the query's.
+
+Each store now keeps a `queries` registry keyed by `queryKey(options)` — filters, sort, select, limit and offset, key-order insensitive and value-based. `count`, `cacheStrategy` and `queryFn` are deliberately not part of the key. The in-flight map and the generation counter are keyed the same way, and `refetch()` replays every live query rather than whichever options were written last.
+
+Three consequences to expect when upgrading:
+
+- A component that relied on `useQuery(store, {filters})` returning more than its filters asked for gets less back. That was the bug, but it is a visible change.
+- Request volume rises. A new filter combination always fetches, even when the store already holds rows that would satisfy it, because freshness is now per query rather than per table.
+- `useQuery` gained `count`, and its effect now re-runs when `limit`, `offset` or `select` change. Those three previously changed nothing.
+
+The registry holds **metadata only** — a count, two flags and a timestamp, no row ids. Rows come from `order` filtered by a new client-side `matchRow` and ordered by the query's own `sort`, which is what makes an optimistic insert, a realtime event and a store rehydrated from disk all appear in the right query, in the right order, without any of the store's other writers knowing that queries exist. One limitation follows and is documented rather than half-solved: `limit`/`offset` are not applied locally, so a limited query renders whatever an unlimited sibling has loaded into the same store. `cacheStrategy: "replace"` likewise keeps single-query semantics, so a store serving two live queries should use `"merge"`.
+
+`TableStoreState` gains `queries`. `TableStoreActions` gains three methods:
+
+- `resolveFetchOptions()` — the options `fetch` would actually use. Public because a caller has to key on the same effective options `fetch` files an entry under, and the store's `defaultFilters`/`defaultSort`/`defaultSelect` are closure variables it cannot see.
+- `retainQuery()` / `releaseQuery()` — refcounted, called by `useQuery` on mount and unmount. Only retained queries are replayed by `refetch()` and only unretained ones can be evicted from the registry, so a foreground refresh reaches the screens on display rather than every filter combination the store has ever been handed.
+
+Also exported: `queryKey`, `isKeyable`, `matchRow`, `selectAllRows`, `selectQueryRows`, `sortRows` and the `QueryEntry` type.
+
+### Bug fixes
+
+- **`cacheStrategy: "merge"` silently dropped rows.** The commit rebuilt `order` from the latest response plus pending rows only, so every non-pending row from an earlier fetch stayed in `records` and disappeared from `order` — in memory, and invisible to every projection, since `order` is the only route in. A narrower second fetch therefore emptied the first query's screen while `records.size` still counted its rows. `order` now leads with the latest query and keeps the rest.
+- **`useSuspenseQuery` cached its promise per store, not per query**, so two suspense boundaries on one table with different filters shared one promise: the second waited on the first's fetch and rendered its rows. It also gated on the table's `lastFetchedAt` and threw the table's error.
+- **`clearAll()` and `clearAndFetch()` left query state behind**, and a response still in flight across a sign-out could repopulate the store that had just been emptied for a different account. The stale-response guard now counts from a monotonic per-store number that no clear path resets, and an abandoned in-flight promise can no longer evict its own replacement when it finally settles.
+- **`useSuspenseQuery` could never surface an error.** Its `throw` sat after the suspend branch, and a failed fetch does not stamp `lastFetchedAt` (deliberately — a refusal is not fresh data), so a query the server refused suspended, refetched, threw a fresh promise and repeated, while the error boundary never saw anything. A query using `queryFn` had the same shape for a different reason: it registers no entry at all, so it now reads the table's own state, as every query did before this release.
+- **`isLoading` was judged on the table's row count**, so a brand-new query on a store that already held someone else's rows reported "not loading" with nothing of its own to show — the screen rendered its empty state and then popped to content.
+
 ### Features
 
 - **Structured errors**: new `AnchorError extends Error` carrying `code`, `details`, `hint` and `status`, plus `fromSupabaseError()` to build one from whatever a supabase-js call returned in `error`. Exported alongside the four constants worth branching on: `PG_INSUFFICIENT_PRIVILEGE` (`42501`), `PG_UNIQUE_VIOLATION` (`23505`), `PG_FOREIGN_KEY_VIOLATION` (`23503`), `PGRST_NO_ROWS` (`PGRST116`). Every boundary on the store read/write path now returns or throws one: both `executeQuery` paths and `executeQueryOne`, all six store mutations (`insert`, `insertMany`, `update`, `upsert`, `remove`, `removeWhere`), the offline queue's replay pipeline, `callRpc`, and the auth store. Previously all of them did `new Error(error.message)`, so a write refused by an RLS policy and a write refused by a unique constraint were indistinguishable without reading English prose written for a log file. `AnchorError` is an `Error` and `TableStoreState.error` keeps its `Error | null` type, so this is additive: no consumer catch, `instanceof` check or `.message` read changes.

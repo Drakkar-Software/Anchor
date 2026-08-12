@@ -9,10 +9,13 @@ import type {
   CreateTableStoreOptions,
   FilterDescriptor,
   FetchOptions,
+  QueryEntry,
 } from "./types.js"
 import { noopLogger, createTempId } from "./types.js"
 import { runValidation } from "./mutation/validation.js"
 import { fromSupabaseError } from "./errors.js"
+import { queryKey, isKeyable } from "./query/queryKey.js"
+import { selectAllRows, selectQueryRows } from "./query/selectRows.js"
 import { executeQuery, executeQueryOne, fromTable, applyFilters } from "./query/queryExecutor.js"
 
 type StoreSet<Row, InsertRow, UpdateRow> = StoreApi<
@@ -84,9 +87,31 @@ export function createTableStore<
     }
   }
 
-  // Track last fetch options for refetch and generation counter for stale response detection
-  let lastFetchOptions: FetchOptions<Row> | undefined
-  let fetchGeneration = 0
+  // Per-query fetch bookkeeping, all keyed by `queryKey(opts)`.
+  //
+  // Each of these was a single slot shared by every query on the table, which
+  // is what made two components with different filters collide: `refetch()`
+  // replayed whichever options were written last, the generation counter let a
+  // second query's response discard the first's, and the in-flight promise
+  // handed the second caller the first caller's rows without ever issuing its
+  // request.
+  //
+  // `liveQueryOptions` holds only queries a caller has explicitly retained —
+  // `useQuery` retains on mount and releases on unmount. Filling it from every
+  // fetch instead would make `refetch()` fan out to every filter combination
+  // the store had ever seen, which on a foreground resume is dozens of
+  // concurrent requests for screens nobody is looking at.
+  const liveQueryOptions = new Map<string, FetchOptions<Row> | undefined>()
+  const retainCounts = new Map<string, number>()
+  const generations = new Map<string, number>()
+  let generationTick = 0
+  const inflight = new Map<string, Promise<TrackedRow<Row>[]>>()
+  // Fetches that cannot be keyed (an opaque `queryFn`) get a private key so
+  // they neither share nor poison a real query's entry.
+  let unkeyedCounter = 0
+
+  /** How many distinct queries a store remembers. See `setQueryEntry`. */
+  const MAX_QUERY_ENTRIES = 32
 
   const storeCreator = (
     set: StoreSet<Row, InsertRow, UpdateRow>,
@@ -102,16 +127,12 @@ export function createTableStore<
       return [...(defaultFilters ?? []), ...(custom ?? [])]
     }
 
+    /** Kept as a local name; the projection itself now lives in one place. */
     function recordsToArray(
       records: Map<string | number, TrackedRow<Row>>,
       order: (string | number)[],
     ): TrackedRow<Row>[] {
-      const result: TrackedRow<Row>[] = []
-      for (const id of order) {
-        const record = records.get(id)
-        if (record) result.push(record)
-      }
-      return result
+      return selectAllRows<Row>({ records, order })
     }
 
     function rowsToMap(
@@ -162,6 +183,7 @@ export function createTableStore<
     const initialState: TableStoreState<Row> = {
       records: new Map(),
       order: [],
+      queries: new Map(),
       isLoading: false,
       error: null,
       isHydrated: false,
@@ -170,38 +192,125 @@ export function createTableStore<
       realtimeStatus: "disconnected",
     }
 
-    // ── Actions ───────────────────────────────────────────────────
+    /**
+     * Drop every trace of every query. Used where the store's contents stop
+     * being an answer to anything — sign-out, `clearAll`, `clearAndFetch`. The
+     * in-flight promises go too: a response that lands after the clear would
+     * otherwise repopulate the store the caller just emptied.
+     */
+    function forgetQueries(): void {
+      generations.clear()
+      inflight.clear()
+      // `liveQueryOptions` is NOT cleared: it records what is mounted, and
+      // clearing the store's contents does not unmount anything. Dropping it
+      // on sign-out would make the next foreground `refetch()` fall back to
+      // pulling the whole table instead of the screens actually on display.
+    }
 
-    // In-flight fetch deduplication
-    let inflightPromise: Promise<TrackedRow<Row>[]> | null = null
+    /** Write one query's entry without disturbing the others. */
+    function setQueryEntry(key: string, patch: Partial<QueryEntry>): void {
+      set((prev) => {
+        const queries = new Map(prev.queries)
+        const existing = queries.get(key) ?? {
+          count: null,
+          isLoading: false,
+          error: null,
+          lastFetchedAt: null,
+        }
+        queries.set(key, { ...existing, ...patch })
+
+        // Bounded: a screen filtering on a free-text field would otherwise add
+        // one entry per keystroke and never drop any. Entries hold no rows —
+        // a count, two flags and a timestamp — so this is hygiene rather than a
+        // memory limit, and Map iteration order makes the oldest still-idle
+        // entry the one to lose.
+        if (queries.size > MAX_QUERY_ENTRIES) {
+          for (const [candidate, entry] of queries) {
+            // Never evict a query something is still watching — dropping a
+            // mounted screen's entry sends it back to "loading, with no data"
+            // and makes it refetch on its next render.
+            if (candidate !== key && !entry.isLoading && !retainCounts.has(candidate)) {
+              queries.delete(candidate)
+              generations.delete(candidate)
+              break
+            }
+          }
+        }
+
+        return { ...prev, queries }
+      })
+    }
+
+    // ── Actions ───────────────────────────────────────────────────
 
     const actions: TableStoreActions<Row, InsertRow, UpdateRow> = {
       // ── Query ─────────────────────────────────────────────────
 
+      retainQuery(fetchOptions) {
+        const key = queryKey(actions.resolveFetchOptions(fetchOptions))
+        retainCounts.set(key, (retainCounts.get(key) ?? 0) + 1)
+        liveQueryOptions.set(key, fetchOptions)
+        return key
+      },
+
+      releaseQuery(fetchOptions) {
+        const key = queryKey(actions.resolveFetchOptions(fetchOptions))
+        const next = (retainCounts.get(key) ?? 0) - 1
+        if (next > 0) {
+          retainCounts.set(key, next)
+          return
+        }
+        retainCounts.delete(key)
+        liveQueryOptions.delete(key)
+      },
+
+      resolveFetchOptions(fetchOptions) {
+        return {
+          ...fetchOptions,
+          filters: mergeFilters(fetchOptions?.filters),
+          sort: fetchOptions?.sort ?? defaultSort,
+          select: fetchOptions?.select ?? defaultSelect,
+        }
+      },
+
       async fetch(fetchOptions) {
-        // Deduplicate concurrent fetches — return in-flight promise if one exists
-        if (inflightPromise) return inflightPromise
+        // The key has to come from the EFFECTIVE options, after the store's
+        // defaults are merged in — which is also why `resolveFetchOptions` is
+        // public: the hook has to key on the same thing this does, and it
+        // cannot see the store's defaults. Keying on the caller's raw options
+        // would file the entry under a key the read never looks up on any store
+        // configured with `defaultFilters`, which reads as "loading forever,
+        // over nothing".
+        const opts = actions.resolveFetchOptions(fetchOptions)
+        const keyable = isKeyable(opts)
+        const key = keyable ? queryKey(opts) : `unkeyed:${++unkeyedCounter}`
+
+        // Deduplicate concurrent fetches of the SAME query only.
+        const existing = inflight.get(key)
+        if (existing) return existing
 
         const doFetch = async (): Promise<TrackedRow<Row>[]> => {
-          const thisGeneration = ++fetchGeneration
-          // Stale-while-revalidate: only show loading if no cached data exists
-          const hasData = get().records.size > 0
+          // Drawn from a counter that only ever goes up, per store. Deriving it
+          // from the map's current value would let `forgetQueries()` reset it:
+          // a fetch still in flight across a sign-out would then hold the same
+          // number as its replacement, pass the staleness guard, and write the
+          // previous account's rows into a store that was just cleared.
+          const thisGeneration = ++generationTick
+          generations.set(key, thisGeneration)
+          // Stale-while-revalidate, judged per query: a table that already
+          // holds another query's rows tells this one nothing. Counting the
+          // whole table made a brand-new query report "not loading" while it
+          // had nothing to show, so the screen rendered its empty state.
+          const hasData = selectQueryRows<Row>(get(), opts.filters, opts.sort).length > 0
           set({ isLoading: !hasData, error: null } as Partial<
             TableStore<Row, InsertRow, UpdateRow>
           >)
-          lastFetchOptions = fetchOptions
+          if (keyable) setQueryEntry(key, { isLoading: !hasData, error: null })
 
           const start = Date.now()
           logger.fetchStart(table)
 
           try {
-            const opts: FetchOptions<Row> = {
-              ...fetchOptions,
-              filters: mergeFilters(fetchOptions?.filters),
-              sort: fetchOptions?.sort ?? defaultSort,
-              select: fetchOptions?.select ?? defaultSelect,
-            }
-
             const { data, error, count } = await executeQuery<Row>(
               supabase as SupabaseClient,
               table,
@@ -211,16 +320,24 @@ export function createTableStore<
 
             if (error) {
               logger.fetchError(table, error.message)
-              if (thisGeneration === fetchGeneration) {
+              if (thisGeneration === generations.get(key)) {
                 set({ isLoading: false, error } as Partial<
                   TableStore<Row, InsertRow, UpdateRow>
                 >)
+                // The entry is written on failure too. Writing it only on
+                // success means a cold offline boot — hydrate fills `records`,
+                // the fetch rejects, no entry exists — reports a permanent
+                // spinner over rows that are already in memory, which is the
+                // case this library exists to serve.
+                if (keyable) setQueryEntry(key, { isLoading: false, error })
               }
               return []
             }
 
-            // Discard stale response if a newer fetch was initiated
-            if (thisGeneration !== fetchGeneration) {
+            // Discard a stale response — but only against THIS query's own
+            // generation. A shared counter let an unrelated query's fetch
+            // invalidate this one's result.
+            if (thisGeneration !== generations.get(key)) {
               return []
             }
 
@@ -260,11 +377,23 @@ export function createTableStore<
                 order.push(id)
               }
 
-              // Preserve pending rows not in the latest query at the end of order
+              // Append every record the latest query did not mention, not just
+              // the pending ones. "merge" promises that records accumulate, and
+              // `order` is the only way any projection reaches them: a row left
+              // out of `order` is in memory and invisible. That made a second,
+              // narrower fetch silently drop the first fetch's rows from every
+              // read while `records.size` still counted them.
               const orderSet = new Set(order)
+              for (const id of currentState.order) {
+                if (!orderSet.has(id)) {
+                  order.push(id)
+                  orderSet.add(id)
+                }
+              }
               for (const [id, existing] of currentState.records) {
                 if (existing._anchor_pending && !orderSet.has(id)) {
                   order.push(id)
+                  orderSet.add(id)
                 }
               }
             } else {
@@ -293,24 +422,40 @@ export function createTableStore<
               error: null,
               lastFetchedAt: Date.now(),
             } as Partial<TableStore<Row, InsertRow, UpdateRow>>)
+            if (keyable) {
+              setQueryEntry(key, {
+                count,
+                isLoading: false,
+                error: null,
+                lastFetchedAt: Date.now(),
+              })
+            }
 
             persistIfConfigured()
 
             return recordsToArray(records, order)
           } catch (err) {
             logger.fetchError(table, err instanceof Error ? err.message : String(err))
-            if (thisGeneration === fetchGeneration) {
-              set({
-                isLoading: false,
-                error: err instanceof Error ? err : new Error(String(err)),
-              } as Partial<TableStore<Row, InsertRow, UpdateRow>>)
+            if (thisGeneration === generations.get(key)) {
+              const error = err instanceof Error ? err : new Error(String(err))
+              set({ isLoading: false, error } as Partial<
+                TableStore<Row, InsertRow, UpdateRow>
+              >)
+              if (keyable) setQueryEntry(key, { isLoading: false, error })
             }
             return []
           }
         }
 
-        inflightPromise = doFetch().finally(() => { inflightPromise = null })
-        return inflightPromise
+        // Delete only if this promise is still the registered one. `clearAll`
+        // empties the map without cancelling anything, so an abandoned promise
+        // settling later would otherwise evict its replacement and let the next
+        // caller issue a duplicate request instead of joining the live one.
+        const promise: Promise<TrackedRow<Row>[]> = doFetch().finally(() => {
+          if (inflight.get(key) === promise) inflight.delete(key)
+        })
+        inflight.set(key, promise)
+        return promise
       },
 
       async fetchOne(id) {
@@ -343,7 +488,19 @@ export function createTableStore<
       },
 
       async refetch() {
-        return actions.fetch(lastFetchOptions)
+        // Replay every live query, not just the one whose options were written
+        // last. `appLifecycle`'s foreground handler calls this for every stale
+        // store, so with a single slot, backgrounding an app with two screens
+        // on one table and reopening it refetched one of them and — under
+        // "replace" — evicted the other's rows.
+        if (liveQueryOptions.size === 0) return actions.fetch(undefined)
+
+        const results = await Promise.all(
+          [...liveQueryOptions.values()].map((opts) => actions.fetch(opts)),
+        )
+        // The rows of the most recently registered query, matching what a
+        // single-query caller got before.
+        return results[results.length - 1] ?? []
       },
 
       // ── Mutations ─────────────────────────────────────────────
@@ -780,9 +937,11 @@ export function createTableStore<
           clearTimeout(persistTimer)
           persistTimer = null
         }
+        forgetQueries()
         set({
           records: new Map(),
           order: [],
+          queries: new Map(),
           error: null,
           lastFetchedAt: null,
         } as Partial<TableStore<Row, InsertRow, UpdateRow>>)
@@ -821,9 +980,11 @@ export function createTableStore<
           clearTimeout(persistTimer)
           persistTimer = null
         }
+        forgetQueries()
         set({
           records: new Map(),
           order: [],
+          queries: new Map(),
           error: null,
           lastFetchedAt: null,
         } as Partial<TableStore<Row, InsertRow, UpdateRow>>)
@@ -834,8 +995,6 @@ export function createTableStore<
               logger.mutationError(table, "PERSIST" as any, err instanceof Error ? err.message : String(err))
             })
         }
-        // Discard any in-flight fetch so we don't reuse a stale response
-        inflightPromise = null
         // Fetch with replace strategy forced
         return actions.fetch({ ...fetchOpts, cacheStrategy: "replace" })
       },

@@ -24,7 +24,9 @@ Wired: `select`, `select` with `{count}`, `order` (without `referencedTable`), `
 
 **`nullsFirst` divergence:** `queryExecutor.ts:110-113` forces `nullsFirst: s.nullsFirst ?? false` unconditionally. Raw PostgREST leaves it unset, which defaults to NULLS LAST for ASC but **NULLS FIRST for DESC** — so Anchor's DESC ordering differs from PostgREST's own default.
 
-**The `queryFn` escape hatch is narrower than it looks.** `types.ts:131` / `queryExecutor.ts:128-145`: the callback receives a builder with `.select()` already applied, and the result is coerced to `{data: Row[], count, error}` via `r.data ?? []`. So `.single()`, `.maybeSingle()`, `.csv()`, `.geojson()` are callable through it but return shapes the store path cannot consume.
+**The `queryFn` escape hatch is narrower than it looks.** `types.ts:131` / `queryExecutor.ts:128-145`: the callback receives a builder with `.select()` already applied, and the result is coerced to `{data: Row[], count, error}` via `r.data ?? []`. So `.single()`, `.maybeSingle()`, `.csv()`, `.geojson()` are callable through it but return shapes the store path cannot consume. Since 2.1.0 it is also outside per-query scoping: a function cannot be keyed by value, so a `queryFn` fetch registers no entry, gets a private de-duplication key, and reads back through the whole-store projection (`query/queryKey.ts`'s `isKeyable`).
+
+**Per-query scoping, since 2.1.0.** `createTableStore` keeps a `queries` map keyed by `queryKey(effectiveOptions)` — filters (order-insensitive, since they are ANDed), sort (positional), select, limit, offset. It holds `{count, isLoading, error, lastFetchedAt}` per query and no row ids; rows are read from `order` filtered by `query/matchRow.ts`. What that does NOT reproduce server-side: `limit`/`offset` are not applied locally, a `like` pattern is matched with SQL wildcard semantics rather than the database's collation, and `textSearch`/`match`/`not`/`or`/`filter` are treated as "include" because they cannot be evaluated without Postgres. Each of those makes a local read a superset of the server's answer, never a subset.
 
 ### Mutations
 

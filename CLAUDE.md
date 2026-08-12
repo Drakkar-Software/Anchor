@@ -13,18 +13,24 @@ TypeScript library that binds Zustand state management to Supabase. Auto-generat
 ## Build & Test Commands
 
 ```bash
-# Type-check (excludes test files via tsconfig)
-npx tsc --noEmit
+# Type-check every package (excludes test files via tsconfig).
+# CI does NOT run this — the publish workflow runs build + test only.
+pnpm -r typecheck
 
-# Run tests (198 tests, 26 files)
-cd packages/core && ../../node_modules/.bin/vitest run
+# Run tests. The binaries live under the PACKAGE's node_modules under pnpm;
+# ../../node_modules/.bin does not exist.
+cd packages/core && ./node_modules/.bin/vitest run
 
-# Build (17 entry points, ESM + DTS)
-cd packages/core && ../../node_modules/.bin/tsup
+# Build (26 entry points, ESM + DTS)
+cd packages/core && ./node_modules/.bin/tsup
 
-# Install deps
-npm install
+# Install deps (pnpm, per `packageManager` in the root package.json)
+pnpm install
 ```
+
+`pnpm test` at the root is `pnpm -r test`, and only `core` defines a `test`
+script — so `packages/adapter-react-native/src/expoOAuth.test.ts` exists and has
+never run, in CI or locally. Do not read a green root run as covering it.
 
 ## Architecture
 

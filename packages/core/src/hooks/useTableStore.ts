@@ -4,6 +4,7 @@ import { useStore } from "zustand"
 import { useShallow } from "zustand/react/shallow"
 import type { StoreApi } from "zustand"
 import type { TableStore, TrackedRow } from "../types.js"
+import { selectAllRows } from "../query/selectRows.js"
 
 /**
  * Hook factory: creates a typed hook for a specific table store.
@@ -35,6 +36,9 @@ export function createTableHook<
 /**
  * Hook to get all records as an array from a table store.
  * Uses shallow equality to avoid unnecessary re-renders.
+ *
+ * Whole-store on purpose: this takes no filters, so there is no query to scope
+ * it to. Reach for `useQuery` when a component wants its own slice.
  */
 export function useRecords<
   Row extends Record<string, unknown>,
@@ -45,14 +49,7 @@ export function useRecords<
 ): TrackedRow<Row>[] {
   return useStore(
     store,
-    useShallow((state: TableStore<Row, InsertRow, UpdateRow>) => {
-      const result: TrackedRow<Row>[] = []
-      for (const id of state.order) {
-        const record = state.records.get(id)
-        if (record) result.push(record)
-      }
-      return result
-    }),
+    useShallow((state: TableStore<Row, InsertRow, UpdateRow>) => selectAllRows<Row>(state)),
   )
 }
 

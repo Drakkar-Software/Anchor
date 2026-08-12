@@ -346,7 +346,7 @@ describe("createTableStore", () => {
 
   describe("cacheStrategy", () => {
     describe("merge mode", () => {
-      it("accumulates records across fetches while order reflects latest query", async () => {
+      it("accumulates records across fetches, and keeps every one of them reachable", async () => {
         const store = createStore({ cacheStrategy: "merge" })
 
         // First fetch: all todos
@@ -363,8 +363,11 @@ describe("createTableStore", () => {
         expect(store.getState().records.has(2)).toBe(true)
         expect(store.getState().records.has(3)).toBe(true)
 
-        // Order should reflect only the latest query
-        expect(store.getState().order).toEqual([2])
+        // The latest query leads, and the rows it did not mention follow rather
+        // than dropping out. `order` is the only route into `records` for every
+        // projection, so a row missing from it is in memory and invisible —
+        // which made "merge" silently lose the previous fetch's rows.
+        expect(store.getState().order).toEqual([2, 1, 3])
       })
 
       it("updates existing non-pending records with fresh data", async () => {
@@ -438,9 +441,10 @@ describe("createTableStore", () => {
           cacheStrategy: "merge",
         })
 
-        // Records accumulated (merge), order reflects latest query
+        // Records accumulated (merge); the latest query leads and the rest
+        // stay reachable.
         expect(store.getState().records.size).toBe(3)
-        expect(store.getState().order).toEqual([2])
+        expect(store.getState().order).toEqual([2, 1, 3])
       })
 
       it("allows replace override on a merge-mode store", async () => {

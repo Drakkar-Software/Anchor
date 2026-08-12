@@ -111,10 +111,15 @@ function TodoList() {
         ? [eq<any, "completed">("completed", true)]
         : []
 
-  const { data, isLoading, error, refetch } = useQuery(stores.todos, {
+  // `data` is scoped to THESE filters, and `isLoading`/`error`/`count` belong
+  // to this query rather than to the table — so a second component reading
+  // `stores.todos` with different filters does not change what renders here.
+  // No `deps: [filter]` needed: the filters are part of the query's identity,
+  // so changing them refetches on their own.
+  const { data, isLoading, error, count, refetch } = useQuery(stores.todos, {
     filters: filterDescriptors,
-    deps: [filter],
-    staleTime: 5000, // skip refetch if fetched within 5s
+    count: "exact", // total matching rows, independent of any limit
+    staleTime: 5000, // skip refetch if THIS query was fetched within 5s
   })
 
   const { insert, remove, isLoading: isMutating } = useMutation(stores.todos)
@@ -130,6 +135,7 @@ function TodoList() {
       {/* Status indicators */}
       <div>
         <span>Realtime: {realtimeStatus}</span>
+        {count != null && <span> · {count} matching</span>}
       </div>
 
       {/* Filter tabs */}

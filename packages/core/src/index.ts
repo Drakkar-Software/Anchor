@@ -17,6 +17,7 @@ export type {
   FetchOptions,
   // Store
   TableStoreState,
+  QueryEntry,
   TableStoreActions,
   TableStore,
   RealtimeStatus,
@@ -84,6 +85,9 @@ export { buildCursorQuery, processCursorResults } from "./query/pagination.js"
 export type { CursorPaginationOptions, PaginationState } from "./query/pagination.js"
 export { aggregateRpc, aggregateLocal } from "./query/aggregation.js"
 export type { AggregateFunction, AggregateResult } from "./query/aggregation.js"
+export { queryKey, isKeyable, EMPTY_QUERY_KEY } from "./query/queryKey.js"
+export { matchRow } from "./query/matchRow.js"
+export { selectAllRows, selectQueryRows, sortRows } from "./query/selectRows.js"
 
 // ─── Errors ──────────────────────────────────────────────────────────
 export {

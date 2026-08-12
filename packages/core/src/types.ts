@@ -135,14 +135,38 @@ export type FetchOptions<Row = Record<string, unknown>> = {
 
 // ─── Table Store State ───────────────────────────────────────────────
 
+/**
+ * What one query knows about itself.
+ *
+ * Metadata only — deliberately no row ids. A row that matches a query's filters
+ * locally cannot know which *page* of that query it belongs to, so an id list
+ * would be wrong as soon as `limit`/`offset` is involved; it would also need a
+ * client-side comparator to place optimistic rows, and would go stale on the
+ * offline queue's temp-id → server-id remap. Rows are read from `order`
+ * filtered by `matchRow` instead, and `order` is the one structure every writer
+ * in this package already maintains positionally.
+ */
+export type QueryEntry = {
+  /** Total matching rows, when the fetch asked for a count. */
+  count: number | null
+  /** Whether THIS query is fetching — not whether the table is. */
+  isLoading: boolean
+  /** The error THIS query got, if any. */
+  error: Error | null
+  /** When this query last succeeded, which is what `staleTime` gates on. */
+  lastFetchedAt: number | null
+}
+
 export type TableStoreState<Row> = {
   /** Normalized record map keyed by primary key value */
   records: Map<string | number, TrackedRow<Row>>
   /** Ordered array of primary key values (preserves query ordering) */
   order: (string | number)[]
-  /** Loading state */
+  /** Per-query state, keyed by `queryKey(options)`. See `QueryEntry`. */
+  queries: Map<string, QueryEntry>
+  /** Loading state for the table as a whole — whichever query fetched last */
   isLoading: boolean
-  /** Error from last operation */
+  /** Error from the last operation on any query */
   error: Error | null
   /** Whether initial data has been hydrated from persistence */
   isHydrated: boolean
@@ -170,7 +194,28 @@ export type TableStoreActions<
   // Query
   fetch: (options?: FetchOptions<Row>) => Promise<TrackedRow<Row>[]>
   fetchOne: (id: string | number) => Promise<TrackedRow<Row> | null>
+  /** Replays every live query, not only the one that fetched last. */
   refetch: () => Promise<TrackedRow<Row>[]>
+  /**
+   * The options `fetch` would actually use, with this store's `defaultFilters`,
+   * `defaultSort` and `defaultSelect` merged in.
+   *
+   * Public because a caller that wants to read one query's state has to key on
+   * the same thing `fetch` filed it under, and the store's defaults are closure
+   * variables it cannot see. `useQuery` uses it for exactly that.
+   */
+  resolveFetchOptions: (options?: FetchOptions<Row>) => FetchOptions<Row>
+  /**
+   * Declare that a caller is watching this query, and return its key.
+   *
+   * Only retained queries are replayed by `refetch()`. Without this the store
+   * cannot tell a screen that is on display from a filter combination someone
+   * typed once, and a foreground refresh fans out to all of them.
+   * `useQuery` retains on mount and releases on unmount; the two are
+   * refcounted, so React 18's double-invoked effects are harmless.
+   */
+  retainQuery: (options?: FetchOptions<Row>) => string
+  releaseQuery: (options?: FetchOptions<Row>) => void
 
   // Mutations
   insert: (row: InsertRow) => Promise<TrackedRow<Row>>
