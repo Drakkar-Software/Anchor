@@ -550,6 +550,14 @@ export interface SyncLogger {
   mutationStart(table: string, operation: MutationOperation): void
   mutationSuccess(table: string, operation: MutationOperation, durationMs: number): void
   mutationError(table: string, operation: MutationOperation, error: string): void
+  /**
+   * A write that could not reach the server and was queued instead.
+   *
+   * Optional so every logger written against this interface keeps compiling.
+   * Without it a queued write logs `mutationStart` and then nothing at all —
+   * indistinguishable in a log from one that hung.
+   */
+  mutationQueued?(table: string, operation: MutationOperation): void
   queueFlushStart(count: number): void
   queueFlushSuccess(succeeded: number, failed: number): void
   conflict(table: string, id: string | number): void
@@ -563,6 +571,7 @@ export const noopLogger: SyncLogger = {
   mutationStart() {},
   mutationSuccess() {},
   mutationError() {},
+  mutationQueued() {},
   queueFlushStart() {},
   queueFlushSuccess() {},
   conflict() {},
@@ -587,6 +596,9 @@ export const consoleLogger: SyncLogger = {
   },
   mutationError(table, op, error) {
     console.error(`[anchor:${table}] ${op} error: ${error}`)
+  },
+  mutationQueued(table, op) {
+    console.log(`[anchor:${table}] ${op} queued — server unreachable`)
   },
   queueFlushStart(count) {
     console.log(`[anchor:queue] flush start: ${count} mutations`)
@@ -654,6 +666,8 @@ export type CreateTableStoreOptions<
     enabled?: boolean
     maxRetries?: number
     flushDebounceMs?: number
+    /** See `CreateSupabaseStoresOptions.offlineQueue.queueWrites`. */
+    queueWrites?: boolean
   }
 
   // Network
@@ -732,6 +746,51 @@ export type CreateSupabaseStoresOptions<
   // Global defaults
   persistence?: { adapter: PersistenceAdapter }
   network?: NetworkStatusAdapter
+  /**
+   * The shared mutation queue.
+   *
+   * `queueWrites` is what actually feeds it. Until it is on, `enqueue()` has no
+   * caller anywhere in this package: the queue hydrates, auto-flushes and holds
+   * an executor per table, and every mutator still calls Supabase directly and
+   * throws when it cannot be reached.
+   *
+   * **Opt-in, and it stays opt-in**, because it changes what a failed write
+   * does. Off, a write that cannot reach the server rolls back and rejects, so
+   * a caller's `catch` fires and the row disappears. On, that same write
+   * resolves with the optimistic row and is retried later — which is right for
+   * an offline-first app and wrong for anything that treats a resolved promise
+   * as "the server has it". A consumer must read `_anchor_pending` on the
+   * returned row to tell the two apart; the promise alone no longer says.
+   *
+   * Only the single-row mutators queue: `insert`, `update`, `upsert` and
+   * `remove`. `insertMany` and `removeWhere` keep rolling back and throwing —
+   * see their notes in `createTableStore`.
+   *
+   * Two limitations to design around rather than discover:
+   *
+   * **Delivery is at-least-once.** A request whose response is lost is
+   * indistinguishable from one that never arrived — postgrest-js reports both
+   * as `status: 0` — so a write Postgres committed can be replayed on the
+   * drain. An aborted request (a `fetch` timeout, or a caller's own
+   * `AbortSignal`) reaches the same code path and is queued too. Make queued
+   * writes idempotent: an `upsert` with `onConflict` naming a real unique
+   * constraint replays harmlessly, a bare `insert` duplicates the row.
+   *
+   * **`remove` is the one mutator with no queued/sent signal**, because it
+   * resolves to `void`: there is no row to carry `_anchor_pending`, and the row
+   * is already gone from the store. A caller that needs to distinguish the two
+   * has to read `getQueueSize()` or `usePendingChanges()`. If a queued delete is
+   * later abandoned, the row comes back — correctly, since the delete never
+   * happened, but possibly minutes after the interface said it was gone.
+   *
+   * `maxRetries` and `flushDebounceMs` reach the queue from here; before
+   * `queueWrites` existed there was nothing in it to configure.
+   */
+  offlineQueue?: {
+    queueWrites?: boolean
+    maxRetries?: number
+    flushDebounceMs?: number
+  }
   realtime?: { enabled?: boolean }
   conflict?: ConflictConfig
   cacheStrategy?: CacheStrategy

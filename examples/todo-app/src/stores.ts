@@ -51,6 +51,11 @@ export const stores = createSupabaseStores<Database>({
   views: ["todo_summary"],
   persistence: { adapter: new LocalStorageAdapter() },
   network: new WebNetworkStatus(),
+  // Queue a write the server cannot be reached for, instead of rejecting it.
+  // Opt-in because it changes what a failed write means: the mutator now
+  // resolves with the optimistic row, so `_anchor_pending` on that row — not
+  // the promise settling — is what says whether the server has it.
+  offlineQueue: { queueWrites: true },
   realtime: { enabled: true },
   devtools: import.meta.env.DEV,
   logger: syncMetrics,
