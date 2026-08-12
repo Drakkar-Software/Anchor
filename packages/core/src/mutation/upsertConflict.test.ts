@@ -1,0 +1,370 @@
+import { describe, it, expect, vi } from "vitest"
+import { executeRemoteMutation } from "./mutationPipeline.js"
+import { createTableStore } from "../createTableStore.js"
+import { createMockSupabase } from "../__tests__/mockSupabase.js"
+import type { QueuedMutation } from "../types.js"
+
+/**
+ * `upsert`'s conflict target.
+ *
+ * Without one, PostgREST conflicts on the primary key, so a table whose
+ * "one per day" rule lives in a different unique constraint cannot be upserted
+ * through a store at all — the second write inserts a duplicate here and raises
+ * `23505` against a real Postgres. Every test below fails against 2.1.0.
+ *
+ * The check-in table this was written for is
+ * `daily_check_ins (id uuid primary key, unique (journey_id, date))`, written
+ * with neither `id` nor `date` in the payload, so the fixtures mirror that
+ * shape rather than a tidier one.
+ */
+
+type CheckIn = {
+  id: string
+  journey_id: string
+  date: string
+  pain: number
+}
+
+function makeStore(rows: CheckIn[]) {
+  const supabase = createMockSupabase({ daily_check_ins: rows })
+  const store = createTableStore<any, CheckIn, any, any>({
+    supabase: supabase as any,
+    table: "daily_check_ins",
+    primaryKey: "id",
+  })
+  return { supabase, store }
+}
+
+/**
+ * A store that has actually read its table, which is the state every screen is
+ * in by the time a user writes.
+ *
+ * The first version of these tests upserted into an *empty* store, and that is
+ * precisely the one case where a duplicated `order` entry cannot appear — so a
+ * confirmed defect shipped with a green assertion (`order` equalling a
+ * one-element array) that looked like it guarded exactly that.
+ */
+async function seededStore(rows: CheckIn[]) {
+  const made = makeStore(rows)
+  await made.store.getState().fetch()
+  return made
+}
+
+/** `order` and `records` agreeing is the invariant the whole store rests on. */
+function expectOrderIntegrity(store: ReturnType<typeof makeStore>["store"]) {
+  const { order, records } = store.getState()
+  expect(new Set(order).size).toBe(order.length)
+  expect(order.length).toBe(records.size)
+  for (const id of order) expect(records.has(id)).toBe(true)
+}
+
+describe("upsert with onConflict", () => {
+  it("replaces the row matching the named constraint, not the primary key", async () => {
+    const { store } = makeStore([
+      { id: "c1", journey_id: "j1", date: "2026-08-12", pain: 3 },
+    ])
+
+    await store.getState().upsert(
+      { journey_id: "j1", date: "2026-08-12", pain: 7 } as any,
+      { onConflict: "journey_id,date" },
+    )
+
+    const rows = [...store.getState().records.values()]
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.id).toBe("c1")
+    expect(rows[0]!.pain).toBe(7)
+  })
+
+  it("inserts when nothing matches the constraint", async () => {
+    const { supabase, store } = makeStore([
+      { id: "c1", journey_id: "j1", date: "2026-08-11", pain: 3 },
+    ])
+
+    await store.getState().upsert(
+      { journey_id: "j1", date: "2026-08-12", pain: 5 } as any,
+      { onConflict: "journey_id,date" },
+    )
+
+    const stored = (supabase as any)._tables.daily_check_ins as CheckIn[]
+    expect(stored.map((r) => r.date).sort()).toEqual(["2026-08-11", "2026-08-12"])
+    // The store holds only the row it wrote — it never fetched the other one.
+    expect([...store.getState().records.values()]).toHaveLength(1)
+  })
+
+  it("duplicates without the option, which is the bug it exists to fix", async () => {
+    const { supabase, store } = makeStore([
+      { id: "c1", journey_id: "j1", date: "2026-08-12", pain: 3 },
+    ])
+
+    // No onConflict: the conflict target is `id`, the payload carries none, so
+    // this inserts a second row for a day that already has one. Against a real
+    // Postgres the unique constraint turns that into `23505`.
+    //
+    // Asserted on the table, not on `records` — the store never fetched, so it
+    // holds only what this call wrote either way, which would make the
+    // assertion pass for both behaviours.
+    await store.getState().upsert({ journey_id: "j1", date: "2026-08-12", pain: 7 } as any)
+
+    expect((supabase as any)._tables.daily_check_ins).toHaveLength(2)
+  })
+
+  it("forwards the option to the builder as its second argument", async () => {
+    const { supabase, store } = makeStore([])
+    const seen: unknown[] = []
+
+    // Wrap the real builder rather than replacing it, so the write still lands
+    // and the assertion is about the argument, not about a stub's shape. An
+    // assertion that the builder merely exists passes against a version that
+    // forwards nothing, which is the whole failure mode being guarded.
+    const realFrom = supabase.from.bind(supabase)
+    vi.spyOn(supabase, "from").mockImplementation((name: string) => {
+      const builder = realFrom(name)
+      const realUpsert = builder.upsert.bind(builder)
+      builder.upsert = (row: unknown, options?: unknown) => {
+        seen.push(options)
+        return realUpsert(row as any, options as any)
+      }
+      return builder
+    })
+
+    await store.getState().upsert(
+      { journey_id: "j1", date: "2026-08-12", pain: 1 } as any,
+      { onConflict: "journey_id,date" },
+    )
+
+    expect(seen).toEqual([{ onConflict: "journey_id,date" }])
+    vi.restoreAllMocks()
+  })
+
+  it("passes nothing when the caller passed nothing", async () => {
+    // The positive assertion's counterpart: an implementation that always sent
+    // an options object would satisfy the test above and change the conflict
+    // target of every plain upsert in the package.
+    const { supabase, store } = makeStore([])
+    const seen: unknown[] = []
+
+    const realFrom = supabase.from.bind(supabase)
+    vi.spyOn(supabase, "from").mockImplementation((name: string) => {
+      const builder = realFrom(name)
+      const realUpsert = builder.upsert.bind(builder)
+      builder.upsert = (row: unknown, options?: unknown) => {
+        seen.push(options)
+        return realUpsert(row as any, options as any)
+      }
+      return builder
+    })
+
+    await store.getState().upsert({ journey_id: "j1", date: "2026-08-12", pain: 1 } as any)
+
+    expect(seen).toEqual([undefined])
+    vi.restoreAllMocks()
+  })
+
+  it("does not conflict on a null column, because Postgres does not either", async () => {
+    // NULLS DISTINCT is the default, so two nulls never conflict. A mock that
+    // matched them would let this assert "replaces" and pass, while the real
+    // database inserted a second row.
+    const { supabase, store } = await seededStore([
+      { id: "c1", journey_id: "j1", date: null as any, pain: 3 },
+    ])
+
+    await store.getState().upsert(
+      { journey_id: "j1", date: null, pain: 9 } as any,
+      { onConflict: "journey_id,date" },
+    )
+
+    expect((supabase as any)._tables.daily_check_ins).toHaveLength(2)
+    expectOrderIntegrity(store)
+  })
+})
+
+describe("a store that has already read its table", () => {
+  it("updates the row the constraint targets instead of adding a second", async () => {
+    const { store } = await seededStore([
+      { id: "c1", journey_id: "j1", date: "2026-08-12", pain: 3 },
+    ])
+
+    await store.getState().upsert(
+      { journey_id: "j1", date: "2026-08-12", pain: 7 } as any,
+      { onConflict: "journey_id,date" },
+    )
+
+    // One row, one `order` slot. Before the conflict-column lookup this held a
+    // temp id alongside `c1`, and the confirmation aliased the slot so `order`
+    // ended up `["c1", "c1"]` — every list rendering the same check-in twice,
+    // with duplicate React keys, until the next full fetch.
+    expect([...store.getState().records.values()]).toHaveLength(1)
+    expect(store.getState().order).toEqual(["c1"])
+    expectOrderIntegrity(store)
+  })
+
+  it("shows one row, not two, while the write is in flight", async () => {
+    const { store } = await seededStore([
+      { id: "c1", journey_id: "j1", date: "2026-08-12", pain: 3 },
+    ])
+
+    const promise = store.getState().upsert(
+      { journey_id: "j1", date: "2026-08-12", pain: 7 } as any,
+      { onConflict: "journey_id,date" },
+    )
+
+    // The transient state is the one a user on a slow connection actually
+    // reads, and it used to list today's check-in twice with two pain values.
+    const inFlight = [...store.getState().records.values()]
+    expect(inFlight).toHaveLength(1)
+    expect(inFlight[0]!.pain).toBe(7)
+    expect((inFlight[0] as any)._anchor_pending).toBe("update")
+    expectOrderIntegrity(store)
+
+    await promise
+    expectOrderIntegrity(store)
+  })
+
+  it("keeps the columns the payload did not mention", async () => {
+    // An upsert payload carries only what the caller is writing. Substituting
+    // it for the stored row would blank everything else until the server
+    // answered — a check-in briefly losing its oedema and mobility readings.
+    const { store } = await seededStore([
+      { id: "c1", journey_id: "j1", date: "2026-08-12", pain: 3, oedema: 2 } as any,
+    ])
+
+    const promise = store
+      .getState()
+      .upsert({ journey_id: "j1", date: "2026-08-12", pain: 7 } as any, {
+        onConflict: "journey_id,date",
+      })
+
+    expect(([...store.getState().records.values()][0] as any).oedema).toBe(2)
+    await promise
+  })
+
+  it("restores the row it overwrote when the write is refused", async () => {
+    const { supabase, store } = await seededStore([
+      { id: "c1", journey_id: "j1", date: "2026-08-12", pain: 3 },
+    ])
+
+    const realFrom = supabase.from.bind(supabase)
+    vi.spyOn(supabase, "from").mockImplementation((name: string) => {
+      const builder = realFrom(name)
+      builder.upsert = () => ({
+        select: () => ({
+          single: async () => ({
+            data: null,
+            error: { message: "denied", code: "42501" },
+          }),
+        }),
+      })
+      return builder
+    })
+
+    await expect(
+      store.getState().upsert({ journey_id: "j1", date: "2026-08-12", pain: 7 } as any, {
+        onConflict: "journey_id,date",
+      }),
+    ).rejects.toThrow()
+
+    // CAS rollback puts the snapshot back rather than deleting the row, which
+    // is the difference between "your edit did not save" and "your check-in
+    // disappeared".
+    const rows = [...store.getState().records.values()]
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.pain).toBe(3)
+    expect((rows[0] as any)._anchor_pending).toBeUndefined()
+    expectOrderIntegrity(store)
+    vi.restoreAllMocks()
+  })
+})
+
+describe("upsert optimistic apply without a primary key", () => {
+  it("shows the row immediately under a temp id, then adopts the server's", async () => {
+    const { store } = makeStore([])
+
+    const promise = store
+      .getState()
+      .upsert({ journey_id: "j1", date: "2026-08-12", pain: 4 } as any, {
+        onConflict: "journey_id,date",
+      })
+
+    // Before the server answers, the screen already has a row. This is the
+    // whole point of an optimistic write, and it used to be skipped entirely
+    // whenever the payload carried no id.
+    const pendingRows = [...store.getState().records.values()]
+    expect(pendingRows).toHaveLength(1)
+    expect((pendingRows[0] as any)._anchor_pending).toBe("update")
+
+    await promise
+
+    const settled = [...store.getState().records.values()]
+    expect(settled).toHaveLength(1)
+    expect((settled[0] as any)._anchor_pending).toBeUndefined()
+    // The temp id is gone — `order` and `records` agree on the server's.
+    expect(store.getState().order).toEqual([settled[0]!.id])
+  })
+
+  it("never sends the temp id to the server", async () => {
+    const { supabase, store } = makeStore([])
+
+    await store.getState().upsert(
+      { journey_id: "j1", date: "2026-08-12", pain: 4 } as any,
+      { onConflict: "journey_id,date" },
+    )
+
+    // A temp id reaching the database is a malformed uuid, not a row.
+    const stored = (supabase as any)._tables.daily_check_ins as CheckIn[]
+    expect(stored).toHaveLength(1)
+    expect(String(stored[0]!.id)).not.toContain("_temp:")
+  })
+})
+
+describe("the queued replay", () => {
+  function queuedUpsert(overrides: Partial<QueuedMutation> = {}): QueuedMutation {
+    return {
+      id: "m1",
+      table: "daily_check_ins",
+      operation: "UPSERT",
+      payload: { journey_id: "j1", date: "2026-08-12", pain: 7 },
+      primaryKey: { id: "_temp:abc" },
+      createdAt: 0,
+      status: "in_flight",
+      retryCount: 0,
+      rollbackSnapshot: null,
+      ...overrides,
+    }
+  }
+
+  it("replays with the conflict target the live call used", async () => {
+    const supabase = createMockSupabase({
+      daily_check_ins: [{ id: "c1", journey_id: "j1", date: "2026-08-12", pain: 3 }],
+    })
+
+    await executeRemoteMutation(
+      supabase,
+      "daily_check_ins",
+      "id",
+      queuedUpsert({ upsertOptions: { onConflict: "journey_id,date" } }),
+      new Map(),
+    )
+
+    const stored = (supabase as any)._tables.daily_check_ins as CheckIn[]
+    expect(stored).toHaveLength(1)
+    expect(stored[0]!.pain).toBe(7)
+  })
+
+  it("duplicates on the drain when the option was not carried", async () => {
+    // The failure this whole field exists to prevent: correct while online,
+    // wrong only after a reconnect, where nobody is watching.
+    const supabase = createMockSupabase({
+      daily_check_ins: [{ id: "c1", journey_id: "j1", date: "2026-08-12", pain: 3 }],
+    })
+
+    await executeRemoteMutation(
+      supabase,
+      "daily_check_ins",
+      "id",
+      queuedUpsert(),
+      new Map(),
+    )
+
+    expect((supabase as any)._tables.daily_check_ins).toHaveLength(2)
+  })
+})

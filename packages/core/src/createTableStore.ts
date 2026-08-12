@@ -163,6 +163,45 @@ export function createTableStore<
       return id as string | number
     }
 
+    /**
+     * The stored row an `upsert(row, { onConflict })` is about to overwrite,
+     * found the way Postgres finds it: by the conflict constraint's columns.
+     *
+     * Two rules mirror `ON CONFLICT` rather than being conveniences:
+     *
+     * - **A null in a conflict column matches nothing.** Postgres' default is
+     *   NULLS DISTINCT, so two nulls do not conflict and the statement inserts.
+     *   Treating them as equal here would attach the optimistic write to a row
+     *   the server is about to leave alone.
+     * - **A payload missing any conflict column matches nothing**, because that
+     *   statement cannot conflict on this constraint at all.
+     *
+     * Returns `undefined` when there is no local candidate — including when the
+     * conflict columns are not part of `defaultSelect`, so the store holds the
+     * row but cannot recognise it. The caller falls back to a temp id, and the
+     * confirmation step below is what reconciles the two.
+     */
+    function findByConflict(
+      records: Map<string | number, TrackedRow<Row>>,
+      row: unknown,
+      onConflict: string | undefined,
+    ): string | number | undefined {
+      if (!onConflict) return undefined
+      const columns = onConflict.split(",").map((c) => c.trim()).filter(Boolean)
+      if (columns.length === 0) return undefined
+
+      const target = row as Record<string, unknown>
+      if (columns.some((c) => target[c] == null)) return undefined
+
+      for (const [id, record] of records) {
+        const candidate = record as Record<string, unknown>
+        if (columns.every((c) => candidate[c] != null && candidate[c] === target[c])) {
+          return id
+        }
+      }
+      return undefined
+    }
+
     function rowsToMap(
       rows: Row[],
     ): { records: Map<string | number, TrackedRow<Row>>; order: (string | number)[] } {
@@ -756,65 +795,86 @@ export function createTableStore<
         return data as unknown as TrackedRow<Row>
       },
 
-      async upsert(row) {
+      async upsert(row, options) {
         assertNotView()
         runValidation(validate?.insert, row, "upsert")
         const start = Date.now()
         logger.mutationStart(table, "UPSERT")
 
-        // Optimistic apply with CAS mutation ID
+        // Optimistic apply with CAS mutation ID.
+        //
+        // Which local row this is about is a three-step question, because an
+        // upsert with `onConflict` identifies its row by a *constraint* rather
+        // than by a key the caller holds:
+        //
+        //   1. the primary key on the payload, when there is one;
+        //   2. failing that, the row already in the store whose conflict
+        //      columns all match — that is the row the server is about to
+        //      overwrite, and updating it in place is what keeps the screen
+        //      showing one entry instead of two;
+        //   3. failing that, a temp id, as `insert` already mints, swapped for
+        //      the server's own on confirmation.
+        //
+        // Step 2 is not an optimisation. Without it the pending row is a second
+        // entry beside the one it replaces, so a list renders today's record
+        // twice with two different values for the whole round trip — and if the
+        // write fails, the rollback removes the new one and leaves the stale
+        // one, which reads as the write having silently reverted.
+        //
+        // No temp id is ever sent: `row` reaches the builder untouched.
         const mutationId = crypto.randomUUID()
+        const givenId = (row as Record<string, unknown>)[primaryKey] as
+          | string
+          | number
+          | undefined
         const optimisticId =
-          (row as Record<string, unknown>)[primaryKey] as
-            | string
-            | number
-            | undefined
-        const snapshot = optimisticId
-          ? get().records.get(optimisticId)
-          : undefined
+          givenId ?? findByConflict(get().records, row, options?.onConflict) ?? createTempId()
+        const snapshot = get().records.get(optimisticId)
 
-        if (optimisticId) {
-          set((prev) => {
-            const records = new Map(prev.records)
-            const order = [...prev.order]
-            records.set(optimisticId, {
-              ...(row as unknown as Row),
-              _anchor_pending: "update",
-              _anchor_optimistic: true,
-              _anchor_mutationId: mutationId,
-            } as TrackedRow<Row>)
-            if (!prev.records.has(optimisticId)) order.push(optimisticId)
-            return { ...prev, records, order, error: null }
-          })
-        }
+        set((prev) => {
+          const records = new Map(prev.records)
+          const order = [...prev.order]
+          records.set(optimisticId, {
+            // Merged over the row it replaces, not substituted for it: an
+            // upsert payload carries only the columns the caller is writing, so
+            // replacing wholesale would blank every other column until the
+            // server answered.
+            ...(snapshot as object | undefined),
+            ...(row as unknown as Row),
+            [primaryKey]: optimisticId,
+            _anchor_pending: "update",
+            _anchor_optimistic: true,
+            _anchor_mutationId: mutationId,
+          } as TrackedRow<Row>)
+          if (!prev.records.has(optimisticId)) order.push(optimisticId)
+          return { ...prev, records, order, error: null }
+        })
 
         const { data, error } = await fromTable(supabase as unknown as SupabaseClient, table, schema)
-          .upsert(row as any)
+          .upsert(row as any, options)
           .select(defaultSelect ?? "*")
           .single()
 
         if (error) {
           logger.mutationError(table, "UPSERT", error.message)
           // Compare-and-swap rollback
-          if (optimisticId) {
-            set((prev) => {
-              const records = new Map(prev.records)
-              const order = [...prev.order]
-              const current = records.get(optimisticId)
-              // Only roll back if this mutation's write is still current
-              if (current?._anchor_mutationId !== mutationId) {
-                return { ...prev, error: fromSupabaseError(error) }
-              }
-              if (snapshot) {
-                records.set(optimisticId, snapshot)
-              } else {
-                records.delete(optimisticId)
-                const idx = order.indexOf(optimisticId)
-                if (idx >= 0) order.splice(idx, 1)
-              }
-              return { ...prev, records, order, error: fromSupabaseError(error) }
-            })
-          }
+          set((prev) => {
+            const records = new Map(prev.records)
+            const order = [...prev.order]
+            const current = records.get(optimisticId)
+            // Only roll back if this mutation's write is still current
+            if (current?._anchor_mutationId !== mutationId) {
+              return { ...prev, error: fromSupabaseError(error) }
+            }
+            if (snapshot) {
+              records.set(optimisticId, snapshot)
+            } else {
+              records.delete(optimisticId)
+              const idx = order.indexOf(optimisticId)
+              if (idx >= 0) order.splice(idx, 1)
+            }
+            return { ...prev, records, order, error: fromSupabaseError(error) }
+          })
           throw fromSupabaseError(error)
         }
 
@@ -827,15 +887,27 @@ export function createTableStore<
           const records = new Map(prev.records)
           const order = [...prev.order]
 
-          // Clean up optimistic entry if server returned a different ID
-          if (optimisticId && optimisticId !== id) {
+          // Clean up the optimistic entry when the server named a different id
+          // — the temp-id path above, and any case where `onConflict` matched
+          // no local row because its columns are outside `defaultSelect`.
+          if (optimisticId !== id) {
             records.delete(optimisticId)
             const idx = order.indexOf(optimisticId)
-            if (idx >= 0) order[idx] = id
+            if (idx >= 0) {
+              // Overwriting the slot is only safe while the server's id is not
+              // already somewhere in `order`. When it is — the store held the
+              // row and could not recognise it — the slot has to go, or `order`
+              // carries the id twice against one `records` entry and every
+              // projection renders that row twice, with duplicate React keys,
+              // until the next full fetch. `order` and `records` staying in
+              // sync is the invariant the whole store rests on.
+              if (order.includes(id)) order.splice(idx, 1)
+              else order[idx] = id
+            }
           }
 
           records.set(id, serverRow as TrackedRow<Row>)
-          if (!prev.records.has(id) && !order.includes(id)) order.push(id)
+          if (!order.includes(id)) order.push(id)
           return { ...prev, records, order }
         })
 

@@ -185,6 +185,33 @@ export type SortDescriptor<Row = Record<string, unknown>> = {
   nullsFirst?: boolean
 }
 
+/**
+ * Which row an `upsert` writes.
+ *
+ * Without `onConflict`, PostgREST infers the conflict target from the primary
+ * key. A table whose "one of these per day" rule lives in a *different* unique
+ * constraint therefore cannot be upserted through a store at all: the insert
+ * violates that constraint and Postgres raises `23505`, which reads as a
+ * duplicate-key bug in the caller rather than as a missing option. `onConflict`
+ * names the constraint's columns — `"journey_id,date"` — as the one
+ * comma-separated string supabase-js takes.
+ *
+ * **`ignoreDuplicates` is deliberately absent.** It swaps `ON CONFLICT DO
+ * UPDATE` for `DO NOTHING`, and every store mutation ends its chain in
+ * `.single()`: a conflict it ignored returns no representation, so `.single()`
+ * fails with `PGRST116` and the store reports a write the server carried out
+ * exactly as asked as a failure — rolling the optimistic row back off the
+ * screen. On the offline replay it is worse: `executeRemoteMutation` throws and
+ * the queue stops at the first failure, so one ignored duplicate stalls every
+ * pending mutation on every table behind it. Supporting it means
+ * `.maybeSingle()` plus a "the server accepted and wrote nothing" resolution
+ * path — a real feature, not a keyword — so it waits until something needs it.
+ */
+export type UpsertOptions = {
+  /** Comma-separated columns of the unique constraint to conflict on. */
+  onConflict?: string
+}
+
 export type FetchOptions<Row = Record<string, unknown>> = {
   filters?: FilterDescriptor<Row>[]
   sort?: SortDescriptor<Row>[]
@@ -302,7 +329,7 @@ export type TableStoreActions<
     id: string | number,
     changes: UpdateRow,
   ) => Promise<TrackedRow<Row>>
-  upsert: (row: InsertRow) => Promise<TrackedRow<Row>>
+  upsert: (row: InsertRow, options?: UpsertOptions) => Promise<TrackedRow<Row>>
   remove: (id: string | number) => Promise<void>
   removeWhere: (filters: FilterDescriptor<Row>[]) => Promise<void>
 
@@ -360,6 +387,17 @@ export type QueuedMutation = {
   rollbackSnapshot: Record<string, unknown> | null
   /** User who enqueued this mutation (for multi-user isolation) */
   userId?: string
+  /**
+   * Carried for `UPSERT` only, so the replay writes the row the live call would
+   * have written. Dropping it here would reproduce the missing-`onConflict` bug
+   * **exclusively on the offline drain** — the one path with no user watching
+   * and no test unless it is written on purpose.
+   *
+   * Optional, so a queue persisted before this field existed rehydrates
+   * unchanged and replays with PostgREST's primary-key default, which is what
+   * it was enqueued under.
+   */
+  upsertOptions?: UpsertOptions
 }
 
 // ─── Temp ID Management ──────────────────────────────────────────────

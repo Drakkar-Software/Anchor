@@ -296,12 +296,32 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
       },
 
       // Upsert operation
-      upsert(row: MockRow | MockRow[]) {
+      //
+      // The conflict target used to be hardcoded to `id`, which made every
+      // assertion about `onConflict` pass whatever the option did — the same
+      // shape as the `count`-after-range bug: a mock that agrees with correct
+      // behaviour and with a dropped option equally cannot fail. It now matches
+      // on the named columns, so a store that stops forwarding the option
+      // inserts a duplicate here exactly as Postgres would raise `23505`.
+      upsert(row: MockRow | MockRow[], options?: { onConflict?: string }) {
         const rows = Array.isArray(row) ? row : [row]
         const table = getTable(tableName)
+        const conflictColumns = options?.onConflict
+          ? options.onConflict.split(",").map((c) => c.trim())
+          : ["id"]
         const upserted: MockRow[] = []
         for (const r of rows) {
-          const existing = table.findIndex((t) => t.id === r.id)
+          // NULLS DISTINCT, which is Postgres' default: two nulls do not
+          // conflict, so a statement whose conflict column is null — or absent
+          // from the payload — cannot match and inserts instead. Treating them
+          // as equal would let a test assert replace-not-duplicate on a
+          // nullable column, pass here, and fail against the real database.
+          const matchable = conflictColumns.every((c) => r[c] != null)
+          const existing = matchable
+            ? table.findIndex((t) =>
+                conflictColumns.every((c) => t[c] != null && t[c] === r[c]),
+              )
+            : -1
           const newRow = { ...r, updated_at: new Date().toISOString() }
           if (existing >= 0) {
             table[existing] = { ...table[existing], ...newRow }

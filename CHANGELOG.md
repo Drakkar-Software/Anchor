@@ -1,5 +1,22 @@
 # Changelog
 
+## [Unreleased]
+
+### Features
+
+- **`upsert` can name its conflict target**: `upsert(row, { onConflict })`, reachable through `useMutation` too. Without it PostgREST conflicts on the primary key, so a table whose "one of these per day" rule lives in a different unique constraint could not be upserted through a store at all: the statement inserted a duplicate and Postgres raised `23505`, which reads as a duplicate-key bug in the caller rather than as a missing option. `onConflict` takes the constraint's columns as one comma-separated string, the way supabase-js does.
+
+  `QueuedMutation` carries an optional `upsertOptions` and `executeRemoteMutation` applies it, so the replay path writes the row the live call would have rather than falling back to the primary-key default — a divergence that would show up **only after a reconnect**. Note that no code path in the package enqueues a mutation at all today — `OfflineQueue.enqueue()` has no producer outside its own tests — so this fixes the replay contract ahead of the producer rather than changing behaviour on any live path. The field is optional, so a queue persisted by 2.1.0 rehydrates unchanged.
+
+  **`ignoreDuplicates` is deliberately not supported.** Every store mutation ends its chain in `.single()`, and a `DO NOTHING` that ignored a conflict returns no representation — so the store would report a write the server performed exactly as asked as a `PGRST116` failure and roll the optimistic row off the screen, and on the replay path `executeRemoteMutation` would throw and stall every pending mutation behind it. It needs `.maybeSingle()` and a "server accepted, wrote nothing" resolution path, which is a feature rather than a keyword.
+
+### Bug fixes
+
+- **`upsert` skipped its optimistic apply whenever the payload carried no primary key.** The id was read off the row and everything downstream sat behind `if (optimisticId)`, so an upsert identified by a *constraint* rather than by a key the caller holds — which is exactly what `onConflict` is reached for — put nothing on screen until the server answered.
+
+  The store now resolves the row three ways, in order: the primary key on the payload; failing that, the record already held whose `onConflict` columns all match, which is the row the server is about to overwrite; failing that, a temp id, as `insert` already mints, swapped for the server's own on confirmation. The middle step is what keeps a list showing one entry: attaching the write to a new temp row instead would render today's record twice, with two different values, for the whole round trip — and on failure the rollback would remove the new one and leave the stale one, reading as a silent revert. Local matching follows `ON CONFLICT`'s own rules, so a null in a conflict column matches nothing (Postgres defaults to NULLS DISTINCT). No temp id is ever sent, on either the live or the replay path.
+- **Confirming an upsert could leave the same id twice in `order`.** When the server's id was already present — the store held the row but could not match it locally, because the conflict columns are outside `defaultSelect` — the temp slot was overwritten with that id rather than removed, so `order` carried it twice against one `records` entry. Every projection reads `order`, so the row rendered twice with duplicate React keys, the duplicate was persisted to disk, and it healed only on the next full fetch of that table.
+
 ## [2.1.0] - 2026-08-12
 
 ### Behaviour change
