@@ -78,8 +78,20 @@ export async function executeRemoteMutation(
     }
 
     case "UPSERT": {
+      // `upsertOptions` rides on the mutation rather than being recomputed
+      // here: the conflict target is a property of the call the caller made,
+      // and a replay that fell back to the primary-key default would write a
+      // different row than the live path did — visible only after a drain.
+      //
+      // The temp-id strip mirrors INSERT above. An upsert whose payload carries
+      // no primary key is exactly the shape that gets one minted, and a
+      // `_temp:…` string reaching Postgres as a uuid fails the statement
+      // outright instead of writing the row.
+      const upsertPayload = { ...payload }
+      if (isTempId(upsertPayload[primaryKey])) delete upsertPayload[primaryKey]
+
       const { data, error } = await fromTable(supabase, table, schema)
-        .upsert(payload as any)
+        .upsert(upsertPayload as any, mutation.upsertOptions)
         .select(select ?? "*")
         .single()
 

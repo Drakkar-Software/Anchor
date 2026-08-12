@@ -167,3 +167,24 @@ export const todosStore = createTableStore<
     },
   }),
 })
+
+/**
+ * Upserting on a constraint that is not the primary key.
+ *
+ * `profiles.username` is unique, and a "claim this username, replacing my
+ * previous claim" write has no `id` to send: the row is identified by the
+ * constraint, not by a key the caller holds. Without `onConflict`, PostgREST
+ * conflicts on `id`, the payload has none, and the statement inserts a second
+ * row that Postgres refuses with `23505` — which reads as a bug in this code
+ * rather than as a missing option.
+ *
+ * The store still shows the change immediately: it finds the record whose
+ * conflict columns match and marks that one pending, rather than adding a
+ * second entry beside it.
+ */
+export async function claimUsername(username: string, avatarUrl: string | null) {
+  return stores.profiles.getState().upsert(
+    { username, avatar_url: avatarUrl },
+    { onConflict: "username" },
+  )
+}

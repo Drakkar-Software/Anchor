@@ -32,7 +32,13 @@ Until 2.1.0 the builder it received had only `.select()` applied: `executeQuery`
 
 ### Mutations
 
-**No options object is passed at any mutation call site** — verified across `createTableStore.ts`, `mutationPipeline.ts`, `batchOperations.ts`. `onConflict`, `ignoreDuplicates`, `defaultToNull`, `count`, `returning: 'minimal'` are all unreachable. Upsert can only conflict-target the table's inferred PK/unique constraint.
+**`upsert` takes an options object; the other four mutations still do not.** `store.upsert(row, { onConflict })` reaches `.upsert()` in both `createTableStore.ts` and the replay in `mutationPipeline.ts`, and rides on `QueuedMutation.upsertOptions` so a drain writes the row the live call did. `insert`/`insertMany`/`update`/`updateMany`/`remove` pass none — verified across `createTableStore.ts`, `mutationPipeline.ts`, `batchOperations.ts`. Unreachable everywhere, upsert included: `defaultToNull`, `count`, `returning: 'minimal'`.
+
+Why upsert went first: without `onConflict`, PostgREST conflicts on the primary key, so a table whose uniqueness rule lives in a *different* constraint could not be upserted through a store at all — the statement inserted a duplicate and raised `23505`. A missing option presenting as a caller bug is worse than an absent feature.
+
+**`ignoreDuplicates` is the one `.upsert()` option deliberately left out**, and the reason generalises to any option that changes whether a row comes back. Every mutation ends in `.single()`, so a `DO NOTHING` that ignored its conflict returns no representation and the store reports a successful write as `PGRST116` — rolling the optimistic row off the screen — while the replay throws and stalls the queue at its first failure. Adding it means `.maybeSingle()` and an explicit "accepted, wrote nothing" resolution.
+
+**Nothing enqueues.** `OfflineQueue.enqueue()` has no caller in the package outside `offlineQueue.test.ts`, and `createTableStore`'s mutation path has no network awareness: the six mutators call PostgREST directly and, on failure, roll back and throw. The queue hydrates, auto-flushes and has an executor registered per table via `createSupabaseStores`, and never receives a mutation. So the replay path above is currently reachable only by constructing a `QueuedMutation` by hand.
 
 ## Storage (storage-js)
 

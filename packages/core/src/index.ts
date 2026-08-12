@@ -20,6 +20,7 @@ export type {
   FilterDescriptor,
   SortDescriptor,
   FetchOptions,
+  UpsertOptions,
   // Store
   TableStoreState,
   QueryEntry,

@@ -30,7 +30,9 @@ import type {
   ViewNames,
   ViewRow,
   SupabaseStores,
+  TableStore,
 } from "./types.js"
+import type { StoreApi } from "zustand"
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2
   ? true
@@ -208,3 +210,41 @@ export type _NoViewsKey = Expect<Eq<ViewNames<NoViewsKey>, never>>
 type NotASchema = { public: { Something: unknown } }
 export type _NotASchema = Expect<Eq<ExtractSchema<NotASchema>, never>>
 export type _NotASchemaViews = Expect<Eq<ViewNames<NotASchema>, never>>
+
+// ── upsert's conflict target ──────────────────────────────────────────
+
+/**
+ * `upsert`'s second parameter, exercised where the compiler can see it.
+ *
+ * The check-in write depends on `onConflict` reaching PostgREST, and a
+ * signature that widened to `(row, options?: any)` — or dropped the parameter
+ * back to one — would leave every runtime test in
+ * `mutation/upsertConflict.test.ts` passing while the call site stopped being
+ * checked. The `@ts-expect-error` lines are the load-bearing half: they fail
+ * the build if what they mark stops being an error.
+ *
+ * Never called. Exported so `noUnusedLocals` keeps it.
+ */
+export async function _upsertOptionsProbe(
+  store: StoreApi<
+    TableStore<{ id: string; pain: number }, { pain: number }, { pain?: number }>
+  >,
+) {
+  const actions = store.getState()
+
+  // The whole point: a conflict target that is not the primary key.
+  await actions.upsert({ pain: 3 }, { onConflict: "journey_id,date" })
+  // @ts-expect-error - ignoreDuplicates is deliberately not an UpsertOptions key
+  await actions.upsert({ pain: 3 }, { ignoreDuplicates: true })
+  // Optional, because every existing call site passes one argument.
+  await actions.upsert({ pain: 3 })
+
+  // A misspelt key must not be swallowed by an index signature or by `any`.
+  // @ts-expect-error - `onConflicts` is not an UpsertOptions key
+  await actions.upsert({ pain: 3 }, { onConflicts: "journey_id,date" })
+
+  // `onConflict` names its columns as one comma-separated string, the way
+  // supabase-js takes it — an array is the shape people reach for first.
+  // @ts-expect-error - onConflict is a string, not string[]
+  await actions.upsert({ pain: 3 }, { onConflict: ["journey_id", "date"] })
+}
