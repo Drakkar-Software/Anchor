@@ -13,10 +13,78 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
   }
 
   let nextId = 1000
+  const rpcHandlers: Record<string, (args: Record<string, unknown>) => unknown> = {}
 
   function getTable(name: string): MockRow[] {
     if (!tables[name]) tables[name] = []
     return tables[name]!
+  }
+
+  /** Split on commas that are not inside embed parentheses. */
+  function splitTopLevel(spec: string): string[] {
+    const out: string[] = []
+    let depth = 0
+    let current = ""
+    for (const ch of spec) {
+      if (ch === "(") depth++
+      if (ch === ")") depth--
+      if (ch === "," && depth === 0) {
+        out.push(current.trim())
+        current = ""
+        continue
+      }
+      current += ch
+    }
+    if (current.trim()) out.push(current.trim())
+    return out
+  }
+
+  /**
+   * Project rows through a `select` string.
+   *
+   * `select` used to be recorded and never read, so every test saw whole rows
+   * regardless of what it asked for — a store built with a narrow
+   * `defaultSelect` looked identical to one selecting `*`, and no test could
+   * catch a column the real PostgREST would not have returned.
+   *
+   * This lives at factory scope, not inside `createBuilder`, because there are
+   * four builders (read, insert/upsert, update, delete) and each one accepts
+   * `select`. Projecting in only the read builder leaves every WRITE
+   * unobservable, which is the half that matters: a store mutation issues
+   * `.insert(...).select(defaultSelect ?? '*')`, so the write path is where a
+   * narrow select is most likely to be wrong.
+   *
+   * Handles the shapes the store layer emits: a bare column list, `*`,
+   * aliases, and embeds (`'*, stages(*)'`). An embedded name resolves against
+   * the in-memory tables by matching `<table>_id` back to the parent's `id`,
+   * which is enough to exercise a store's handling of nested arrays.
+   */
+  function project(rows: MockRow[], spec: string, tableName: string): MockRow[] {
+    const trimmed = spec.trim()
+    if (trimmed === "*" || trimmed === "") return rows
+
+    const plain: string[] = []
+    const embeds: string[] = []
+    let star = false
+
+    for (const part of splitTopLevel(trimmed)) {
+      const embed = /^(\w+)\s*\((.*)\)$/s.exec(part)
+      if (embed) embeds.push(embed[1]!)
+      else if (part === "*") star = true
+      else plain.push(part.split(":").pop()!.trim())
+    }
+
+    return rows.map((row) => {
+      const out: MockRow = star ? { ...row } : {}
+      for (const col of plain) {
+        if (col in row) out[col] = row[col]
+      }
+      for (const name of embeds) {
+        const fk = `${tableName.replace(/s$/, "")}_id`
+        out[name] = (tables[name] ?? []).filter((c) => c[fk] === row.id)
+      }
+      return out
+    })
   }
 
   // Build chainable query builder
@@ -173,16 +241,19 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
             rows = rows.slice(0, limitVal)
           }
 
+          const total = rows.length
+          const projected = project(rows, selectColumns, tableName)
+
           if (singleMode) {
-            if (rows.length === 0) {
+            if (projected.length === 0) {
               resolve({ data: null, error: { message: "No rows found", code: "PGRST116" }, count: null })
             } else {
-              resolve({ data: rows[0], error: null, count: countMode ? rows.length : null })
+              resolve({ data: projected[0], error: null, count: countMode ? total : null })
             }
           } else if (maybeSingleMode) {
-            resolve({ data: rows[0] ?? null, error: null, count: countMode ? rows.length : null })
+            resolve({ data: projected[0] ?? null, error: null, count: countMode ? total : null })
           } else {
-            resolve({ data: rows, error: null, count: countMode ? rows.length : null })
+            resolve({ data: projected, error: null, count: countMode ? total : null })
           }
         } catch (err) {
           if (reject) reject(err)
@@ -261,11 +332,18 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
         singleMode = true
         return builder
       },
+      maybeSingle() {
+        singleMode = true
+        return builder
+      },
       then(resolve: (value: any) => void) {
+        // A store mutation always appends `.select(defaultSelect ?? '*')`, so
+        // this is the path a narrow select is most likely to be wrong on.
+        const projected = project(inserted, selectCols, tableName)
         if (singleMode) {
-          resolve({ data: inserted[0] ?? null, error: null })
+          resolve({ data: projected[0] ?? null, error: null })
         } else {
-          resolve({ data: inserted, error: null })
+          resolve({ data: projected, error: null })
         }
       },
     }
@@ -278,6 +356,7 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
     existingFilters: Array<{ column: string; op: string; value: unknown }>,
   ) {
     const filters = [...existingFilters]
+    let selectCols = "*"
 
     const builder: any = {
       eq(column: string, value: unknown) {
@@ -285,6 +364,7 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
         return builder
       },
       select(cols?: string) {
+        if (cols) selectCols = cols
         return builder
       },
       single() {
@@ -300,7 +380,7 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
           then(resolve: (value: any) => void) {
             if (idx >= 0) {
               table[idx] = { ...table[idx], ...changes, updated_at: new Date().toISOString() }
-              resolve({ data: table[idx], error: null })
+              resolve({ data: project([table[idx]!], selectCols, tableName)[0], error: null })
             } else {
               resolve({ data: null, error: { message: "Row not found" } })
             }
@@ -321,7 +401,7 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
             updated.push(table[i]!)
           }
         }
-        resolve({ data: updated, error: null })
+        resolve({ data: project(updated, selectCols, tableName), error: null })
       },
     }
     return builder
@@ -408,6 +488,35 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
         }
       },
     },
+    /**
+     * Postgres functions. Register one with `_setRpc(name, handler)`; an
+     * unregistered name resolves to the shape PostgREST returns for a missing
+     * function rather than throwing, so a test asserting the failure path does
+     * not need a try/catch.
+     *
+     * Thenable rather than async, matching the query builder, because callers
+     * both `await` it and pass it straight to `queryFn`.
+     */
+    rpc(name: string, args?: Record<string, unknown>) {
+      return {
+        then(resolve: (value: any) => void) {
+          const handler = rpcHandlers[name]
+          if (!handler) {
+            resolve({
+              data: null,
+              count: null,
+              error: {
+                message: `Could not find the function public.${name}`,
+                code: "PGRST202",
+              },
+            })
+            return
+          }
+          const result = handler(args ?? {})
+          resolve({ data: result, count: Array.isArray(result) ? result.length : null, error: null })
+        },
+      }
+    },
     channel(name: string) {
       return {
         on(event: string, filter: any, callback: any) {
@@ -426,6 +535,9 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
 
     // Test helpers
     _tables: tables,
+    _setRpc(name: string, handler: (args: Record<string, unknown>) => unknown) {
+      rpcHandlers[name] = handler
+    },
     _setSession(session: any) {
       currentSession = session
     },
