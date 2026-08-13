@@ -329,8 +329,12 @@ describe("OfflineQueue", () => {
 
       // Nothing else is coming: no network transition, no auth event, no third
       // enqueue. Draining is the queue's own business.
-      await vi.waitFor(() => expect(queue.pendingCount).toBe(0))
-      expect(executor).toHaveBeenCalledTimes(2)
+      // Waited on the executor, not on `pendingCount`: a mutation that was
+      // pruned, rolled back or dropped reaches a count of zero too, so the
+      // count alone cannot tell "drained" from "gone".
+      await vi.waitFor(() => expect(executor).toHaveBeenCalledTimes(2))
+      expect(executor.mock.calls[1]![0].id).toBe("m2")
+      expect(queue.pendingCount).toBe(0)
     })
 
     it("does not flush when offline", async () => {
