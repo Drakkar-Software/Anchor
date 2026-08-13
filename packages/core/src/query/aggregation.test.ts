@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest"
-import { aggregateLocal } from "./aggregation.js"
+import { aggregateLocal, aggregateRpc } from "./aggregation.js"
+import { createMockSupabase } from "../__tests__/mockSupabase.js"
 
 describe("aggregateLocal", () => {
   const records = [
@@ -51,5 +52,30 @@ describe("aggregateLocal", () => {
       { id: 2, val: "b" as any },
     ]
     expect(aggregateLocal(strings, "val", "sum")).toBeNull()
+  })
+})
+
+describe("aggregateRpc error routing", () => {
+  it("carries the Postgres code rather than only the message", async () => {
+    const supabase = createMockSupabase()
+    supabase._setError("zs_sum_todos_amount", "rpc", {
+      message: "permission denied for function",
+      code: "42501",
+    })
+
+    const { data, error } = await aggregateRpc(supabase, "todos", "amount", "sum")
+
+    expect(data).toBeNull()
+    expect((error as { code?: string })?.code).toBe("42501")
+  })
+
+  it("still returns the value when the function succeeds", async () => {
+    const supabase = createMockSupabase()
+    supabase._setRpc("zs_sum_todos_amount", () => 42)
+
+    const { data, error } = await aggregateRpc(supabase, "todos", "amount", "sum")
+
+    expect(error).toBeNull()
+    expect(data).toBe(42)
   })
 })

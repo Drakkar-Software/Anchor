@@ -33,6 +33,7 @@ import type {
   TableStore,
 } from "./types.js"
 import type { StoreApi } from "zustand"
+import type { VerifyOtpParams as AnchorVerifyOtpParams } from "./auth/authCallbacks.js"
 
 type Eq<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2
   ? true
@@ -248,3 +249,47 @@ export async function _upsertOptionsProbe(
   // @ts-expect-error - onConflict is a string, not string[]
   await actions.upsert({ pain: 3 }, { onConflict: ["journey_id", "date"] })
 }
+
+// ─── verifyOtp ───────────────────────────────────────────────────────
+//
+// `verifyOtp` passes its params to `supabase.auth.verifyOtp(params as never)`.
+// The cast is there because Anchor's `VerifyOtpParams` is hand-written rather
+// than re-exported — and a cast means nothing checks the hand-written union
+// against the real one. If a member were wrong (a `type` value auth-js does not
+// accept, an `options` key it does not have) no test would say so, because the
+// tests assert against a `vi.fn()`.
+//
+// This is the check the cast removed: every member of Anchor's union must be
+// assignable to auth-js's. Renaming `token` to `code`, dropping a required
+// field, or adding an `options` key the SDK does not have all go red here.
+//
+// **What it deliberately cannot catch: a wrong `type` value.** auth-js declares
+// `EmailOtpType` and `MobileOtpType` as `'signup' | ... | (string & {})`, and
+// that trailing member makes every string assignable — the escape hatch exists
+// so a new server-side OTP type does not require an SDK release. So
+// `type: "maglink"` type-checks here and fails at runtime, and no assignability
+// assertion can change that. Verified by trying it: the typo compiles clean,
+// the shape break fails two of the four lines below. Written down because an
+// `Expect<>` that cannot fail for the reason you assume is the exact trap this
+// file exists to avoid.
+
+type SdkVerifyOtpParams = Parameters<SupabaseClient["auth"]["verifyOtp"]>[0]
+
+export type _VerifyOtpParamsMatchesSdk = Expect<
+  AnchorVerifyOtpParams extends SdkVerifyOtpParams ? true : false
+>
+
+/**
+ * The three identifier shapes are genuinely distinct, so each has to be
+ * assignable on its own — a union that satisfied the check above only through
+ * one wide member would still be wrong for the other two.
+ */
+export type _VerifyOtpEmailMember = Expect<
+  Extract<AnchorVerifyOtpParams, { email: string }> extends SdkVerifyOtpParams ? true : false
+>
+export type _VerifyOtpPhoneMember = Expect<
+  Extract<AnchorVerifyOtpParams, { phone: string }> extends SdkVerifyOtpParams ? true : false
+>
+export type _VerifyOtpTokenHashMember = Expect<
+  Extract<AnchorVerifyOtpParams, { token_hash: string }> extends SdkVerifyOtpParams ? true : false
+>

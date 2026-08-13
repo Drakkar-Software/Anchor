@@ -70,3 +70,28 @@ describe("incrementalSync", () => {
     expect(store.getState().lastFetchedAt).toBeTypeOf("number")
   })
 })
+
+describe("incrementalSync error routing", () => {
+  it("throws an error carrying the Postgres code", async () => {
+    const supabase = createMockSupabase({ todos: [] })
+    const store = createTableStore<any, Todo, any, any>({ supabase, table: "todos" })
+    supabase._setError("todos", "select", { message: "permission denied", code: "42501" })
+
+    await expect(
+      incrementalSync(supabase, "todos", "id", store, { timestampColumn: "updated_at" }),
+    ).rejects.toMatchObject({ code: "42501" })
+  })
+
+  it("resolves with counts when nothing failed", async () => {
+    const supabase = createMockSupabase({
+      todos: [{ id: 1, title: "A", updated_at: "2026-01-01" }],
+    })
+    const store = createTableStore<any, Todo, any, any>({ supabase, table: "todos" })
+
+    const result = await incrementalSync(supabase, "todos", "id", store, {
+      timestampColumn: "updated_at",
+    })
+
+    expect(result.fetchedCount).toBe(1)
+  })
+})

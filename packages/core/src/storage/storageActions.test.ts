@@ -132,3 +132,34 @@ describe("createStorageActions", () => {
     expect(url).toBe("https://example.com/file.png")
   })
 })
+
+describe("storage error routing", () => {
+  // storage-js gained a `code` on StorageApiError in 2.112.0, and these five
+  // were still collapsing the error to `new Error(error.message)`.
+  it("keeps the code on an upload failure", async () => {
+    const supabase = mockStorage({
+      upload: { data: null, error: { message: "The resource already exists", code: "409" } },
+    })
+
+    const { data, error } = await uploadFile(supabase, "avatars", "pic.png", new Blob())
+
+    expect(data).toBeNull()
+    expect((error as { code?: string })?.code).toBe("409")
+  })
+
+  it("keeps the code on a download failure", async () => {
+    const supabase = mockStorage({
+      download: { data: null, error: { message: "Object not found", code: "404" } },
+    })
+
+    const { error } = await downloadFile(supabase, "avatars", "missing.png")
+
+    expect((error as { code?: string })?.code).toBe("404")
+  })
+
+  it("still succeeds with a null error when nothing went wrong", async () => {
+    const { data, error } = await uploadFile(mockStorage(), "avatars", "pic.png", new Blob())
+    expect(error).toBeNull()
+    expect(data).not.toBeNull()
+  })
+})

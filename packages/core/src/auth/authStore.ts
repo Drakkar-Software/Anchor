@@ -196,17 +196,8 @@ export function createAuthStore(
       // the auth server. It has shipped in the pinned SDK all along and was
       // never called; `getClaim` read an unverified local decode instead.
       const auth = supabase.auth as unknown as {
-        getClaims?: (jwt?: string) => Promise<{ data: unknown; error: unknown }>
+        getClaims: (jwt?: string) => Promise<{ data: unknown; error: unknown }>
       }
-      if (typeof auth.getClaims !== "function") {
-        return {
-          claims: null,
-          error: new Error(
-            "[anchor] supabase.auth.getClaims() is unavailable — needs @supabase/supabase-js >= 2.44.",
-          ),
-        }
-      }
-
       const { data, error } = await auth.getClaims()
       if (error) return { claims: null, error: fromSupabaseError(error) }
       // supabase-js returns `{claims, headers, signature}`; a session-less

@@ -20,6 +20,7 @@ export type MetricsSnapshot = {
   queueFlushCount: number
   conflictCount: number
   realtimeEventCount: number
+  realtimeErrorCount: number
 }
 
 export class SyncMetrics implements SyncLogger {
@@ -32,6 +33,7 @@ export class SyncMetrics implements SyncLogger {
   private _queueFlushCount = 0
   private _conflictCount = 0
   private _realtimeEventCount = 0
+  private _realtimeErrorCount = 0
   private _subscribers = new Set<(snapshot: MetricsSnapshot) => void>()
   // Cached sorted arrays — invalidated on new entries
   private _sortedFetchDirty = true
@@ -98,6 +100,18 @@ export class SyncMetrics implements SyncLogger {
     this._notify()
   }
 
+  /**
+   * A channel that errored, timed out or closed.
+   *
+   * Counted separately from `realtimeEvent`: a connection dropping is not a row
+   * changing, and folding the two together would make a flapping subscription
+   * look like healthy traffic on the dashboard.
+   */
+  realtimeError(_table: string, _status: string, _error?: Error): void {
+    this._realtimeErrorCount++
+    this._notify()
+  }
+
   getMetrics(): MetricsSnapshot {
     if (this._sortedFetchDirty) {
       this._sortedFetch = [...this._fetchLatencies].sort((a, b) => a - b)
@@ -122,6 +136,7 @@ export class SyncMetrics implements SyncLogger {
       queueFlushCount: this._queueFlushCount,
       conflictCount: this._conflictCount,
       realtimeEventCount: this._realtimeEventCount,
+      realtimeErrorCount: this._realtimeErrorCount,
     }
   }
 
@@ -135,6 +150,7 @@ export class SyncMetrics implements SyncLogger {
     this._queueFlushCount = 0
     this._conflictCount = 0
     this._realtimeEventCount = 0
+    this._realtimeErrorCount = 0
     this._sortedFetch = []
     this._sortedMutation = []
     this._sortedFetchDirty = true

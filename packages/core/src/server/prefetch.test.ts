@@ -71,3 +71,26 @@ describe("serialize/deserialize", () => {
     expect(result.error!.message).toContain("invalid JSON")
   })
 })
+
+describe("prefetch error routing", () => {
+  it("carries the Postgres code, so an RSC can tell RLS from a bad query", async () => {
+    const supabase = createMockSupabase({ todos: [{ id: 1, title: "A" }] })
+    supabase._setError("todos", "select", {
+      message: "permission denied for table todos",
+      code: "42501",
+    })
+
+    const result = await prefetch(supabase, "todos")
+
+    expect(result.data).toEqual([])
+    expect((result.error as { code?: string } | null)?.code).toBe("42501")
+  })
+
+  it("returns rows and no error on the happy path", async () => {
+    const supabase = createMockSupabase({ todos: [{ id: 1, title: "A" }] })
+    const result = await prefetch(supabase, "todos")
+
+    expect(result.error).toBeNull()
+    expect(result.data).toHaveLength(1)
+  })
+})

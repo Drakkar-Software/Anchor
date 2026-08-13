@@ -563,3 +563,33 @@ describe("mockSupabase realtime channels", () => {
     expect(supabase.getChannels()).toHaveLength(0)
   })
 })
+
+describe("mockSupabase injected failures accept the whole chain", () => {
+  // The failed builder first shipped implementing only the handful of methods
+  // one test happened to use. A method it lacks throws
+  // `TypeError: builder.gt is not a function`, and the caller sees that instead
+  // of the error under test — the mock answering something other than what was
+  // asked, which is the failure this file exists to prevent.
+
+  it("injects on a write filtered by something other than eq", async () => {
+    const supabase = createMockSupabase({ posts: [{ id: 1, views: 30 }] })
+    supabase._setError("posts", "update", { message: "denied", code: "42501" })
+
+    const { error } = await supabase.from("posts").update({ views: 0 }).gt("views", 10).select("*")
+
+    expect(error?.code).toBe("42501")
+  })
+
+  it.each([
+    "gte", "lt", "lte", "like", "ilike", "is", "contains", "containedBy",
+    "overlaps", "not", "or", "filter", "order", "limit", "range",
+  ])("survives a chained .%s()", async (method) => {
+    const supabase = createMockSupabase({ posts: [{ id: 1 }] })
+    supabase._setError("posts", "delete", { message: "denied", code: "42501" })
+
+    const builder: any = supabase.from("posts").delete()
+    const { error } = await builder[method]("views", 1)
+
+    expect(error?.code).toBe("42501")
+  })
+})

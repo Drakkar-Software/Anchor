@@ -591,18 +591,27 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
     return builder
   }
 
-  /** A builder whose every terminal resolves to the injected failure. */
+  /**
+   * A builder whose every terminal resolves to the injected failure.
+   *
+   * It has to accept the *whole* chainable surface, not the handful a first
+   * test happened to use: a method it lacks throws `TypeError: builder.gt is
+   * not a function` and the caller sees that instead of the error under test.
+   * That is the same failure this file exists to prevent — the mock answering
+   * something other than what was asked.
+   */
   function createFailedBuilder(injected: InjectedError) {
     const builder: any = {
-      select: () => builder,
-      eq: () => builder,
-      neq: () => builder,
-      in: () => builder,
-      single: () => builder,
-      maybeSingle: () => builder,
       then(resolve: (value: any) => void) {
         resolve(errorResponse(injected))
       },
+    }
+    for (const method of [
+      "select", "eq", "neq", "gt", "gte", "lt", "lte", "like", "ilike", "in",
+      "is", "contains", "containedBy", "overlaps", "textSearch", "match", "not",
+      "or", "filter", "order", "limit", "range", "single", "maybeSingle",
+    ]) {
+      builder[method] = () => builder
     }
     return builder
   }

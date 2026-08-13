@@ -664,6 +664,9 @@ export const consoleLogger: SyncLogger = {
   realtimeEvent(table, event) {
     console.log(`[anchor:${table}] realtime ${event}`)
   },
+  realtimeError(table, status, error) {
+    console.error(`[anchor:${table}] realtime ${status}`, error ?? "")
+  },
 }
 
 // ─── Store Factory Options ───────────────────────────────────────────

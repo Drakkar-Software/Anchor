@@ -186,12 +186,4 @@ describe("getVerifiedClaims", () => {
     expect(error).toBeNull()
   })
 
-  it("explains itself on an SDK too old to have getClaims", async () => {
-    const supabase = createMockSupabase()
-    const store = createAuthStore({ supabase })
-
-    const { error } = await store.getState().getVerifiedClaims()
-
-    expect(error?.message).toMatch(/getClaims\(\) is unavailable/)
-  })
 })
