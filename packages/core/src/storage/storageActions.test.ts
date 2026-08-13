@@ -68,9 +68,24 @@ describe("getPublicUrl", () => {
     expect(url).toBe("https://example.com/file.png")
   })
 
-  it("throws on null data", () => {
-    const supabase = mockStorage({ getPublicUrl: { data: null } })
-    expect(() => getPublicUrl(supabase, "avatars", "pic.png")).toThrow("Failed to get public URL")
+  it("does not throw, because its five siblings return {data, error} and callers do not catch it", () => {
+    // This used to assert a throw on `{data: null}`. storage-js cannot produce
+    // that — `getPublicUrl` builds a URL string from the project URL, bucket and
+    // path, makes no request, and its own signature has no error channel. So
+    // the guard was error handling for an impossible scenario, and a real
+    // hazard: `hooks/useStorage.ts`'s `getUrl` does not catch, so the throw
+    // escaped into render.
+    const supabase = mockStorage()
+    expect(() => getPublicUrl(supabase, "avatars", "pic.png")).not.toThrow()
+  })
+
+  it("returns a URL for a bucket that does not exist, which 404s when fetched", () => {
+    // The same thing the raw API does. Refusing here would be Anchor inventing
+    // a failure mode Supabase does not have.
+    const supabase = mockStorage()
+    expect(getPublicUrl(supabase, "no-such-bucket", "pic.png")).toBe(
+      "https://example.com/file.png",
+    )
   })
 })
 

@@ -15,6 +15,76 @@ This first slice changes no library behaviour — it is the test infrastructure 
 of the work lands against, and it is here because the existing infrastructure
 could not fail.
 
+### Added
+
+- **`verifyOtp(supabase, params)`** verifies any OTP flow, not only a password
+  recovery one. `verifyRecoveryOTP` hardcodes `type: "recovery"` — correctly, it
+  is named for it — and was the only path in, so email confirmation after
+  `signup`, an `invite`, a `magiclink`, an `email_change`, an SMS `sms` or
+  `phone_change` code, and the `token_hash` form a callback link carries were all
+  unreachable. `verifyRecoveryOTP` keeps its signature and now delegates to it.
+
+- **`RealtimeManager.resume()`**, which `pause()`'s docstring has promised since
+  it was written and which did not exist. `pauseRealtimeOnBackground` was
+  therefore a one-way door: an app that backgrounded once stayed disconnected
+  until relaunch.
+
+- **`SyncLogger.realtimeError?(table, status, error?)`** (optional, so existing
+  loggers keep compiling), carrying the `err` argument `subscribe()` passes and
+  Anchor dropped.
+
+### Fixed
+
+- **Eight build entries had no `exports` subpath and were unreachable.**
+  `exports` is an allowlist, so `import { prefetch } from
+  '@drakkar.software/anchor/server'` threw `ERR_PACKAGE_PATH_NOT_EXPORTED`
+  however complete `dist/` was. Four of the eight were documented — three in
+  README's "Tree-Shakeable Imports" section and one in `prefetch.ts`'s own
+  docstring. Now exported: `query/queryBuilder`, `query/pagination`, `auth/gate`,
+  `functions`, `storage` (+ `storage/storageActions`), `server`
+  (+ `server/prefetch`), `cache`, `sync/incremental`.
+
+- **`TIMED_OUT` no longer reports as `"connecting"`.** It fell into the default
+  arm of the status map, and since no further status follows a timeout, a
+  channel that had given up looked like one still handshaking — permanently.
+
+- **`pause()` no longer leaves a channel to be removed twice.** It removed the
+  channel and left the entry in `subscriptions`, so a later `destroy()` — which
+  the auth gate fires on `SIGNED_OUT` — called `removeChannel` on a channel that
+  was already gone. `pause()` also now tells the store it disconnected instead
+  of changing its own field and notifying nobody.
+
+- **`getPublicUrl` no longer throws.** storage-js builds the URL from the project
+  URL, bucket and path — it makes no request and has no error channel — so the
+  `if (!data.publicUrl) throw` guarded a state nothing can produce. It was a real
+  hazard regardless: `hooks/useStorage.ts`'s `getUrl` does not catch, so the
+  throw escaped into render. The signature is unchanged.
+
+- **Edge Function errors keep their class and their response.**
+  `new Error(error.message)` collapsed `FunctionsHttpError`,
+  `FunctionsRelayError` and `FunctionsFetchError` into one — the distinction
+  between a function that ran and returned non-2xx, a relay that could not route
+  to it, and one never reached at all, which is what decides whether retrying is
+  sensible. It also discarded `FunctionsHttpError.context`, the `Response`
+  carrying the real HTTP status and the body the function wrote; `error.message`
+  on an HTTP error is only ever the generic "Edge Function returned a non-2xx
+  status code", so the diagnosis lived entirely in what was thrown away. The
+  body is read through `clone()`, so a caller reaching for the raw response
+  still finds it unread.
+
+- **`AnchorError` now reaches the last modules still raising bare `Error`s:**
+  `storage/storageActions`, `functions/edgeFunctions`, `mutation/batchOperations`,
+  `sync/incrementalSync`, `server/prefetch`, `query/aggregation` and
+  `auth/authCallbacks`. A caller can branch on `23505`, `23503`, `42501` or
+  `PGRST116` from a batch update, a prefetch or an aggregate, not only from a
+  single-row store write.
+
+- **A hand-built `{op: "match"}` filter is evaluated locally.** It fell through
+  `matchRow`'s default arm and included every row, so a local read showed rows
+  the server would not have returned. The `match()` helper deliberately still
+  expands to N `eq` descriptors — PostgREST's own `.match()` is the same sugar,
+  and `eq` is what `matchRow` can judge against a row it already holds.
+
 ### Testing
 
 - **The mock stopped agreeing with a store that ignores the filter.**

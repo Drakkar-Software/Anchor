@@ -35,6 +35,17 @@ export function matchRow(
 function matchOne(row: Record<string, unknown>, filter: FilterDescriptor<any>): boolean {
   const { column, op, value } = filter
 
+  // `match` carries its columns in `value`, not in `column`, so it has to be
+  // judged before the column check below — which would otherwise read a
+  // meaningless `column` and include the row. The `match()` helper expands to
+  // `eq` and never produces this, but a hand-built descriptor does.
+  if (op === "match") {
+    if (typeof value !== "object" || value === null) return true
+    return Object.entries(value as Record<string, unknown>).every(
+      ([col, want]) => !(col in row) || row[col] === want,
+    )
+  }
+
   if (!(column in row)) {
     // Present but null is a real value and must be judged; genuinely absent is
     // the pending-row case above.
@@ -79,7 +90,9 @@ function matchOne(row: Record<string, unknown>, filter: FilterDescriptor<any>): 
         ? actual.some((v) => value.includes(v))
         : true
     default:
-      // textSearch, match, not, or, filter — see the doc comment.
+      // textSearch, not, or, filter — see the doc comment. (`match` is handled
+      // above; it is the one of the five that carries values rather than
+      // PostgREST syntax, so it can be judged locally.)
       return true
   }
 }

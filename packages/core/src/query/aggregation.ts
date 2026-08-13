@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
+import { fromSupabaseError } from "../errors.js"
 
 export type AggregateFunction = "sum" | "avg" | "min" | "max" | "count"
 
@@ -33,7 +34,7 @@ export async function aggregateRpc<T = number>(
 ): Promise<AggregateResult<T>> {
   const functionName = rpcName ?? `zs_${fn}_${table}_${column}`
   const { data, error } = await supabase.rpc(functionName)
-  if (error) return { data: null, error: new Error(error.message) }
+  if (error) return { data: null, error: fromSupabaseError(error) }
   return { data: data as T, error: null }
 }
 

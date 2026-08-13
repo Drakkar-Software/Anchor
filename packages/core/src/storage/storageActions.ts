@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 import { withRetry, type RetryOptions } from "../utils/retry.js"
+import { fromSupabaseError } from "../errors.js"
 
 export type StorageResult<T> = {
   data: T | null
@@ -44,7 +45,7 @@ export async function uploadFile(
         contentType: options?.contentType,
         upsert: options?.upsert,
       })
-    if (error) throw new Error(error.message)
+    if (error) throw fromSupabaseError(error)
     return { data: { path: data.path }, error: null }
   }
 
@@ -68,7 +69,7 @@ export async function downloadFile(
 ): Promise<StorageResult<Blob>> {
   try {
     const { data, error } = await supabase.storage.from(bucket).download(path)
-    if (error) return { data: null, error: new Error(error.message) }
+    if (error) return { data: null, error: fromSupabaseError(error) }
     return { data, error: null }
   } catch (err) {
     return { data: null, error: err instanceof Error ? err : new Error(String(err)) }
@@ -77,6 +78,18 @@ export async function downloadFile(
 
 /**
  * Get the public URL for a file.
+ *
+ * Synchronous and infallible, which is why it alone among the six returns a
+ * bare string rather than `{data, error}`: storage-js builds the URL from the
+ * project URL, the bucket and the path — it makes no request, and its own
+ * signature has no error channel.
+ *
+ * It used to throw when `data.publicUrl` came back empty. Nothing can produce
+ * that, so the guard was error handling for an impossible scenario — but it was
+ * a real hazard anyway, because `hooks/useStorage.ts`'s `getUrl` does not catch,
+ * so any throw here escaped into render or an event handler. A caller passing a
+ * bucket that does not exist still gets a URL; it 404s when something fetches
+ * it, which is what the real API does too.
  */
 export function getPublicUrl(
   supabase: SupabaseClient,
@@ -84,9 +97,6 @@ export function getPublicUrl(
   path: string,
 ): string {
   const { data } = supabase.storage.from(bucket).getPublicUrl(path)
-  if (!data?.publicUrl) {
-    throw new Error(`Failed to get public URL for ${bucket}/${path}`)
-  }
   return data.publicUrl
 }
 
@@ -105,7 +115,7 @@ export async function createSignedUrl(
       .createSignedUrl(path, options.expiresIn, {
         download: options.download,
       })
-    if (error) return { data: null, error: new Error(error.message) }
+    if (error) return { data: null, error: fromSupabaseError(error) }
     return { data: { signedUrl: data.signedUrl }, error: null }
   } catch (err) {
     return { data: null, error: err instanceof Error ? err : new Error(String(err)) }
@@ -130,7 +140,7 @@ export async function listFiles(
         sortBy: options?.sortBy,
         search: options?.search,
       })
-    if (error) return { data: null, error: new Error(error.message) }
+    if (error) return { data: null, error: fromSupabaseError(error) }
     return {
       data: (data ?? []).map((f) => ({
         name: f.name,
@@ -154,7 +164,7 @@ export async function removeFiles(
 ): Promise<StorageResult<void>> {
   try {
     const { error } = await supabase.storage.from(bucket).remove(paths)
-    if (error) return { data: null, error: new Error(error.message) }
+    if (error) return { data: null, error: fromSupabaseError(error) }
     return { data: undefined as unknown as void, error: null }
   } catch (err) {
     return { data: null, error: err instanceof Error ? err : new Error(String(err)) }

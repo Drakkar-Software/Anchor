@@ -5,6 +5,7 @@ import {
   createSessionFromUrl,
   sendPasswordRecovery,
   verifyRecoveryOTP,
+  verifyOtp,
   resolveAuthRedirect,
 } from "./authCallbacks.js"
 
@@ -383,5 +384,88 @@ describe("resolveAuthRedirect", () => {
     expect(
       resolveAuthRedirect("magiclink", { recovery: "/settings/security", default: "/home" }),
     ).toBe("/home")
+  })
+})
+
+// ─── verifyOtp ────────────────────────────────────────────────────────────────
+
+describe("verifyOtp", () => {
+  // `verifyRecoveryOTP` hardcodes `type: "recovery"` — correctly, it is named
+  // for it — and was the only path in, so every other OTP flow was unreachable
+  // through Anchor.
+  it.each([
+    ["signup", { email: "u@example.com", token: "123456", type: "signup" as const }],
+    ["invite", { email: "u@example.com", token: "123456", type: "invite" as const }],
+    ["magiclink", { email: "u@example.com", token: "123456", type: "magiclink" as const }],
+    ["email_change", { email: "u@example.com", token: "123456", type: "email_change" as const }],
+  ])("passes %s straight through", async (_name, params) => {
+    const supabase = makeSupabase()
+    const { error } = await verifyOtp(supabase, params)
+
+    expect(supabase.auth.verifyOtp).toHaveBeenCalledWith(params)
+    expect(error).toBeNull()
+  })
+
+  it("verifies an SMS code, which needs a phone rather than an email", async () => {
+    const supabase = makeSupabase()
+    await verifyOtp(supabase, { phone: "+15551234567", token: "123456", type: "sms" })
+
+    expect(supabase.auth.verifyOtp).toHaveBeenCalledWith({
+      phone: "+15551234567",
+      token: "123456",
+      type: "sms",
+    })
+  })
+
+  it("verifies a token_hash, where no address comes back with the link", async () => {
+    const supabase = makeSupabase()
+    await verifyOtp(supabase, { token_hash: "abc123", type: "recovery" })
+
+    expect(supabase.auth.verifyOtp).toHaveBeenCalledWith({
+      token_hash: "abc123",
+      type: "recovery",
+    })
+  })
+
+  it("returns the session on success", async () => {
+    const { session, error } = await verifyOtp(makeSupabase(), {
+      email: "u@example.com",
+      token: "123456",
+      type: "signup",
+    })
+
+    expect(session).toBeDefined()
+    expect(error).toBeNull()
+  })
+
+  it("reports a refused code as an error and never as a signed-in null session", async () => {
+    const supabase = makeSupabase({
+      verifyOtp: vi
+        .fn()
+        .mockResolvedValue({ data: { session: null }, error: { message: "Token has expired", code: "otp_expired" } }),
+    })
+
+    const { session, error } = await verifyOtp(supabase, {
+      email: "u@example.com",
+      token: "000000",
+      type: "signup",
+    })
+
+    expect(session).toBeNull()
+    expect(error?.message).toBe("Token has expired")
+    // Routed through AnchorError, so the caller can branch on the code rather
+    // than on the message text.
+    expect((error as { code?: string })?.code).toBe("otp_expired")
+  })
+
+  it("still backs verifyRecoveryOTP, which keeps its recovery type", async () => {
+    const supabase = makeSupabase()
+    await verifyRecoveryOTP(supabase, "u@example.com", "123456")
+
+    expect(supabase.auth.verifyOtp).toHaveBeenCalledWith({
+      email: "u@example.com",
+      token: "123456",
+      type: "recovery",
+    })
   })
 })

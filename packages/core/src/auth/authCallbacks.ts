@@ -1,4 +1,5 @@
 import type { SupabaseClient, Session } from "@supabase/supabase-js"
+import { fromSupabaseError } from "../errors.js"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -172,7 +173,7 @@ export async function createSessionFromUrl(
       access_token: parsed.accessToken,
       refresh_token: parsed.refreshToken,
     })
-    if (error) throw new Error(error.message)
+    if (error) throw fromSupabaseError(error)
     if (!data.session) throw new Error("Session could not be established")
     return { session: data.session, type }
   }
@@ -190,7 +191,7 @@ export async function createSessionFromUrl(
       parsed.code,
       parsed.flowId ? { flowId: parsed.flowId } : undefined,
     )
-    if (error) throw new Error(error.message)
+    if (error) throw fromSupabaseError(error)
     if (!data.session) throw new Error("Session could not be established")
     return { session: data.session, type }
   }
@@ -247,7 +248,7 @@ export async function sendPasswordRecovery(
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
     redirectTo: options?.redirectTo,
   })
-  return { error: error ? new Error(error.message) : null }
+  return { error: error ? fromSupabaseError(error) : null }
 }
 
 /**
@@ -264,13 +265,57 @@ export async function verifyRecoveryOTP(
   email: string,
   otp: string,
 ): Promise<{ session: Session | null; error: Error | null }> {
-  const { data, error } = await supabase.auth.verifyOtp({
-    email,
-    token: otp,
-    type: "recovery",
-  })
-  return {
-    session: data?.session ?? null,
-    error: error ? new Error(error.message) : null,
-  }
+  return verifyOtp(supabase, { email, token: otp, type: "recovery" })
+}
+
+/** Every OTP flow Supabase can verify, by which identifier it arrives on. */
+export type VerifyOtpParams =
+  | {
+      email: string
+      token: string
+      type: "signup" | "invite" | "magiclink" | "recovery" | "email_change" | "email"
+      options?: { redirectTo?: string; captchaToken?: string }
+    }
+  | {
+      phone: string
+      token: string
+      type: "sms" | "phone_change"
+      options?: { captchaToken?: string }
+    }
+  | {
+      /** From a `?token_hash=` callback link, where no address is echoed back. */
+      token_hash: string
+      type: "signup" | "invite" | "magiclink" | "recovery" | "email_change" | "email"
+      options?: { redirectTo?: string; captchaToken?: string }
+    }
+
+/**
+ * Verify any OTP, not only a password recovery one.
+ *
+ * `verifyRecoveryOTP` hardcodes `type: "recovery"` — correctly, since that is
+ * what its name promises — and it was the only path in. That left every other
+ * flow unreachable through Anchor: email confirmation after `signup`, an
+ * `invite`, a `magiclink`, an `email_change`, an SMS `sms` or `phone_change`
+ * code, and the `token_hash` form a callback link carries when no address comes
+ * back with it.
+ *
+ * @example
+ * // Confirm a sign-up from a 6-digit code
+ * const { session } = await verifyOtp(supabase, {
+ *   email, token: code, type: 'signup',
+ * })
+ *
+ * @example
+ * // A `?token_hash=...&type=recovery` link, verified server-side
+ * const { session } = await verifyOtp(supabase, { token_hash, type: 'recovery' })
+ */
+export async function verifyOtp(
+  supabase: SupabaseClient,
+  params: VerifyOtpParams,
+): Promise<{ session: Session | null; error: Error | null }> {
+  const { data, error } = await supabase.auth.verifyOtp(params as never)
+  // Error first: `data.session` is null on failure and reading it first reports
+  // a refused code as a successful sign-in with no session.
+  if (error) return { session: null, error: fromSupabaseError(error) }
+  return { session: data?.session ?? null, error: null }
 }

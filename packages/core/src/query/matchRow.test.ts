@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest"
 import { matchRow } from "./matchRow.js"
+import { match } from "./filters.js"
 
 const row = {
   id: 1,
@@ -94,5 +95,41 @@ describe("matchRow", () => {
   it("does not crash on a type mismatch, it includes", () => {
     expect(matchRow(row, [{ column: "count", op: "like", value: "5%" }])).toBe(true)
     expect(matchRow(row, [{ column: "title", op: "contains", value: "x" }])).toBe(true)
+  })
+})
+
+describe("matchRow with a match descriptor", () => {
+  // The `match()` helper expands to N `eq`s and never emits `op: "match"`, so
+  // this shape only arrives hand-built. It used to fall through to the default
+  // arm and include every row, which for a local read means showing rows the
+  // server would not have returned.
+  const row = { id: 1, status: "open", priority: 2 }
+
+  it("keeps a row whose every named column agrees", () => {
+    expect(matchRow(row, [{ column: "", op: "match", value: { status: "open", priority: 2 } }])).toBe(
+      true,
+    )
+  })
+
+  it("drops a row where one named column disagrees", () => {
+    expect(matchRow(row, [{ column: "", op: "match", value: { status: "open", priority: 9 } }])).toBe(
+      false,
+    )
+  })
+
+  it("keeps a pending row that lacks the column entirely", () => {
+    // Same rule as every other operator: an optimistic insert holds only what
+    // the caller passed, and must not vanish from the screen that created it.
+    expect(matchRow({ id: 1 }, [{ column: "", op: "match", value: { status: "open" } }])).toBe(true)
+  })
+})
+
+describe("the match() helper's expansion", () => {
+  it("emits eq descriptors, which matchRow can judge", () => {
+    const filters = match<{ status: string; priority: number }>({ status: "open", priority: 2 })
+
+    expect(filters.map((f) => f.op)).toEqual(["eq", "eq"])
+    expect(matchRow({ id: 1, status: "open", priority: 2 }, filters)).toBe(true)
+    expect(matchRow({ id: 2, status: "done", priority: 2 }, filters)).toBe(false)
   })
 })

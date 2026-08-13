@@ -89,3 +89,51 @@ describe("removeMany", () => {
     expect(store.getState().records.size).toBe(1)
   })
 })
+
+describe("batch operations carry the Postgres error code", () => {
+  // These two were the last write-path sites still throwing
+  // `new Error(error.message)`, so a caller could only branch on message text.
+  // The mock's `_setError` is what makes this assertable at all — before it
+  // there was no way to fail a batch from the read/write path.
+
+  it("updateMany surfaces the code, not just the message", async () => {
+    const supabase = createMockSupabase({ todos: [{ id: 1, title: "A", completed: false }] })
+    const store = createTableStore<any, Todo, any, any>({ supabase, table: "todos" })
+    await store.getState().fetch()
+    supabase._setError("todos", "update", { message: "new row violates row-level security policy", code: "42501" })
+
+    await expect(
+      updateMany(supabase, "todos", "id", store, [{ column: "completed", op: "eq", value: false }], {
+        completed: true,
+      }),
+    ).rejects.toMatchObject({ code: "42501" })
+  })
+
+  it("removeMany surfaces the code too", async () => {
+    const supabase = createMockSupabase({ todos: [{ id: 1, title: "A", completed: true }] })
+    const store = createTableStore<any, Todo, any, any>({ supabase, table: "todos" })
+    await store.getState().fetch()
+    supabase._setError("todos", "delete", { message: "update or delete violates foreign key constraint", code: "23503" })
+
+    await expect(
+      removeMany(supabase, "todos", "id", store, [{ column: "completed", op: "eq", value: true }]),
+    ).rejects.toMatchObject({ code: "23503" })
+  })
+
+  it("still succeeds and rolls nothing back when there is no error", async () => {
+    // The paired positive: `rejects` assertions alone would also pass against a
+    // batch that always throws.
+    const supabase = createMockSupabase({ todos: [{ id: 1, title: "A", completed: false }] })
+    const store = createTableStore<any, Todo, any, any>({ supabase, table: "todos" })
+    await store.getState().fetch()
+
+    const result = await updateMany(
+      supabase, "todos", "id", store,
+      [{ column: "completed", op: "eq", value: false }],
+      { completed: true },
+    )
+
+    expect(result).toHaveLength(1)
+    expect(store.getState().records.get(1)).toMatchObject({ completed: true })
+  })
+})

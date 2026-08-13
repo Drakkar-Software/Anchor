@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 import type { FetchOptions, FilterDescriptor, SortDescriptor } from "../types.js"
 import { fromTable, applyFilters, applySort } from "../query/queryExecutor.js"
+import { fromSupabaseError } from "../errors.js"
 
 export type PrefetchResult<Row> = {
   data: Row[]
@@ -57,7 +58,7 @@ export async function prefetch<Row = Record<string, unknown>>(
     const { data, error } = await builder
 
     if (error) {
-      return { data: [], error: new Error(error.message), fetchedAt: Date.now() }
+      return { data: [], error: fromSupabaseError(error), fetchedAt: Date.now() }
     }
 
     return { data: (data ?? []) as Row[], error: null, fetchedAt: Date.now() }

@@ -18,7 +18,7 @@ function createMockSupabase() {
           return ch
         },
         _listeners: listeners,
-        _fireStatus: (s: string) => statusCallback?.(s),
+        _fireStatus: (s: string, err?: Error) => statusCallback?.(s, err),
         _fireEvent: (payload: any) => {
           for (const l of listeners) l.callback(payload)
         },
@@ -289,5 +289,144 @@ describe("RealtimeManager", () => {
         onStatus: vi.fn(),
       }),
     ).toThrow(/not supported/)
+  })
+})
+
+describe("RealtimeManager status mapping", () => {
+  function subscribeOne(supabase: any, onStatus = vi.fn(), logger?: any) {
+    const manager = new RealtimeManager({ supabase, logger })
+    manager.subscribe({
+      table: "todos",
+      primaryKey: "id",
+      onInsert: vi.fn(),
+      onUpdate: vi.fn(),
+      onDelete: vi.fn(),
+      onStatus,
+    })
+    return { manager, onStatus, channel: supabase._channels[0] }
+  }
+
+  it("reports TIMED_OUT as an error, not as still connecting", () => {
+    const { onStatus, channel } = subscribeOne(createMockSupabase())
+
+    channel._fireStatus("TIMED_OUT")
+
+    // No further status follows a timeout, so "connecting" was permanent.
+    expect(onStatus).toHaveBeenLastCalledWith("error")
+  })
+
+  it("still reports a genuinely in-flight status as connecting", () => {
+    // The paired positive: mapping everything to "error" would also satisfy the
+    // assertion above.
+    const { onStatus, channel } = subscribeOne(createMockSupabase())
+
+    channel._fireStatus("JOINING")
+
+    expect(onStatus).toHaveBeenLastCalledWith("connecting")
+  })
+
+  it("keeps CHANNEL_ERROR, CLOSED and SUBSCRIBED where they were", () => {
+    const { onStatus, channel } = subscribeOne(createMockSupabase())
+
+    channel._fireStatus("CHANNEL_ERROR")
+    expect(onStatus).toHaveBeenLastCalledWith("error")
+    channel._fireStatus("CLOSED")
+    expect(onStatus).toHaveBeenLastCalledWith("disconnected")
+    channel._fireStatus("SUBSCRIBED")
+    expect(onStatus).toHaveBeenLastCalledWith("connected")
+  })
+
+  it("passes subscribe()'s err argument to the logger instead of dropping it", () => {
+    const logger = { realtimeError: vi.fn(), realtimeEvent: vi.fn() }
+    const { channel } = subscribeOne(createMockSupabase(), vi.fn(), logger)
+    const err = new Error("channel refused")
+
+    channel._fireStatus("CHANNEL_ERROR", err)
+
+    expect(logger.realtimeError).toHaveBeenCalledWith("todos", "CHANNEL_ERROR", err)
+  })
+
+  it("does not log an error for a healthy status", () => {
+    const logger = { realtimeError: vi.fn(), realtimeEvent: vi.fn() }
+    const { channel } = subscribeOne(createMockSupabase(), vi.fn(), logger)
+
+    channel._fireStatus("SUBSCRIBED")
+
+    expect(logger.realtimeError).not.toHaveBeenCalled()
+  })
+})
+
+describe("RealtimeManager pause and resume", () => {
+  function subscribeOne(supabase: any) {
+    const manager = new RealtimeManager({ supabase })
+    const onStatus = vi.fn()
+    manager.subscribe({
+      table: "todos",
+      primaryKey: "id",
+      onInsert: vi.fn(),
+      onUpdate: vi.fn(),
+      onDelete: vi.fn(),
+      onStatus,
+    })
+    return { manager, onStatus }
+  }
+
+  it("resume() resubscribes what pause() tore down", () => {
+    const supabase = createMockSupabase()
+    const { manager, onStatus } = subscribeOne(supabase)
+    expect(supabase._channels).toHaveLength(1)
+
+    manager.pause()
+    expect(supabase.removeChannel).toHaveBeenCalledTimes(1)
+    expect(manager.getStatus().get("todos")).toBe("disconnected")
+
+    manager.resume()
+
+    // A second channel was opened, and the table is connected again.
+    expect(supabase._channels).toHaveLength(2)
+    expect(manager.getStatus().get("todos")).toBe("connected")
+    expect(onStatus).toHaveBeenLastCalledWith("connected")
+  })
+
+  it("tells the store it went away, so the UI can say so", () => {
+    const supabase = createMockSupabase()
+    const { manager, onStatus } = subscribeOne(supabase)
+
+    manager.pause()
+
+    // pause() used to change `sub.status` and notify nobody.
+    expect(onStatus).toHaveBeenLastCalledWith("disconnected")
+  })
+
+  it("does not remove an already-paused channel a second time on destroy", () => {
+    const supabase = createMockSupabase()
+    const { manager } = subscribeOne(supabase)
+
+    manager.pause()
+    manager.destroy()
+
+    // pause() left the entry in `subscriptions`, so destroy() — which the auth
+    // gate fires on SIGNED_OUT — handed the same channel back twice.
+    expect(supabase.removeChannel).toHaveBeenCalledTimes(1)
+  })
+
+  it("is a no-op to pause twice", () => {
+    const supabase = createMockSupabase()
+    const { manager } = subscribeOne(supabase)
+
+    manager.pause()
+    manager.pause()
+
+    expect(supabase.removeChannel).toHaveBeenCalledTimes(1)
+  })
+
+  it("resume() does nothing when nothing was paused", () => {
+    const supabase = createMockSupabase()
+    const { manager } = subscribeOne(supabase)
+
+    manager.resume()
+
+    expect(supabase._channels).toHaveLength(1)
+    expect(supabase.removeChannel).not.toHaveBeenCalled()
   })
 })

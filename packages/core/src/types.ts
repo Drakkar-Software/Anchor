@@ -586,6 +586,15 @@ export interface SyncLogger {
   queueFlushSuccess(succeeded: number, failed: number): void
   conflict(table: string, id: string | number): void
   realtimeEvent(table: string, event: string): void
+  /**
+   * A channel that failed, timed out or closed.
+   *
+   * `subscribe()`'s callback carries a second `err` argument that Anchor used to
+   * drop on the floor, so a `CHANNEL_ERROR` reached the store as a bare status
+   * with no way to find out why. Optional, so every logger written against this
+   * interface keeps compiling.
+   */
+  realtimeError?(table: string, status: string, error?: Error): void
 }
 
 export const noopLogger: SyncLogger = {
@@ -600,6 +609,7 @@ export const noopLogger: SyncLogger = {
   queueFlushSuccess() {},
   conflict() {},
   realtimeEvent() {},
+  realtimeError() {},
 }
 
 export const consoleLogger: SyncLogger = {

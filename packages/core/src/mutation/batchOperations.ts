@@ -3,6 +3,7 @@ import type { StoreApi } from "zustand"
 import type { TableStore, TrackedRow, FilterDescriptor } from "../types.js"
 import { randomId } from "../types.js"
 import { fromTable, applyFilters } from "../query/queryExecutor.js"
+import { fromSupabaseError } from "../errors.js"
 
 /**
  * Update multiple rows matching filters.
@@ -64,7 +65,7 @@ export async function updateMany<
     builder = applyFilters(builder, filters as FilterDescriptor[])
     const { data, error } = await builder.select("*")
 
-    if (error) throw new Error(error.message)
+    if (error) throw fromSupabaseError(error)
 
     // Confirm with server response
     const serverRows = (data ?? []) as Row[]
@@ -147,7 +148,7 @@ export async function removeMany<
     builder = applyFilters(builder, filters as FilterDescriptor[])
     const { error } = await builder
 
-    if (error) throw new Error(error.message)
+    if (error) throw fromSupabaseError(error)
   } catch (err) {
     // Rollback — re-insert rows into current order (preserves concurrent changes)
     store.setState((prev: any) => {

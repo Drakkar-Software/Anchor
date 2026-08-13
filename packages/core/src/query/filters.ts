@@ -123,7 +123,19 @@ export function textSearch<Row, K extends string & keyof Row>(
   return createFilter<Row>(column, "textSearch", { query, ...options })
 }
 
-/** Match: shorthand for multiple eq filters */
+/**
+ * Match: shorthand for multiple eq filters.
+ *
+ * Deliberately returns N `eq` descriptors rather than one `op: "match"`, which
+ * is why `applyFilters`' `case "match"` is unreachable from here. PostgREST's
+ * own `.match()` is sugar for the same N equality predicates, so the two are
+ * identical server-side — and the expansion is strictly better locally, because
+ * `matchRow` can evaluate `eq` against a row it already holds. A single
+ * `op: "match"` descriptor used to be opaque to it and included every row.
+ *
+ * The `"match"` operator is still honoured end to end for a hand-built
+ * descriptor; it is just not what this helper emits.
+ */
 export function match<Row>(
   query: Partial<Row>,
 ): FilterDescriptor<Row>[] {

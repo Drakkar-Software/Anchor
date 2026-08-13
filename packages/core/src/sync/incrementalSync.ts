@@ -3,6 +3,7 @@ import type { StoreApi } from "zustand"
 import type { TableStore, TrackedRow, ConflictConfig, ConflictContext } from "../types.js"
 import { fromTable, applyFilters } from "../query/queryExecutor.js"
 import { resolveConflict } from "../mutation/conflictResolution.js"
+import { fromSupabaseError } from "../errors.js"
 
 export type IncrementalSyncOptions = {
   /** Column to track for delta sync (default: "updated_at") */
@@ -55,7 +56,7 @@ export async function incrementalSync<
   const { data, error } = await builder
 
   if (error) {
-    throw new Error(error.message)
+    throw fromSupabaseError(error)
   }
 
   const rows = (data ?? []) as Row[]
