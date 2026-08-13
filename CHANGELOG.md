@@ -1,5 +1,51 @@
 # Changelog
 
+## [2.2.1] - 2026-08-13
+
+Three fixes on the write path 2.2.0 opened, found by reading that release
+against its first real consumer. Each is on a path that had no test.
+
+### Fixed
+
+- **A signed-out queue no longer replays its writes as `anon`.** `flush()`
+  skipped a mutation belonging to a *different* user and ran every mutation when
+  there was no current user at all: the filter's middle arm was
+  `!this.currentUserId`. That is the state the auth gate creates on
+  `SIGNED_OUT` — which supabase-js emits by itself once a refresh token fails to
+  renew, the ordinary way a long offline session ends. The queued writes went
+  out with no JWT, RLS refused them `42501`, and a refusal is correctly not
+  retried as transport, so each was rolled back and discarded. 2.2.0's headline
+  behaviour change, not clearing the queue on sign-out, only holds with this:
+  the writes it stopped deleting were being destroyed one HTTP round trip later.
+  A tagged mutation now waits for its own user; untagged ones still flush for
+  anyone, which is what an `auth: false` deployment needs.
+
+  Because waiting needs an end, `setupAuthGate` schedules a flush on `SIGNED_IN`
+  and `INITIAL_SESSION` when the queue is dirty. `startAutoFlush` only reacts to
+  a connectivity *transition*, so a queue that hydrated at boot, or that was held
+  while signed out, would otherwise sit untouched until the network happened to
+  change state.
+
+- **An abandoned write no longer resurrects a row the store has let go.**
+  `onRollback` restored `rollbackSnapshot` whenever the record was absent.
+  Absent means two different things: for a `DELETE` it is the optimistic state
+  and restoring is exactly the undo, but for an `INSERT`, `UPSERT` or `UPDATE` it
+  means the optimistic row is already gone — cleared at sign-out, dropped by a
+  `replace` refetch — and there is nothing left to undo. `setRecord` re-adds the
+  id to `records` *and* `order` and persists it, so a previous user's row came
+  back to the screen and to disk minutes after `clearAll()` removed it, and a
+  `merge` cache then kept it through the next user's fetch. The guard reads the
+  operation now.
+
+- **`crypto.randomUUID()` is guarded everywhere it is called.** Four sites called
+  it bare — the mutation ids in `update` and `upsert`, a queued mutation's id,
+  and `batchOperations` — while `createTempId` had guarded it since it was
+  written. Hermes ships no WebCrypto, and `crypto.randomUUID` is equally absent
+  from plain HTTP in a browser, so on a device without a polyfill the whole write
+  path threw `crypto.randomUUID is not a function` before any of the offline
+  machinery could run. All of them go through one `randomId()` now, with the
+  fallback `createTempId` already had.
+
 ## [2.2.0] - 2026-08-12
 
 ### Features

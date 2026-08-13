@@ -400,18 +400,42 @@ export type QueuedMutation = {
   upsertOptions?: UpsertOptions
 }
 
+// ─── Identifiers ─────────────────────────────────────────────────────
+
+/**
+ * A UUID: WebCrypto's where there is one, `Math.random`'s where there is not.
+ *
+ * The fallback is not decoration. Hermes ships no WebCrypto, so a React Native
+ * app without a polyfill has no `crypto` global at all, and `crypto.randomUUID`
+ * is equally absent from a non-secure browser context (plain HTTP anywhere but
+ * localhost). `createTempId` guarded for exactly that from the start — and then
+ * four other sites called `crypto.randomUUID()` bare: the mutation ids in
+ * `update` and `upsert`, a queued mutation's own id, and `batchOperations`.
+ * Between them that is the whole write path, offline or not, throwing
+ * `crypto.randomUUID is not a function` on a device before any of this
+ * machinery could run. One helper now, so the guard cannot be half-applied
+ * again.
+ *
+ * These ids are local bookkeeping — a compare-and-swap token for a rollback, a
+ * key for a queue entry. None is a security boundary, and none is a value the
+ * server stores, so `Math.random` is an acceptable source when the real one is
+ * missing. Do not reuse this for anything that needs to be unguessable.
+ */
+export function randomId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID()
+  }
+  const hex = () => Math.floor(Math.random() * 16).toString(16)
+  const s = (n: number) => Array.from({ length: n }, hex).join("")
+  return `${s(8)}-${s(4)}-4${s(3)}-${s(4)}-${s(12)}`
+}
+
 // ─── Temp ID Management ──────────────────────────────────────────────
 
 export const TEMP_ID_PREFIX = "_temp:" as const
 
 export function createTempId(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return `${TEMP_ID_PREFIX}${crypto.randomUUID()}`
-  }
-  // Fallback for non-secure contexts (HTTP, some React Native environments)
-  const hex = () => Math.floor(Math.random() * 16).toString(16)
-  const s = (n: number) => Array.from({ length: n }, hex).join("")
-  return `${TEMP_ID_PREFIX}${s(8)}-${s(4)}-4${s(3)}-${s(4)}-${s(12)}`
+  return `${TEMP_ID_PREFIX}${randomId()}`
 }
 
 export function isTempId(id: unknown): boolean {

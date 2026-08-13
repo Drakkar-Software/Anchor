@@ -644,6 +644,37 @@ describe("chains that create a row, and rows that leave the store", () => {
     expect(todos.getState().getQueueSize()).toBe(0)
   })
 
+  it("does not put a cleared row back when an abandoned update rolls back", async () => {
+    // The undo of an optimistic apply that is no longer there is nothing, not a
+    // re-insert. `setRecord` adds the id to `records` AND `order` and persists
+    // it, so restoring the snapshot here would return a previous user's row to
+    // the screen and to disk minutes after sign-out took it off both — and a
+    // `merge` cache would then keep it through the next user's fetch.
+    //
+    // "says out loud that a write was abandoned", above, is why this cannot be
+    // a bare `if (!current) return`: for a DELETE an absent row is the
+    // optimistic state, and putting the snapshot back IS the undo. The guard
+    // has to read the operation.
+    const { supabase, network, todos } = makeStores({
+      rows: [{ id: 1, title: "A" }],
+      maxRetries: 0,
+    })
+    await todos.getState().fetch()
+    network.setOnline(false)
+    await todos.getState().update(1, { title: "B" } as any)
+
+    todos.getState().clearAll()
+
+    network.setOnline(true)
+    vi.spyOn(supabase, "from").mockImplementation(
+      () => stubBuilder(refusal("42501")) as any,
+    )
+    await todos.getState().flushQueue()
+
+    expect(todos.getState().records.size).toBe(0)
+    expect(todos.getState().order).toHaveLength(0)
+  })
+
   it("keeps a drained row reachable when the store was cleared under it", async () => {
     // Sign-out clears the stores and — since 2.2.0 — no longer clears the
     // queue, so a queued write can outlive the rows it was made against. The

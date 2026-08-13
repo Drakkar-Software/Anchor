@@ -73,16 +73,38 @@ export function setupAuthGate(
         // The queue is deliberately NOT cleared here. It used to be, on the
         // grounds of "orphaned mutations executing under the wrong user" —
         // which `enqueue` tagging every mutation with `userId` and `flush`
-        // filtering on the current one already prevent, without discarding
-        // anything. Once `offlineQueue.queueWrites` gave the queue real
-        // producers, clearing it became the destructive half: supabase-js emits
-        // SIGNED_OUT on its own when a refresh token finally fails to renew,
-        // which is how a long offline session ends, so every unsent write would
-        // be dropped from memory and from disk without ever running — no error,
-        // no `onRollback`, and the pre-edit server state waiting at the next
-        // sign-in as though the work had never happened. `clearQueue()` remains
-        // public for a caller who does want that.
+        // skipping every tag that is not the current user's already prevent,
+        // without discarding anything. Once `offlineQueue.queueWrites` gave the
+        // queue real producers, clearing it became the destructive half:
+        // supabase-js emits SIGNED_OUT on its own when a refresh token finally
+        // fails to renew, which is how a long offline session ends, so every
+        // unsent write would be dropped from memory and from disk without ever
+        // running — no error, no `onRollback`, and the pre-edit server state
+        // waiting at the next sign-in as though the work had never happened.
+        // `clearQueue()` remains public for a caller who does want that.
+        //
+        // What makes leaving it here safe is the flush filter refusing to run a
+        // tagged mutation while there is no current user. That was NOT true
+        // when this comment was first written: `!this.currentUserId` was an
+        // eligibility arm, so a signed-out queue replayed everything as `anon`
+        // and RLS refused it into a rollback. Both halves are load-bearing —
+        // see `OfflineQueue.setUserId`.
         void offlineQueue
+      }
+
+      // A queue holding this user's writes has to be told its user is back.
+      // `startAutoFlush` only reacts to a connectivity *transition*, so a queue
+      // that hydrated at boot, or that was skipped while signed out, would
+      // otherwise sit untouched until the network happened to change state.
+      // INITIAL_SESSION as much as SIGNED_IN: a relaunch with a stored session
+      // emits only the former, and that is the ordinary way a write queued in
+      // the previous run gets its chance.
+      if (
+        (event === "SIGNED_IN" || event === "INITIAL_SESSION") &&
+        session &&
+        offlineQueue?.isDirty
+      ) {
+        offlineQueue.scheduleFlush()
       }
 
       if (event === "SIGNED_IN" && refetchOnSignIn) {

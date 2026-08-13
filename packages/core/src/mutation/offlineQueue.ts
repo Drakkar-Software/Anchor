@@ -79,9 +79,22 @@ export class OfflineQueue {
   // ── User Context ─────────────────────────────────────────────────
 
   /**
-   * Set the current user ID. Mutations enqueued after this call
-   * will be tagged with this userId. On flush, only mutations
-   * matching the current userId (or untagged) are executed.
+   * Set the current user ID. Mutations enqueued after this call are tagged with
+   * it, and on flush only mutations carrying this same id — or no id at all —
+   * are executed.
+   *
+   * **`undefined` means nobody is signed in, and a tagged mutation therefore
+   * waits rather than running.** It used to mean the opposite: the filter read
+   * `!m.userId || !this.currentUserId || m.userId === this.currentUserId`, so
+   * clearing the user made every tagged mutation eligible. That is precisely
+   * the state right after SIGNED_OUT — supabase-js emits it on its own once a
+   * refresh token finally fails to renew, which is how a long offline session
+   * ends — and the queue would then replay a signed-in user's writes with no
+   * JWT, as `anon`, where RLS refuses them `42501`. A refusal is correctly not
+   * a transport failure, so each one burnt its retry budget and was rolled
+   * back: the writes the auth gate stopped deleting were destroyed a slower
+   * way. Untagged mutations still flush for anyone, which is what an
+   * `auth: false` deployment needs.
    */
   setUserId(userId: string | undefined): void {
     this.currentUserId = userId
@@ -246,8 +259,10 @@ export class OfflineQueue {
       const pending = this.queue.filter(
         (m) =>
           (m.status === "pending" || m.status === "failed") &&
-          // Skip mutations belonging to a different user
-          (!m.userId || !this.currentUserId || m.userId === this.currentUserId),
+          // Skip mutations belonging to a different user — and to no current
+          // user at all, which is a signed-out session, not a wildcard. See
+          // `setUserId`.
+          (!m.userId || m.userId === this.currentUserId),
       )
 
       if (pending.length === 0) {

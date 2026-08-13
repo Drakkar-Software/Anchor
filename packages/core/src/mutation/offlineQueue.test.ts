@@ -359,6 +359,50 @@ describe("OfflineQueue", () => {
       expect(executor).toHaveBeenCalledTimes(1)
       expect(result.succeeded).toHaveLength(1)
     })
+
+    it("holds a tagged mutation while nobody is signed in", async () => {
+      // No current user is a signed-out session, not a wildcard. The filter
+      // used to read `!m.userId || !this.currentUserId || m.userId === ...`,
+      // whose middle arm made every tagged mutation eligible the moment the
+      // gate cleared the user — which is exactly what SIGNED_OUT does, and
+      // supabase-js emits that by itself once a refresh token fails to renew.
+      // The replay then goes out with no JWT, as `anon`, RLS refuses it 42501,
+      // and a refusal is correctly not retried as transport: the write is
+      // rolled back and gone. Not clearing the queue on sign-out only helps if
+      // the queue also declines to run it.
+      const queue = new OfflineQueue()
+      const executor = vi.fn().mockResolvedValue({})
+      queue.registerExecutor("todos", executor)
+
+      queue.setUserId("user-A")
+      await queue.enqueue(createMutation({ id: "m1" }))
+
+      queue.setUserId(undefined)
+      const result = await queue.flush()
+
+      expect(executor).not.toHaveBeenCalled()
+      expect(result.succeeded).toHaveLength(0)
+      expect(queue.pendingCount).toBe(1)
+    })
+
+    it("runs it once its own user is back", async () => {
+      // The other half: holding it forever would be its own kind of data loss.
+      const queue = new OfflineQueue()
+      const executor = vi.fn().mockResolvedValue({})
+      queue.registerExecutor("todos", executor)
+
+      queue.setUserId("user-A")
+      await queue.enqueue(createMutation({ id: "m1" }))
+      queue.setUserId(undefined)
+      await queue.flush()
+
+      queue.setUserId("user-A")
+      const result = await queue.flush()
+
+      expect(executor).toHaveBeenCalledTimes(1)
+      expect(result.succeeded).toHaveLength(1)
+      expect(queue.pendingCount).toBe(0)
+    })
   })
 
   describe("auto-flush on reconnect", () => {

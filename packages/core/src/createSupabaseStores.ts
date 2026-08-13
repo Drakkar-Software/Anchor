@@ -113,6 +113,18 @@ export function createSupabaseStores<
      * carrying no `_anchor_optimistic` flag is the server's answer, not ours to
      * undo.
      *
+     * **A row that is not there at all means two different things, and the
+     * operation is what tells them apart.** For a DELETE it is the expected
+     * state: `remove` takes the row out of `records` and `order` outright
+     * rather than leaving a pending tombstone, so the snapshot going back is
+     * exactly the undo. For an INSERT, UPSERT or UPDATE it means the optimistic
+     * row this mutation created is already gone — cleared at sign-out, dropped
+     * by a `replace` refetch — and there is nothing left to undo. Writing the
+     * snapshot there does not restore anything: `setRecord` re-adds the id to
+     * `records` AND `order` and persists it, so a previous user's row would
+     * return to the screen and to disk minutes after `clearAll()` removed it,
+     * and a `merge` cache would then keep it through the next user's fetch.
+     *
      * It is also the last word on a write, so it says so. Nothing else reports
      * that a queued mutation was abandoned, and a deleted row quietly
      * reappearing in a list some minutes later is not something to leave
@@ -129,6 +141,7 @@ export function createSupabaseStores<
       const id = Object.values(mutation.primaryKey)[0] as string | number
       const current = store.getState().records.get(id)
       if (current && !current._anchor_optimistic) return
+      if (!current && mutation.operation !== "DELETE") return
       const snapshot = mutation.rollbackSnapshot
       if (snapshot) store.getState().setRecord(id, snapshot as any)
       else if (current) store.getState().removeRecord(id)
