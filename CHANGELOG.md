@@ -1,5 +1,33 @@
 # Changelog
 
+## [2.2.3] - 2026-08-13
+
+Two more on the queue path, found by reading 2.2.1 and 2.2.2 back. The first is
+the same shape as the bug 2.2.2 fixed: work that is queued, retained, and then
+never started, because the trigger that would have started it was dropped.
+
+### Fixed
+
+- **A write enqueued during a flush is no longer stranded.** `flush()` declines
+  when one is already running, and the request was discarded rather than
+  remembered. The running flush cannot do that work: it filters `pending` before
+  its first `await`, so a mutation enqueued mid-flight is in neither batch. Since
+  2.2.1 only two other things start a drain — a connectivity transition and an
+  auth event — and a signed-in device sitting on wifi produces neither, so the
+  write waited for a relaunch. A declined flush is now re-armed when the running
+  one finishes, and only if the queue is still dirty and no retry timer is
+  already pending, so an exponential backoff is not replaced by the debounce.
+
+- **Coalescing no longer merges two users' writes to the same row.** `compact()`
+  keyed on `table` and primary key alone, while `flush()` filters on `userId` —
+  so the isolation the filter provides was defeated one line earlier.
+  `UPDATE + UPDATE` merges the newer payload into the *older* mutation, which
+  keeps the older mutation's `userId`: user B's edit went out under user A's
+  session, or waited indefinitely for an A who never signed back in on that
+  device. `INSERT + DELETE` dropped both. The key now carries the user, and an
+  untagged mutation keys separately from a tagged one because nothing says they
+  are the same person.
+
 ## [2.2.2] - 2026-08-13
 
 ### Fixed

@@ -182,6 +182,44 @@ describe("OfflineQueue", () => {
 
       expect(queue.pendingCount).toBe(2)
     })
+
+    it("does not compact two users' writes to the same row", async () => {
+      // Coalescing defeated the isolation the flush filter provides, one line
+      // earlier. `UPDATE + UPDATE` merges the newer payload into the OLDER
+      // mutation, and the older one carries the older `userId` — so B's edit
+      // went out under A's session, or waited for an A who never signed back
+      // in. Two people on one device is the whole reason mutations are tagged.
+      const queue = new OfflineQueue()
+      const executor = vi.fn().mockResolvedValue({})
+      queue.registerExecutor("todos", executor)
+
+      queue.setUserId("user-A")
+      await queue.enqueue(
+        createMutation({
+          id: "m1",
+          operation: "UPDATE",
+          payload: { title: "A" },
+          primaryKey: { id: 1 },
+        }),
+      )
+      queue.setUserId("user-B")
+      await queue.enqueue(
+        createMutation({
+          id: "m2",
+          operation: "UPDATE",
+          payload: { title: "B" },
+          primaryKey: { id: 1 },
+        }),
+      )
+
+      const result = await queue.flush()
+
+      // B is the one signed in: B's write goes out, unmerged, and A's waits.
+      expect(executor).toHaveBeenCalledTimes(1)
+      expect(executor.mock.calls[0]![0].payload).toEqual({ title: "B" })
+      expect(result.succeeded).toHaveLength(1)
+      expect(queue.pendingCount).toBe(1)
+    })
   })
 
   describe("flush", () => {
@@ -257,6 +295,42 @@ describe("OfflineQueue", () => {
 
       resolveExecutor!()
       await flush1
+    })
+
+    it("comes back for work that arrived while it was running", async () => {
+      // The other half of the test above, and the reason declining a concurrent
+      // flush is not free. `pending` is filtered before the first `await`, so a
+      // mutation enqueued mid-flush is in neither batch: not this one, which
+      // never saw it, and not a next one, because the request that would have
+      // started it was dropped on the floor.
+      //
+      // Since 2.2.1 there are only two other triggers — a connectivity
+      // transition and an auth event — and a signed-in device sitting on wifi
+      // produces neither, so the write waited for a relaunch. Same stranding
+      // 2.2.2 fixed at boot, one layer along.
+      const queue = new OfflineQueue({ flushDebounceMs: 1 })
+      let release!: () => void
+      const gate = new Promise<void>((r) => { release = r })
+      const executor = vi.fn(async (m: QueuedMutation) => {
+        if (m.id === "m1") await gate
+        return {}
+      })
+      queue.registerExecutor("todos", executor as never)
+
+      await queue.enqueue(createMutation({ id: "m1", primaryKey: { id: 1 } }))
+      // Let the debounced flush start and park on the gate.
+      await new Promise((r) => setTimeout(r, 20))
+
+      await queue.enqueue(createMutation({ id: "m2", primaryKey: { id: 2 } }))
+      // Its own debounced flush fires here and finds one already running.
+      await new Promise((r) => setTimeout(r, 20))
+
+      release()
+
+      // Nothing else is coming: no network transition, no auth event, no third
+      // enqueue. Draining is the queue's own business.
+      await vi.waitFor(() => expect(queue.pendingCount).toBe(0))
+      expect(executor).toHaveBeenCalledTimes(2)
     })
 
     it("does not flush when offline", async () => {
