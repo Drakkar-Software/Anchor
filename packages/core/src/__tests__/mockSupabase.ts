@@ -545,7 +545,7 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
         const injected = takeError(tableName, "upsert")
         if (injected) return createFailedBuilder(injected)
 
-        const rows = Array.isArray(row) ? row : [row]
+        const rows: MockRow[] = Array.isArray(row) ? row : [row]
         const table = getTable(tableName)
         const conflictColumns = options?.onConflict
           ? options.onConflict.split(",").map((c) => c.trim())
@@ -563,7 +563,7 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
                 conflictColumns.every((c) => t[c] != null && t[c] === r[c]),
               )
             : -1
-          const newRow = { ...r, updated_at: new Date().toISOString() }
+          const newRow: MockRow = { ...r, updated_at: new Date().toISOString() }
           if (existing >= 0) {
             // `ignoreDuplicates` is ON CONFLICT DO NOTHING: the row stays as it
             // was and no representation comes back for it.
