@@ -11,9 +11,11 @@ column matches PostgREST's own NULLS FIRST default and silently changes row
 order; `store.subscribe()` stops being a no-op and starts opening channels; and
 the cache gate lets `fetch()` short-circuit when a query is still fresh.
 
-This first slice changes no library behaviour — it is the test infrastructure the rest
-of the work lands against, and it is here because the existing infrastructure
-could not fail.
+Two slices so far. The **Testing** section came first and changes no library
+behaviour: it is the infrastructure the rest of the work lands against, and it
+went first because the infrastructure that existed could not fail. The **Fixed**
+section is defects in features that already shipped — none is a missing feature;
+each is a path that does the wrong thing today.
 
 ### Added
 
