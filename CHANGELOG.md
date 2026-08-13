@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.2.2] - 2026-08-13
+
+### Fixed
+
+- **A queue hydrated at boot is drained without waiting for a network
+  transition.** 2.2.1 made a tagged mutation wait for its own user and released
+  it on `SIGNED_IN`/`INITIAL_SESSION` — but reading the queue off disk and
+  supabase-js recovering a stored session are both in flight from the factory,
+  and either can finish second. When the auth event won that race the queue was
+  still empty, the release checked `isDirty` against nothing, and the mutations
+  landed a moment later with no remaining trigger: `startAutoFlush` only
+  *subscribes* to connectivity, so a device that never leaves wifi has no
+  transition to ride. `hydrate()` now schedules a flush of its own when it
+  finds work, so whichever of the two finishes second starts the drain. It was
+  reachable only in 2.2.1, where the permissive filter that used to drain the
+  queue under no user at all had just been removed.
+
 ## [2.2.1] - 2026-08-13
 
 Three fixes on the write path 2.2.0 opened, found by reading that release

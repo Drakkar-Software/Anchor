@@ -286,6 +286,19 @@ export function createSupabaseStores<
   // Hydrate offline queue
   offlineQueue.hydrate().then(() => {
     offlineQueue.startAutoFlush()
+    // A queue read back off disk needs a flush scheduled for it, and this is a
+    // race with the auth event that would otherwise schedule one: reading
+    // storage and supabase-js recovering a stored session are both in flight
+    // from here, in an order that native and web do not agree on. Whichever
+    // finishes second is the one that starts the drain — the auth gate covers
+    // hydrate-then-session, this covers session-then-hydrate, and neither alone
+    // covers both. `scheduleFlush` resets one debounce timer rather than
+    // stacking, so being called twice costs nothing.
+    //
+    // It matters more than it did: until a tagged mutation began waiting for
+    // its own user, an unauthenticated flush from any source would have drained
+    // the queue regardless. Now nothing else can.
+    if (offlineQueue.isDirty) offlineQueue.scheduleFlush()
   }).catch((err) => {
     logger?.fetchError?.("__queue", err instanceof Error ? err.message : String(err))
   })
