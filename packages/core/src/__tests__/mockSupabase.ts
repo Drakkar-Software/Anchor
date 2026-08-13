@@ -1,6 +1,27 @@
-import { vi } from "vitest"
-
 type MockRow = Record<string, unknown>
+
+/** A recorded filter. `or` carries its alternatives in `value`. */
+type Filter = {
+  column: string
+  op: string
+  value: unknown
+  negate?: boolean
+}
+
+/** Which builder an injected error belongs to. */
+export type MockOperation =
+  | "select"
+  | "insert"
+  | "update"
+  | "upsert"
+  | "delete"
+  | "rpc"
+
+type InjectedError = {
+  error: { message: string; code?: string; details?: string; hint?: string }
+  status: number
+  once: boolean
+}
 
 /**
  * Creates a mock Supabase client for testing.
@@ -14,10 +35,37 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
 
   let nextId = 1000
   const rpcHandlers: Record<string, (args: Record<string, unknown>) => unknown> = {}
+  const injectedErrors = new Map<string, InjectedError>()
 
   function getTable(name: string): MockRow[] {
     if (!tables[name]) tables[name] = []
     return tables[name]!
+  }
+
+  /**
+   * An error queued by `_setError`, consumed if it was registered `once`.
+   *
+   * Without this the mock had no failure path at all on the read side — every
+   * non-`single` read resolved `error: null` — so every error-handling test had
+   * to bring its own stub, and none of them exercised the same code the passing
+   * tests did.
+   */
+  function takeError(tableName: string, op: MockOperation): InjectedError | null {
+    const key = `${tableName}:${op}`
+    const hit = injectedErrors.get(key)
+    if (!hit) return null
+    if (hit.once) injectedErrors.delete(key)
+    return hit
+  }
+
+  function errorResponse(hit: InjectedError, count: number | null = null) {
+    return {
+      data: null,
+      error: hit.error,
+      count,
+      status: hit.status,
+      statusText: hit.status === 0 ? "" : "Error",
+    }
   }
 
   /** Split on commas that are not inside embed parentheses. */
@@ -87,39 +135,225 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
     })
   }
 
+  // ─── Filtering ──────────────────────────────────────────────────────
+  //
+  // One predicate, shared by select, update and delete. They used to disagree:
+  // `select` honoured ten operators and `update`/`delete` honoured only `eq`,
+  // silently treating every other filter as "match" — so a delete carrying a
+  // `gt` emptied the table and the test that asserted one row went away passed.
+
+  /**
+   * `%` is any run, `_` is one character, and the pattern is anchored — SQL
+   * `LIKE`, not a regex. The old translation was unanchored, so `like('abc')`
+   * matched `xabcx`; a store that dropped the anchors could not be caught.
+   */
+  function likeToRegExp(pattern: unknown, insensitive: boolean): RegExp {
+    const escaped = String(pattern).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    const source = `^${escaped.replace(/%/g, ".*").replace(/_/g, ".")}$`
+    return new RegExp(source, insensitive ? "i" : "")
+  }
+
+  function compare(a: unknown, b: unknown): number {
+    if (a === null || a === undefined) return -1
+    if (b === null || b === undefined) return 1
+    if (typeof a === "number" && typeof b === "number") return a - b
+    const as = String(a)
+    const bs = String(b)
+    return as < bs ? -1 : as > bs ? 1 : 0
+  }
+
+  /**
+   * Postgres' own text search is not reproducible here, but "matches anything"
+   * is the answer that cannot fail a test. Tokenised containment is wrong at
+   * the edges (no stemming, no ranking) and right often enough that a dropped
+   * `textSearch` filter changes the result set.
+   */
+  function textSearchMatch(actual: unknown, spec: unknown): boolean {
+    if (typeof actual !== "string") return false
+    const { query, type } = spec as { query: string; type?: string }
+    const haystack = actual.toLowerCase()
+    if (type === "phrase") {
+      return haystack.includes(query.trim().toLowerCase())
+    }
+    const terms = query
+      .split(/[\s&|!()]+/)
+      .map((t) => t.replace(/^'|'$/g, "").trim().toLowerCase())
+      .filter(Boolean)
+    return terms.every((t) => new RegExp(`\\b${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`).test(haystack))
+  }
+
+  function asArray(value: unknown): unknown[] | null {
+    return Array.isArray(value) ? value : null
+  }
+
+  function isPlainObject(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value)
+  }
+
+  /**
+   * PostgREST spells its operators differently in `.filter()`/`.or()` strings
+   * than the builder methods do. Normalising here means a hand-written
+   * `.or('tags.cs.{a}')` and a `.contains()` land on the same implementation.
+   */
+  const OP_ALIASES: Record<string, string> = {
+    cs: "contains",
+    cd: "containedBy",
+    ov: "overlaps",
+    fts: "textSearch",
+    plfts: "textSearch",
+    phfts: "textSearch",
+    wfts: "textSearch",
+  }
+
+  function matchOne(row: MockRow, f: Filter): boolean {
+    if (f.op === "or") {
+      return (f.value as Filter[]).some((clause) => matchOne(row, clause))
+    }
+
+    const op = OP_ALIASES[f.op] ?? f.op
+    const val = row[f.column]
+    let result: boolean
+
+    switch (op) {
+      case "eq":
+        result = val === f.value
+        break
+      case "neq":
+        result = val !== f.value
+        break
+      case "gt":
+        result = compare(val, f.value) > 0
+        break
+      case "gte":
+        result = compare(val, f.value) >= 0
+        break
+      case "lt":
+        result = compare(val, f.value) < 0
+        break
+      case "lte":
+        result = compare(val, f.value) <= 0
+        break
+      case "like":
+        result = typeof val === "string" && likeToRegExp(f.value, false).test(val)
+        break
+      case "ilike":
+        result = typeof val === "string" && likeToRegExp(f.value, true).test(val)
+        break
+      case "in":
+        result = Array.isArray(f.value) && (f.value as unknown[]).includes(val)
+        break
+      case "is":
+        // PostgREST's `is` is identity against null/true/false, not equality.
+        result = val === f.value
+        break
+      case "contains": {
+        const actual = asArray(val)
+        const wanted = asArray(f.value)
+        if (actual && wanted) result = wanted.every((v) => actual.includes(v))
+        else if (isPlainObject(val) && isPlainObject(f.value)) {
+          result = Object.entries(f.value).every(([k, v]) => val[k] === v)
+        } else result = false
+        break
+      }
+      case "containedBy": {
+        const actual = asArray(val)
+        const wanted = asArray(f.value)
+        if (actual && wanted) result = actual.every((v) => wanted.includes(v))
+        else if (isPlainObject(val) && isPlainObject(f.value)) {
+          result = Object.keys(val).every((k) => val[k] === (f.value as MockRow)[k])
+        } else result = false
+        break
+      }
+      case "overlaps": {
+        const actual = asArray(val)
+        const wanted = asArray(f.value)
+        result = actual != null && wanted != null && actual.some((v) => wanted.includes(v))
+        break
+      }
+      case "textSearch":
+        result = textSearchMatch(val, f.value)
+        break
+      default:
+        // An operator this mock does not implement must not pass silently. The
+        // old `default: return true` is why `contains`, `containedBy`,
+        // `overlaps` and `textSearch` were accepted, ignored, and asserted on
+        // by tests that could not fail.
+        throw new Error(
+          `mockSupabase: unimplemented filter operator "${f.op}". ` +
+            `Implement it in matchOne() rather than letting it match every row.`,
+        )
+    }
+
+    return f.negate ? !result : result
+  }
+
+  function matchesFilters(row: MockRow, filters: Filter[]): boolean {
+    return filters.every((f) => matchOne(row, f))
+  }
+
+  /** `null` / `true` / `false` / `12` / `(1,2)` / `"quoted"`, as PostgREST writes them. */
+  function coerceLiteral(raw: string): unknown {
+    const t = raw.trim()
+    if (t === "null") return null
+    if (t === "true") return true
+    if (t === "false") return false
+    if (t.startsWith("(") && t.endsWith(")")) {
+      return splitTopLevel(t.slice(1, -1)).map(coerceLiteral)
+    }
+    if (t.startsWith("{") && t.endsWith("}")) {
+      return t.slice(1, -1).split(",").map(coerceLiteral)
+    }
+    if (t !== "" && !Number.isNaN(Number(t))) return Number(t)
+    return t.replace(/^"|"$/g, "")
+  }
+
+  /**
+   * Parse one PostgREST filter clause: `column.op.value`, optionally
+   * `column.not.op.value`. Nested `and(...)`/`or(...)` groups throw rather than
+   * being dropped — a silently ignored clause is the bug this file is fixing.
+   */
+  function parseClause(clause: string): Filter {
+    const trimmed = clause.trim()
+    if (/^(and|or)\(/i.test(trimmed)) {
+      throw new Error(
+        `mockSupabase: nested "${trimmed.slice(0, 3)}(...)" groups are not supported in or()/filter(). ` +
+          `Express the query with separate filters, or implement nesting here.`,
+      )
+    }
+    const first = trimmed.indexOf(".")
+    if (first < 0) throw new Error(`mockSupabase: malformed filter clause "${clause}"`)
+    const column = trimmed.slice(0, first)
+    let rest = trimmed.slice(first + 1)
+    let negate = false
+    if (rest.startsWith("not.")) {
+      negate = true
+      rest = rest.slice(4)
+    }
+    const second = rest.indexOf(".")
+    if (second < 0) throw new Error(`mockSupabase: malformed filter clause "${clause}"`)
+    const op = rest.slice(0, second)
+    const raw = rest.slice(second + 1)
+    const value = op === "textSearch" || OP_ALIASES[op] === "textSearch"
+      ? { query: String(coerceLiteral(raw)) }
+      : coerceLiteral(raw)
+    return { column, op, value, negate }
+  }
+
   // Build chainable query builder
   function createBuilder(tableName: string) {
     let selectColumns = "*"
-    let filters: Array<{ column: string; op: string; value: unknown }> = []
+    const filters: Filter[] = []
     let limitVal: number | null = null
     let rangeStart: number | null = null
     let rangeEnd: number | null = null
-    let sortRules: Array<{ column: string; ascending: boolean }> = []
+    const sortRules: Array<{ column: string; ascending: boolean }> = []
     let singleMode = false
     let maybeSingleMode = false
     let countMode: string | null = null
+    let headMode = false
 
     function applyFilters(rows: MockRow[]): MockRow[] {
-      let result = rows
-      for (const f of filters) {
-        result = result.filter((row) => {
-          const val = row[f.column]
-          switch (f.op) {
-            case "eq": return val === f.value
-            case "neq": return val !== f.value
-            case "gt": return (val as number) > (f.value as number)
-            case "gte": return (val as number) >= (f.value as number)
-            case "lt": return (val as number) < (f.value as number)
-            case "lte": return (val as number) <= (f.value as number)
-            case "like": return typeof val === "string" && new RegExp(String(f.value).replace(/%/g, ".*")).test(val)
-            case "ilike": return typeof val === "string" && new RegExp(String(f.value).replace(/%/g, ".*"), "i").test(val)
-            case "in": return Array.isArray(f.value) && (f.value as unknown[]).includes(val)
-            case "is": return val === f.value
-            default: return true
-          }
-        })
-      }
-      return result
+      return rows.filter((row) => matchesFilters(row, filters))
     }
 
     function applySort(rows: MockRow[]): MockRow[] {
@@ -135,76 +369,56 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
       })
     }
 
+    const push = (column: string, op: string, value: unknown) => {
+      filters.push({ column, op, value })
+      return builder
+    }
+
     const builder: any = {
-      select(cols?: string, opts?: { count?: string }) {
+      select(cols?: string, opts?: { count?: string; head?: boolean }) {
         if (cols) selectColumns = cols
         if (opts?.count) countMode = opts.count
+        if (opts?.head) headMode = true
         return builder
       },
-      eq(column: string, value: unknown) {
-        filters.push({ column, op: "eq", value })
-        return builder
+      eq: (c: string, v: unknown) => push(c, "eq", v),
+      neq: (c: string, v: unknown) => push(c, "neq", v),
+      gt: (c: string, v: unknown) => push(c, "gt", v),
+      gte: (c: string, v: unknown) => push(c, "gte", v),
+      lt: (c: string, v: unknown) => push(c, "lt", v),
+      lte: (c: string, v: unknown) => push(c, "lte", v),
+      like: (c: string, v: unknown) => push(c, "like", v),
+      ilike: (c: string, v: unknown) => push(c, "ilike", v),
+      in: (c: string, v: unknown) => push(c, "in", v),
+      is: (c: string, v: unknown) => push(c, "is", v),
+      contains: (c: string, v: unknown) => push(c, "contains", v),
+      containedBy: (c: string, v: unknown) => push(c, "containedBy", v),
+      overlaps: (c: string, v: unknown) => push(c, "overlaps", v),
+      textSearch(column: string, query: string, opts?: { type?: string; config?: string }) {
+        return push(column, "textSearch", { query, type: opts?.type, config: opts?.config })
       },
-      neq(column: string, value: unknown) {
-        filters.push({ column, op: "neq", value })
-        return builder
-      },
-      gt(column: string, value: unknown) {
-        filters.push({ column, op: "gt", value })
-        return builder
-      },
-      gte(column: string, value: unknown) {
-        filters.push({ column, op: "gte", value })
-        return builder
-      },
-      lt(column: string, value: unknown) {
-        filters.push({ column, op: "lt", value })
-        return builder
-      },
-      lte(column: string, value: unknown) {
-        filters.push({ column, op: "lte", value })
-        return builder
-      },
-      like(column: string, value: unknown) {
-        filters.push({ column, op: "like", value })
-        return builder
-      },
-      ilike(column: string, value: unknown) {
-        filters.push({ column, op: "ilike", value })
-        return builder
-      },
-      in(column: string, value: unknown) {
-        filters.push({ column, op: "in", value })
-        return builder
-      },
-      is(column: string, value: unknown) {
-        filters.push({ column, op: "is", value })
-        return builder
-      },
-      contains(column: string, value: unknown) {
-        filters.push({ column, op: "contains", value })
-        return builder
-      },
-      containedBy(column: string, value: unknown) {
-        filters.push({ column, op: "containedBy", value })
-        return builder
-      },
-      overlaps(column: string, value: unknown) {
-        filters.push({ column, op: "overlaps", value })
-        return builder
-      },
-      textSearch(column: string, query: string, opts?: any) {
-        filters.push({ column, op: "textSearch", value: query })
+      /** `.match({a: 1, b: 2})` is sugar for two `eq`s — same as PostgREST. */
+      match(query: Record<string, unknown>) {
+        for (const [column, value] of Object.entries(query)) {
+          filters.push({ column, op: "eq", value })
+        }
         return builder
       },
       not(column: string, op: string, value: unknown) {
-        // Simplified
+        filters.push({ column, op, value, negate: true })
         return builder
       },
       or(filterString: string) {
+        filters.push({
+          column: "",
+          op: "or",
+          value: splitTopLevel(filterString).map(parseClause),
+        })
         return builder
       },
       filter(column: string, op: string, value: unknown) {
+        const negate = op.startsWith("not.")
+        filters.push({ column, op: negate ? op.slice(4) : op, value, negate })
         return builder
       },
       order(column: string, opts?: { ascending?: boolean; nullsFirst?: boolean }) {
@@ -232,6 +446,12 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
       // Terminal - resolves the query
       then(resolve: (value: any) => void, reject?: (reason?: any) => void) {
         try {
+          const injected = takeError(tableName, "select")
+          if (injected) {
+            resolve(errorResponse(injected))
+            return
+          }
+
           let rows = applyFilters(getTable(tableName))
           rows = applySort(rows)
 
@@ -248,27 +468,43 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
             rows = rows.slice(0, limitVal)
           }
 
+          // `head: true` asks for the count and no body.
+          if (headMode) {
+            resolve({ data: null, error: null, count: total, status: 200, statusText: "OK" })
+            return
+          }
+
           const projected = project(rows, selectColumns, tableName)
+          const ok = { error: null, count: countMode ? total : null, status: 200, statusText: "OK" }
 
           if (singleMode) {
             if (projected.length === 0) {
-              resolve({ data: null, error: { message: "No rows found", code: "PGRST116" }, count: null })
+              resolve({
+                data: null,
+                error: { message: "No rows found", code: "PGRST116" },
+                count: null,
+                status: 406,
+                statusText: "Not Acceptable",
+              })
             } else {
-              resolve({ data: projected[0], error: null, count: countMode ? total : null })
+              resolve({ data: projected[0], ...ok })
             }
           } else if (maybeSingleMode) {
-            resolve({ data: projected[0] ?? null, error: null, count: countMode ? total : null })
+            resolve({ data: projected[0] ?? null, ...ok })
           } else {
-            resolve({ data: projected, error: null, count: countMode ? total : null })
+            resolve({ data: projected, ...ok })
           }
         } catch (err) {
           if (reject) reject(err)
-          else resolve({ data: null, error: { message: String(err) }, count: null })
+          else resolve({ data: null, error: { message: String(err) }, count: null, status: 500 })
         }
       },
 
       // Insert operation
       insert(row: MockRow | MockRow[]) {
+        const injected = takeError(tableName, "insert")
+        if (injected) return createFailedBuilder(injected)
+
         const rows = Array.isArray(row) ? row : [row]
         const table = getTable(tableName)
         const inserted: MockRow[] = []
@@ -287,11 +523,13 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
           inserted.push(newRow)
         }
         // Return a builder that resolves to the inserted rows
-        return createInsertedBuilder(tableName, inserted)
+        return createWroteBuilder(tableName, inserted, 201)
       },
 
       // Update operation
       update(changes: MockRow) {
+        const injected = takeError(tableName, "update")
+        if (injected) return createFailedBuilder(injected)
         return createUpdateBuilder(tableName, changes, filters)
       },
 
@@ -303,7 +541,10 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
       // behaviour and with a dropped option equally cannot fail. It now matches
       // on the named columns, so a store that stops forwarding the option
       // inserts a duplicate here exactly as Postgres would raise `23505`.
-      upsert(row: MockRow | MockRow[], options?: { onConflict?: string }) {
+      upsert(row: MockRow | MockRow[], options?: { onConflict?: string; ignoreDuplicates?: boolean }) {
+        const injected = takeError(tableName, "upsert")
+        if (injected) return createFailedBuilder(injected)
+
         const rows = Array.isArray(row) ? row : [row]
         const table = getTable(tableName)
         const conflictColumns = options?.onConflict
@@ -324,6 +565,9 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
             : -1
           const newRow = { ...r, updated_at: new Date().toISOString() }
           if (existing >= 0) {
+            // `ignoreDuplicates` is ON CONFLICT DO NOTHING: the row stays as it
+            // was and no representation comes back for it.
+            if (options?.ignoreDuplicates) continue
             table[existing] = { ...table[existing], ...newRow }
             upserted.push(table[existing]!)
           } else {
@@ -333,11 +577,13 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
             upserted.push(newRow)
           }
         }
-        return createInsertedBuilder(tableName, upserted)
+        return createWroteBuilder(tableName, upserted, 201)
       },
 
       // Delete operation
       delete() {
+        const injected = takeError(tableName, "delete")
+        if (injected) return createFailedBuilder(injected)
         return createDeleteBuilder(tableName, filters)
       },
     }
@@ -345,9 +591,30 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
     return builder
   }
 
-  function createInsertedBuilder(tableName: string, inserted: MockRow[]) {
+  /** A builder whose every terminal resolves to the injected failure. */
+  function createFailedBuilder(injected: InjectedError) {
+    const builder: any = {
+      select: () => builder,
+      eq: () => builder,
+      neq: () => builder,
+      in: () => builder,
+      single: () => builder,
+      maybeSingle: () => builder,
+      then(resolve: (value: any) => void) {
+        resolve(errorResponse(injected))
+      },
+    }
+    return builder
+  }
+
+  /**
+   * The result of a write. Named for what it is rather than for `insert`,
+   * because `upsert` returns one too.
+   */
+  function createWroteBuilder(tableName: string, wrote: MockRow[], status: number) {
     let selectCols = "*"
     let singleMode = false
+    let maybeSingleMode = false
 
     const builder: any = {
       select(cols?: string) {
@@ -359,102 +626,189 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
         return builder
       },
       maybeSingle() {
-        singleMode = true
+        maybeSingleMode = true
         return builder
       },
       then(resolve: (value: any) => void) {
         // A store mutation always appends `.select(defaultSelect ?? '*')`, so
         // this is the path a narrow select is most likely to be wrong on.
-        const projected = project(inserted, selectCols, tableName)
+        const projected = project(wrote, selectCols, tableName)
+        const ok = { error: null, status, statusText: "Created" }
+
         if (singleMode) {
-          resolve({ data: projected[0] ?? null, error: null })
+          // Real PostgREST raises PGRST116 when `.single()` gets nothing back —
+          // which is exactly what an `ignoreDuplicates` upsert that conflicted
+          // produces. Resolving `{data: null, error: null}` here let the store
+          // treat "wrote nothing" as "wrote successfully".
+          if (projected.length === 0) {
+            resolve({
+              data: null,
+              error: { message: "No rows found", code: "PGRST116" },
+              status: 406,
+              statusText: "Not Acceptable",
+            })
+            return
+          }
+          resolve({ data: projected[0], ...ok })
+        } else if (maybeSingleMode) {
+          resolve({ data: projected[0] ?? null, ...ok })
         } else {
-          resolve({ data: projected, error: null })
+          resolve({ data: projected, ...ok })
         }
       },
     }
     return builder
   }
 
-  function createUpdateBuilder(
-    tableName: string,
-    changes: MockRow,
-    existingFilters: Array<{ column: string; op: string; value: unknown }>,
-  ) {
+  function createUpdateBuilder(tableName: string, changes: MockRow, existingFilters: Filter[]) {
     const filters = [...existingFilters]
     let selectCols = "*"
 
+    function applyToMatches(): MockRow[] {
+      const table = getTable(tableName)
+      const updated: MockRow[] = []
+      for (let i = 0; i < table.length; i++) {
+        if (!matchesFilters(table[i]!, filters)) continue
+        table[i] = { ...table[i], ...changes, updated_at: new Date().toISOString() }
+        updated.push(table[i]!)
+      }
+      return updated
+    }
+
+    const push = (column: string, op: string, value: unknown) => {
+      filters.push({ column, op, value })
+      return builder
+    }
+
     const builder: any = {
-      eq(column: string, value: unknown) {
-        filters.push({ column, op: "eq", value })
-        return builder
-      },
+      eq: (c: string, v: unknown) => push(c, "eq", v),
+      neq: (c: string, v: unknown) => push(c, "neq", v),
+      gt: (c: string, v: unknown) => push(c, "gt", v),
+      gte: (c: string, v: unknown) => push(c, "gte", v),
+      lt: (c: string, v: unknown) => push(c, "lt", v),
+      lte: (c: string, v: unknown) => push(c, "lte", v),
+      like: (c: string, v: unknown) => push(c, "like", v),
+      ilike: (c: string, v: unknown) => push(c, "ilike", v),
+      in: (c: string, v: unknown) => push(c, "in", v),
+      is: (c: string, v: unknown) => push(c, "is", v),
+      contains: (c: string, v: unknown) => push(c, "contains", v),
+      containedBy: (c: string, v: unknown) => push(c, "containedBy", v),
+      overlaps: (c: string, v: unknown) => push(c, "overlaps", v),
       select(cols?: string) {
         if (cols) selectCols = cols
         return builder
       },
       single() {
-        const table = getTable(tableName)
-        const idx = table.findIndex((row) =>
-          filters.every((f) => {
-            if (f.op === "eq") return row[f.column] === f.value
-            return true
-          }),
-        )
-
         return {
           then(resolve: (value: any) => void) {
-            if (idx >= 0) {
-              table[idx] = { ...table[idx], ...changes, updated_at: new Date().toISOString() }
-              resolve({ data: project([table[idx]!], selectCols, tableName)[0], error: null })
-            } else {
-              resolve({ data: null, error: { message: "Row not found" } })
+            const updated = applyToMatches()
+            if (updated.length === 0) {
+              resolve({
+                data: null,
+                error: { message: "No rows found", code: "PGRST116" },
+                status: 406,
+                statusText: "Not Acceptable",
+              })
+              return
             }
+            resolve({
+              data: project([updated[0]!], selectCols, tableName)[0],
+              error: null,
+              status: 200,
+              statusText: "OK",
+            })
+          },
+        }
+      },
+      maybeSingle() {
+        return {
+          then(resolve: (value: any) => void) {
+            const updated = applyToMatches()
+            resolve({
+              data: updated.length ? project([updated[0]!], selectCols, tableName)[0] : null,
+              error: null,
+              status: 200,
+              statusText: "OK",
+            })
           },
         }
       },
       then(resolve: (value: any) => void) {
-        const table = getTable(tableName)
-        const updated: MockRow[] = []
-        for (let i = 0; i < table.length; i++) {
-          const row = table[i]!
-          const match = filters.every((f) => {
-            if (f.op === "eq") return row[f.column] === f.value
-            return true
-          })
-          if (match) {
-            table[i] = { ...row, ...changes, updated_at: new Date().toISOString() }
-            updated.push(table[i]!)
-          }
-        }
-        resolve({ data: project(updated, selectCols, tableName), error: null })
+        const updated = applyToMatches()
+        resolve({
+          data: project(updated, selectCols, tableName),
+          error: null,
+          status: 200,
+          statusText: "OK",
+        })
       },
     }
     return builder
   }
 
-  function createDeleteBuilder(
-    tableName: string,
-    existingFilters: Array<{ column: string; op: string; value: unknown }>,
-  ) {
+  function createDeleteBuilder(tableName: string, existingFilters: Filter[]) {
     const filters = [...existingFilters]
+    let selectCols: string | null = null
+
+    function removeMatches(): MockRow[] {
+      const table = getTable(tableName)
+      const removed = table.filter((row) => matchesFilters(row, filters))
+      tables[tableName] = table.filter((row) => !matchesFilters(row, filters))
+      return removed
+    }
+
+    const push = (column: string, op: string, value: unknown) => {
+      filters.push({ column, op, value })
+      return builder
+    }
 
     const builder: any = {
-      eq(column: string, value: unknown) {
-        filters.push({ column, op: "eq", value })
+      eq: (c: string, v: unknown) => push(c, "eq", v),
+      neq: (c: string, v: unknown) => push(c, "neq", v),
+      gt: (c: string, v: unknown) => push(c, "gt", v),
+      gte: (c: string, v: unknown) => push(c, "gte", v),
+      lt: (c: string, v: unknown) => push(c, "lt", v),
+      lte: (c: string, v: unknown) => push(c, "lte", v),
+      like: (c: string, v: unknown) => push(c, "like", v),
+      ilike: (c: string, v: unknown) => push(c, "ilike", v),
+      in: (c: string, v: unknown) => push(c, "in", v),
+      is: (c: string, v: unknown) => push(c, "is", v),
+      select(cols?: string) {
+        selectCols = cols ?? "*"
         return builder
       },
+      single() {
+        return {
+          then(resolve: (value: any) => void) {
+            const removed = removeMatches()
+            if (removed.length === 0) {
+              resolve({
+                data: null,
+                error: { message: "No rows found", code: "PGRST116" },
+                status: 406,
+                statusText: "Not Acceptable",
+              })
+              return
+            }
+            resolve({
+              data: project([removed[0]!], selectCols ?? "*", tableName)[0],
+              error: null,
+              status: 200,
+              statusText: "OK",
+            })
+          },
+        }
+      },
       then(resolve: (value: any) => void) {
-        const table = getTable(tableName)
-        const remaining = table.filter(
-          (row) =>
-            !filters.every((f) => {
-              if (f.op === "eq") return row[f.column] === f.value
-              return true
-            }),
-        )
-        tables[tableName] = remaining
-        resolve({ data: null, error: null })
+        const removed = removeMatches()
+        // Without a `.select()` PostgREST returns no representation, which is
+        // what the store's `remove()` expects.
+        resolve({
+          data: selectCols == null ? null : project(removed, selectCols, tableName),
+          error: null,
+          status: 200,
+          statusText: "OK",
+        })
       },
     }
     return builder
@@ -464,9 +818,28 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
   const authListeners: Array<(event: string, session: any) => void> = []
   let currentSession: any = null
 
+  /** Live channels, so a test can assert what was subscribed and torn down. */
+  const channels: any[] = []
+
   const client = {
     from(table: string) {
       return createBuilder(table)
+    },
+    /**
+     * Non-public schemas. `fromTable()` in `query/queryExecutor.ts` routes every
+     * schema-scoped store through `.schema(name).from(table)`, and this method
+     * did not exist — so every one of those paths threw `TypeError` and no
+     * multi-schema behaviour, `createSchemaRpc` included, could be tested.
+     *
+     * Tables live under a `schema.table` key, so seed them as
+     * `createMockSupabase({ "app.things": [...] })`.
+     */
+    schema(name: string) {
+      const prefix = name === "public" ? "" : `${name}.`
+      return {
+        from: (table: string) => createBuilder(`${prefix}${table}`),
+        rpc: (fn: string, args?: Record<string, unknown>) => client.rpc(`${prefix}${fn}`, args),
+      }
     },
     auth: {
       async getSession() {
@@ -475,13 +848,13 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
       async getUser() {
         return { data: { user: currentSession?.user ?? null }, error: null }
       },
-      async signInWithPassword({ email, password }: { email: string; password: string }) {
+      async signInWithPassword({ email }: { email: string; password: string }) {
         const session = { access_token: "mock-token", user: { id: "user-1", email } }
         currentSession = session
         for (const listener of authListeners) listener("SIGNED_IN", session)
         return { data: { session, user: session.user }, error: null }
       },
-      async signUp({ email, password }: { email: string; password: string }) {
+      async signUp({ email }: { email: string; password: string }) {
         const session = { access_token: "mock-token", user: { id: "user-1", email } }
         currentSession = session
         for (const listener of authListeners) listener("SIGNED_IN", session)
@@ -492,7 +865,7 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
         for (const listener of authListeners) listener("SIGNED_OUT", null)
         return { error: null }
       },
-      async signInWithOAuth({ provider }: { provider: string; options?: any }) {
+      async signInWithOAuth(_credentials: { provider: string; options?: any }) {
         return { error: null }
       },
       async refreshSession() {
@@ -526,11 +899,18 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
     rpc(name: string, args?: Record<string, unknown>) {
       return {
         then(resolve: (value: any) => void) {
+          const injected = takeError(name, "rpc")
+          if (injected) {
+            resolve(errorResponse(injected))
+            return
+          }
           const handler = rpcHandlers[name]
           if (!handler) {
             resolve({
               data: null,
               count: null,
+              status: 404,
+              statusText: "Not Found",
               error: {
                 message: `Could not find the function public.${name}`,
                 code: "PGRST202",
@@ -539,34 +919,132 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
             return
           }
           const result = handler(args ?? {})
-          resolve({ data: result, count: Array.isArray(result) ? result.length : null, error: null })
+          resolve({
+            data: result,
+            count: Array.isArray(result) ? result.length : null,
+            error: null,
+            status: 200,
+            statusText: "OK",
+          })
         },
       }
     },
     channel(name: string) {
-      return {
-        on(event: string, filter: any, callback: any) {
-          return this
-        },
-        subscribe(statusCallback?: (status: string) => void) {
-          if (statusCallback) statusCallback("SUBSCRIBED")
-          return this
-        },
-      }
+      return createMockChannel(name)
     },
-    removeChannel(channel: any) {},
+    removeChannel(channel: any) {
+      const idx = channels.indexOf(channel)
+      if (idx >= 0) channels.splice(idx, 1)
+    },
+    getChannels() {
+      return [...channels]
+    },
+    removeAllChannels() {
+      channels.length = 0
+    },
     realtime: {
       async setAuth(_token: string | null) {},
     },
 
     // Test helpers
     _tables: tables,
+    _channels: channels,
     _setRpc(name: string, handler: (args: Record<string, unknown>) => unknown) {
       rpcHandlers[name] = handler
     },
     _setSession(session: any) {
       currentSession = session
     },
+    /**
+     * Make the next (or every) call on `table` fail.
+     *
+     * `status` matters: `errors.ts`'s `isTransportError` only classifies a
+     * failure as never-reached-Postgres when the response carries `status: 0`,
+     * so a queue-on-transport-failure test must inject that explicitly rather
+     * than relying on a missing field.
+     */
+    _setError(
+      table: string,
+      op: MockOperation,
+      error: { message: string; code?: string; details?: string; hint?: string },
+      opts?: { status?: number; once?: boolean },
+    ) {
+      injectedErrors.set(`${table}:${op}`, {
+        error,
+        status: opts?.status ?? 400,
+        once: opts?.once ?? false,
+      })
+    },
+    _clearErrors() {
+      injectedErrors.clear()
+    },
+  }
+
+  // ─── Realtime ───────────────────────────────────────────────────────
+  //
+  // `channel()` used to return an object that discarded every callback, so no
+  // event could be delivered and `realtimeManager.test.ts` and
+  // `realtimeBindings.test.ts` each had to define their own channel mock. This
+  // one records bindings and lets a test drive them.
+
+  function createMockChannel(topic: string) {
+    const bindings: Array<{ type: string; filter: any; callback: (payload: any) => void }> = []
+    const statusCallbacks: Array<(status: string, err?: Error) => void> = []
+    const presence: Record<string, unknown[]> = {}
+    const sent: Array<{ type: string; event: string; payload?: any }> = []
+
+    const channel: any = {
+      topic,
+      on(type: string, filter: any, callback: (payload: any) => void) {
+        bindings.push({ type, filter, callback })
+        return channel
+      },
+      subscribe(statusCallback?: (status: string, err?: Error) => void) {
+        if (statusCallback) {
+          statusCallbacks.push(statusCallback)
+          statusCallback("SUBSCRIBED")
+        }
+        return channel
+      },
+      async unsubscribe() {
+        return "ok"
+      },
+      async send(args: { type: string; event: string; payload?: any }) {
+        sent.push(args)
+        return "ok"
+      },
+      async track(payload: Record<string, unknown>) {
+        presence[topic] = [{ presence_ref: "ref-1", ...payload }]
+        return "ok"
+      },
+      async untrack() {
+        delete presence[topic]
+        return "ok"
+      },
+      presenceState() {
+        return { ...presence }
+      },
+
+      // Test drivers
+      _bindings: bindings,
+      _sent: sent,
+      /** Deliver a payload to every binding whose type and event match. */
+      _fireEvent(type: string, payload: any, event?: string) {
+        for (const b of bindings) {
+          if (b.type !== type) continue
+          const want = event ?? payload?.eventType
+          const bound = b.filter?.event
+          if (bound && bound !== "*" && want && bound !== want) continue
+          b.callback(payload)
+        }
+      },
+      _fireStatus(status: string, err?: Error) {
+        for (const cb of statusCallbacks) cb(status, err)
+      },
+    }
+
+    channels.push(channel)
+    return channel
   }
 
   return client as any
