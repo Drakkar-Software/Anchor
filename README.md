@@ -1066,7 +1066,17 @@ import { EncryptedAdapter } from '@drakkar.software/anchor/persistence/encrypted
 import { StorageQuotaManager } from '@drakkar.software/anchor/persistence/quota'
 import { checkSchemaVersion } from '@drakkar.software/anchor/persistence/schemaVersion'
 import { ConflictAuditLog } from '@drakkar.software/anchor/mutation/audit'
+import { invokeEdgeFunction } from '@drakkar.software/anchor/functions'
+import { fetchWithSwr } from '@drakkar.software/anchor/cache'
+import { setupAuthGate } from '@drakkar.software/anchor/auth/gate'
+import { buildCursorQuery } from '@drakkar.software/anchor/query/pagination'
+import { incrementalSync } from '@drakkar.software/anchor/sync/incremental'
 ```
+
+Every entry point the build produces is reachable — `src/__tests__/packageExports.test.ts`
+asserts it. Until 3.0.0 eight of the 26 were not, including three named in this
+very list, and `exports` is an allowlist: a path missing from it throws
+`ERR_PACKAGE_PATH_NOT_EXPORTED` however complete `dist/` is.
 
 ## Requirements
 

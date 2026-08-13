@@ -29,6 +29,16 @@
       "import": "./dist/query/filters.mjs",
       "require": "./dist/query/filters.js"
     },
+    "./query/queryBuilder": {
+      "types": "./dist/query/queryBuilder.d.ts",
+      "import": "./dist/query/queryBuilder.mjs",
+      "require": "./dist/query/queryBuilder.js"
+    },
+    "./query/pagination": {
+      "types": "./dist/query/pagination.d.ts",
+      "import": "./dist/query/pagination.mjs",
+      "require": "./dist/query/pagination.js"
+    },
     "./auth": {
       "types": "./dist/auth/authStore.d.ts",
       "import": "./dist/auth/authStore.mjs",
@@ -38,6 +48,41 @@
       "types": "./dist/auth/authCallbacks.d.ts",
       "import": "./dist/auth/authCallbacks.mjs",
       "require": "./dist/auth/authCallbacks.js"
+    },
+    "./auth/gate": {
+      "types": "./dist/auth/authGate.d.ts",
+      "import": "./dist/auth/authGate.mjs",
+      "require": "./dist/auth/authGate.js"
+    },
+    "./functions": {
+      "types": "./dist/functions/edgeFunctions.d.ts",
+      "import": "./dist/functions/edgeFunctions.mjs",
+      "require": "./dist/functions/edgeFunctions.js"
+    },
+    "./storage": {
+      "types": "./dist/storage/storageActions.d.ts",
+      "import": "./dist/storage/storageActions.mjs",
+      "require": "./dist/storage/storageActions.js"
+    },
+    "./storage/storageActions": {
+      "types": "./dist/storage/storageActions.d.ts",
+      "import": "./dist/storage/storageActions.mjs",
+      "require": "./dist/storage/storageActions.js"
+    },
+    "./server": {
+      "types": "./dist/server/prefetch.d.ts",
+      "import": "./dist/server/prefetch.mjs",
+      "require": "./dist/server/prefetch.js"
+    },
+    "./server/prefetch": {
+      "types": "./dist/server/prefetch.d.ts",
+      "import": "./dist/server/prefetch.mjs",
+      "require": "./dist/server/prefetch.js"
+    },
+    "./cache": {
+      "types": "./dist/cache/cacheTtl.d.ts",
+      "import": "./dist/cache/cacheTtl.mjs",
+      "require": "./dist/cache/cacheTtl.js"
     },
     "./realtime": {
       "types": "./dist/realtime/realtimeManager.d.ts",
@@ -58,6 +103,11 @@
       "types": "./dist/sync/crossTabSync.d.ts",
       "import": "./dist/sync/crossTabSync.mjs",
       "require": "./dist/sync/crossTabSync.js"
+    },
+    "./sync/incremental": {
+      "types": "./dist/sync/incrementalSync.d.ts",
+      "import": "./dist/sync/incrementalSync.mjs",
+      "require": "./dist/sync/incrementalSync.js"
     },
     "./lifecycle": {
       "types": "./dist/lifecycle/appLifecycle.d.ts",
