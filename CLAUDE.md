@@ -109,6 +109,14 @@ When passed to standalone `createTableStore()`, these trigger a `console.warn`. 
   `@ts-expect-error` lines for a generic function's call-site behaviour. Verify a
   new assertion by breaking what it guards and watching `tsc` go red — an `Eq<>`
   alias that nothing constrains to `true` compiles either way.
+- **`.test.tsx` is the exception: those files ARE typechecked.** The `exclude`
+  list is `src/**/*.test.ts` and `src/__tests__`, and neither pattern matches
+  `.tsx` — so hook tests get real type coverage that the 56 `.test.ts` files do
+  not. Two consequences. A type assertion written in a `.test.tsx` does hold.
+  And `exclude` does not apply to a file reached by an import, so each new
+  `.test.tsx` pulls whatever it imports — `__tests__/mockSupabase.ts` in
+  particular — into `tsc` for the first time. Latent inference errors surfacing
+  there are pre-existing, not regressions.
 - **A negative assertion needs its positive counterpart in the same test.** "No
   realtime channel names the view" and "the queue holds nothing for the view" are
   both true of a library that has stopped subscribing and stopped queueing

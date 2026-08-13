@@ -1,9 +1,17 @@
 # Changelog
 
-## [Unreleased]
+## [Unreleased] — will release as 3.0.0
 
-Work towards full parity with the pinned `@supabase/supabase-js` (2.112.3). This
-first slice changes no library behaviour — it is the test infrastructure the rest
+Work towards full parity with the pinned `@supabase/supabase-js` (2.112.3).
+
+**Why a major.** Nothing in this first slice is breaking, but three changes on
+this branch are, and the version is settled now rather than after they land:
+`nullsFirst` stops being forced to `false`, so DESC ordering over a nullable
+column matches PostgREST's own NULLS FIRST default and silently changes row
+order; `store.subscribe()` stops being a no-op and starts opening channels; and
+the cache gate lets `fetch()` short-circuit when a query is still fresh.
+
+This first slice changes no library behaviour — it is the test infrastructure the rest
 of the work lands against, and it is here because the existing infrastructure
 could not fail.
 
