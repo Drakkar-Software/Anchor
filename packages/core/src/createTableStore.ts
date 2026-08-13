@@ -14,7 +14,7 @@ import type {
   QueuedMutation,
   UpsertOptions,
 } from "./types.js"
-import { noopLogger, createTempId } from "./types.js"
+import { noopLogger, createTempId, randomId } from "./types.js"
 import type { OfflineQueue } from "./mutation/offlineQueue.js"
 import { runValidation } from "./mutation/validation.js"
 import { AnchorError, fromSupabaseError, isTransportError } from "./errors.js"
@@ -336,7 +336,7 @@ export function createTableStore<
         rollbackSnapshot = inherited.rollbackSnapshot as TrackedRow<Row> | undefined ?? undefined
       }
       const mutation: QueuedMutation = {
-        id: crypto.randomUUID(),
+        id: randomId(),
         table,
         operation,
         payload,
@@ -879,7 +879,7 @@ export function createTableStore<
         logger.mutationStart(table, "UPDATE")
 
         // Unique ID for this mutation (used for compare-and-swap rollback)
-        const mutationId = crypto.randomUUID()
+        const mutationId = randomId()
 
         // Snapshot for rollback
         const snapshot = get().records.get(id)
@@ -1001,7 +1001,7 @@ export function createTableStore<
         // one, which reads as the write having silently reverted.
         //
         // No temp id is ever sent: `row` reaches the builder untouched.
-        const mutationId = crypto.randomUUID()
+        const mutationId = randomId()
         const givenId = (row as Record<string, unknown>)[primaryKey] as
           | string
           | number

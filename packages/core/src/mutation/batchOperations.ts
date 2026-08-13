@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 import type { StoreApi } from "zustand"
 import type { TableStore, TrackedRow, FilterDescriptor } from "../types.js"
+import { randomId } from "../types.js"
 import { fromTable, applyFilters } from "../query/queryExecutor.js"
 
 /**
@@ -39,7 +40,7 @@ export async function updateMany<
   }
 
   // Optimistic apply with CAS mutation ID
-  const mutationId = crypto.randomUUID()
+  const mutationId = randomId()
   store.setState((prev: any) => {
     const records = new Map(prev.records)
     for (const id of matchingIds) {

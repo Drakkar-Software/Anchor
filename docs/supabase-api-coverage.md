@@ -101,9 +101,9 @@ Just as significant as the missing methods, and cheaper to close:
 
 ### Events
 
-Two independent `onAuthStateChange` subscriptions: `auth/authStore.ts:167` ignores the event name entirely (every event collapses to the same state write); `auth/authGate.ts` branches on `SIGNED_IN`, `SIGNED_OUT`, and (as of this bump) `TOKEN_REFRESHED`.
+Two independent `onAuthStateChange` subscriptions: `auth/authStore.ts:167` ignores the event name entirely (every event collapses to the same state write); `auth/authGate.ts` branches on `SIGNED_IN`, `SIGNED_OUT`, `TOKEN_REFRESHED`, and — since 2.2.1, to give a queue held over from the previous run its chance — `INITIAL_SESSION`.
 
-Never branched anywhere: `INITIAL_SESSION`, `USER_UPDATED`, `PASSWORD_RECOVERY` (recovery is instead routed off the URL `type` param), `MFA_CHALLENGE_VERIFIED`.
+Never branched anywhere: `USER_UPDATED`, `PASSWORD_RECOVERY` (recovery is instead routed off the URL `type` param), `MFA_CHALLENGE_VERIFIED`.
 
 Redundancy at `hooks/useAuth.ts:34-35`: `initialize()` does a `getSession()` round-trip *and* registers a listener that immediately fires `INITIAL_SESSION` — a duplicate read plus two racing `isLoading: false` writes.
 
