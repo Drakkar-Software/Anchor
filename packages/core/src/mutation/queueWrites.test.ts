@@ -644,6 +644,49 @@ describe("chains that create a row, and rows that leave the store", () => {
     expect(todos.getState().getQueueSize()).toBe(0)
   })
 
+  it("drains a queue read off disk with nothing else to trigger it", async () => {
+    // The boot race. `hydrate()` reading storage and supabase-js recovering a
+    // stored session are both in flight from the factory, in an order native
+    // and web do not agree on, and whichever finishes second is the one that
+    // has to start the drain. `startAutoFlush` only *subscribes* to
+    // connectivity, so a device that never leaves wifi offers no transition to
+    // ride on.
+    //
+    // This is load-bearing only since a tagged mutation began waiting for its
+    // own user: before that, an unauthenticated flush from any source would
+    // have drained the queue anyway. A test that stubs the queue dirty before
+    // the auth event cannot see it, because here the queue becomes dirty after.
+    const adapter = new MemoryAdapter()
+    await adapter.setItem("anchor:__mutation_queue", [
+      {
+        id: "m1",
+        table: "todos",
+        operation: "UPDATE",
+        payload: { title: "from the previous run" },
+        primaryKey: { id: 1 },
+        createdAt: 1,
+        status: "pending",
+        retryCount: 0,
+        rollbackSnapshot: null,
+      } as unknown as QueuedMutation,
+    ])
+
+    const supabase = createMockSupabase({ todos: [{ id: 1, title: "A" }] })
+    const stores = createSupabaseStores<any>({
+      supabase: supabase as any,
+      tables: ["todos"],
+      network: new ManualNetworkStatus(),
+      persistence: { adapter },
+      fetchRemoteOnBoot: false,
+      offlineQueue: { queueWrites: true, flushDebounceMs: 1 },
+    })
+    cleanups.push(() => stores._destroy())
+
+    await vi.waitFor(() =>
+      expect((supabase as any)._tables.todos[0].title).toBe("from the previous run"),
+    )
+  })
+
   it("does not put a cleared row back when an abandoned update rolls back", async () => {
     // The undo of an optimistic apply that is no longer there is nothing, not a
     // re-insert. `setRecord` adds the id to `records` AND `order` and persists
