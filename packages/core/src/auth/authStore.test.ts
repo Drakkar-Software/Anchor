@@ -141,3 +141,57 @@ describe("createAuthStore", () => {
     })
   })
 })
+
+describe("getVerifiedClaims", () => {
+  // `getClaim` reads an unverified local base64 decode. `getClaims()` — which
+  // verifies against the project's JWKS — ships in the pinned SDK and was never
+  // called.
+
+  it("returns the verified claims", async () => {
+    const supabase = createMockSupabase()
+    supabase.auth.getClaims = vi.fn().mockResolvedValue({
+      data: { claims: { sub: "user-1", role: "authenticated" }, headers: {}, signature: new Uint8Array() },
+      error: null,
+    })
+    const store = createAuthStore({ supabase })
+
+    const { claims, error } = await store.getState().getVerifiedClaims()
+
+    expect(error).toBeNull()
+    expect(claims).toEqual({ sub: "user-1", role: "authenticated" })
+  })
+
+  it("reports a rejected token as an error rather than as empty claims", async () => {
+    const supabase = createMockSupabase()
+    supabase.auth.getClaims = vi.fn().mockResolvedValue({
+      data: null,
+      error: { message: "invalid signature", code: "bad_jwt" },
+    })
+    const store = createAuthStore({ supabase })
+
+    const { claims, error } = await store.getState().getVerifiedClaims()
+
+    expect(claims).toBeNull()
+    expect((error as { code?: string })?.code).toBe("bad_jwt")
+  })
+
+  it("returns null claims, not an error, when there is no session", async () => {
+    const supabase = createMockSupabase()
+    supabase.auth.getClaims = vi.fn().mockResolvedValue({ data: null, error: null })
+    const store = createAuthStore({ supabase })
+
+    const { claims, error } = await store.getState().getVerifiedClaims()
+
+    expect(claims).toBeNull()
+    expect(error).toBeNull()
+  })
+
+  it("explains itself on an SDK too old to have getClaims", async () => {
+    const supabase = createMockSupabase()
+    const store = createAuthStore({ supabase })
+
+    const { error } = await store.getState().getVerifiedClaims()
+
+    expect(error?.message).toMatch(/getClaims\(\) is unavailable/)
+  })
+})

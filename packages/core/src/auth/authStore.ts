@@ -9,8 +9,17 @@ type CreateAuthStoreOptions = {
 }
 
 /**
- * Decode JWT claims from a Supabase session's access token.
- * Only reads the payload (no crypto verification — Supabase handles that).
+ * Decode the payload of a session's access token. **Nothing is verified.**
+ *
+ * The previous docstring said "no crypto verification — Supabase handles that",
+ * which is true of the token's use on the *server* and irrelevant here: this
+ * reads a string the client already holds, and a client that has been handed a
+ * forged token will parse the forged claims out of it just as happily.
+ *
+ * That is fine for what it is for — deciding which tab to show, rendering a
+ * plan name — because no client-side check is a security boundary in the first
+ * place; RLS is. It is not fine as the only claims API, which is why
+ * `getVerifiedClaims()` exists alongside it.
  */
 function parseJwtClaims(session: Session | null): Record<string, unknown> {
   if (!session?.access_token) return {}
@@ -179,6 +188,31 @@ export function createAuthStore(
 
     getClaim(key: string) {
       return get().claims[key]
+    },
+
+    async getVerifiedClaims() {
+      // `getClaims()` verifies the signature against the project's JWKS —
+      // asymmetric keys are checked locally, a legacy HS256 secret by asking
+      // the auth server. It has shipped in the pinned SDK all along and was
+      // never called; `getClaim` read an unverified local decode instead.
+      const auth = supabase.auth as unknown as {
+        getClaims?: (jwt?: string) => Promise<{ data: unknown; error: unknown }>
+      }
+      if (typeof auth.getClaims !== "function") {
+        return {
+          claims: null,
+          error: new Error(
+            "[anchor] supabase.auth.getClaims() is unavailable — needs @supabase/supabase-js >= 2.44.",
+          ),
+        }
+      }
+
+      const { data, error } = await auth.getClaims()
+      if (error) return { claims: null, error: fromSupabaseError(error) }
+      // supabase-js returns `{claims, headers, signature}`; a session-less
+      // client returns null rather than erroring.
+      const claims = (data as { claims?: Record<string, unknown> } | null)?.claims ?? null
+      return { claims, error: null }
     },
   }))
 }

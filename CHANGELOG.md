@@ -24,6 +24,15 @@ could not fail.
   `phone_change` code, and the `token_hash` form a callback link carries were all
   unreachable. `verifyRecoveryOTP` keeps its signature and now delegates to it.
 
+- **`authStore.getVerifiedClaims()`**, which verifies against the project's JWKS
+  via `supabase.auth.getClaims()` — a method that has shipped in the pinned SDK
+  all along and was never called. `getClaim` reads an unverified local base64
+  decode of the access token, and its docstring claimed "no crypto verification
+  — Supabase handles that", which is true of the token's use on the server and
+  irrelevant to a client parsing a string it already holds. `getClaim` is
+  unchanged and still right for deciding what to render; the docstring now says
+  what it does.
+
 - **`RealtimeManager.resume()`**, which `pause()`'s docstring has promised since
   it was written and which did not exist. `pauseRealtimeOnBackground` was
   therefore a one-way door: an app that backgrounded once stayed disconnected

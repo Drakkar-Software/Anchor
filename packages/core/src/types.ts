@@ -547,8 +547,24 @@ export type AuthActions = {
   }) => Promise<void>
   refreshSession: () => Promise<void>
   onAuthStateChange: () => () => void
-  /** Get a specific claim from the JWT access token */
+  /**
+   * Read a claim from the locally decoded access token. **Unverified** — the
+   * payload is base64-decoded, not signature-checked. Fine for deciding what to
+   * render, since no client-side check is a security boundary anyway; use
+   * `getVerifiedClaims()` when the answer has to be trustworthy, and RLS when it
+   * has to be enforced.
+   */
   getClaim: (key: string) => unknown
+  /**
+   * Claims verified against the project's JWKS, via `supabase.auth.getClaims()`.
+   *
+   * Asynchronous because verification is: asymmetric keys are checked locally,
+   * a legacy HS256 secret by asking the auth server.
+   */
+  getVerifiedClaims: () => Promise<{
+    claims: Record<string, unknown> | null
+    error: Error | null
+  }>
 }
 
 export type AuthStore = AuthState & AuthActions
