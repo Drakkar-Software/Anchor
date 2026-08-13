@@ -656,6 +656,17 @@ describe("chains that create a row, and rows that leave the store", () => {
     // own user: before that, an unauthenticated flush from any source would
     // have drained the queue anyway. A test that stubs the queue dirty before
     // the auth event cannot see it, because here the queue becomes dirty after.
+    //
+    // The mutation therefore carries a `userId`, and the session is recovered
+    // before the stores are built. An untagged one passes the flush filter
+    // whatever the current user is, which is not the shape any authenticated
+    // consumer produces — every mutation enqueued while somebody is signed in
+    // is tagged. It also pins the order the fix depends on: the gate's
+    // synchronous INITIAL_SESSION sets the user before `hydrate()` resolves, so
+    // the flush this schedules is one the filter will let through.
+    const supabase = createMockSupabase({ todos: [{ id: 1, title: "A" }] })
+    await supabase.auth.signInWithPassword({ email: "a@b.c", password: "x" })
+
     const adapter = new MemoryAdapter()
     await adapter.setItem("anchor:__mutation_queue", [
       {
@@ -668,10 +679,10 @@ describe("chains that create a row, and rows that leave the store", () => {
         status: "pending",
         retryCount: 0,
         rollbackSnapshot: null,
+        userId: "user-1",
       } as unknown as QueuedMutation,
     ])
 
-    const supabase = createMockSupabase({ todos: [{ id: 1, title: "A" }] })
     const stores = createSupabaseStores<any>({
       supabase: supabase as any,
       tables: ["todos"],

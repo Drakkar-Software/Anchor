@@ -45,6 +45,12 @@ export class OfflineQueue {
   private queue: QueuedMutation[] = []
   private executors = new Map<string, MutationExecutor>()
   private flushing = false
+  /**
+   * A flush was asked for while one was already running, and the work it was
+   * asked for is not in the batch that is running — `pending` is captured
+   * before the first `await`. See the re-arm in `flush`'s `finally`.
+   */
+  private flushRequestedWhileRunning = false
   private flushTimer: ReturnType<typeof setTimeout> | null = null
   private unsubNetwork: (() => void) | null = null
   /** Persisted temp ID → real ID mappings that survive across flushes */
@@ -159,7 +165,15 @@ export class OfflineQueue {
         continue
       }
 
-      const rowKey = `${mutation.table}:${JSON.stringify(mutation.primaryKey)}`
+      // Keyed on the user as well as the row. Two people writing the same row
+      // from one device is exactly what `userId` isolates on flush, and
+      // coalescing defeated that isolation one line earlier: `UPDATE + UPDATE`
+      // merges the newer payload into the OLDER mutation, which keeps the older
+      // one's `userId` — so B's edit went out under A's session, or waited
+      // forever for an A who never signed back in. `INSERT + DELETE` was worse
+      // still, dropping both. An untagged mutation keys separately from a tagged
+      // one for the same reason: nothing says they are the same person.
+      const rowKey = `${mutation.userId ?? ""}:${mutation.table}:${JSON.stringify(mutation.primaryKey)}`
       const existingIdx = seen.get(rowKey)
 
       if (existingIdx == null) {
@@ -244,6 +258,14 @@ export class OfflineQueue {
 
   async flush(): Promise<FlushResult> {
     if (this.flushing) {
+      // Not a no-op: whatever asked for this flush wanted work done that the
+      // running one cannot do, because it filtered `pending` before its first
+      // `await`. Dropping the request strands that work until some other
+      // trigger happens along — and since 2.2.1 there are only two, a
+      // connectivity transition and an auth event, neither of which a device
+      // sitting on wifi with a signed-in user will produce. Re-armed in
+      // `finally`.
+      this.flushRequestedWhileRunning = true
       return { succeeded: [], failed: [], rolledBack: [], complete: false }
     }
 
@@ -405,6 +427,14 @@ export class OfflineQueue {
       return result
     } finally {
       this.flushing = false
+      if (this.flushRequestedWhileRunning) {
+        this.flushRequestedWhileRunning = false
+        // `!this.flushTimer` keeps the retry backoff scheduled above: a plain
+        // `scheduleFlush()` here would clear that timer and replace an
+        // exponential delay with the debounce, which is how a queue full of
+        // failing writes turns into a tight retry loop.
+        if (this.isDirty && !this.flushTimer) this.scheduleFlush()
+      }
     }
   }
 
