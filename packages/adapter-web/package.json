@@ -27,15 +27,19 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "clean": "rm -rf dist",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "peerDependencies": {
     "@drakkar.software/anchor": ">=2.2.0"
   },
   "devDependencies": {
     "@drakkar.software/anchor": "workspace:*",
+    "jsdom": "^30.0.1",
+    "tsup": "^8.0.0",
     "typescript": "^6.0.3",
-    "tsup": "^8.0.0"
+    "vitest": "^4.1.9"
   },
   "engines": {
     "node": ">=22"

@@ -1,5 +1,51 @@
 # Changelog
 
+## [Unreleased]
+
+Work towards full parity with the pinned `@supabase/supabase-js` (2.112.3). This
+first slice changes no library behaviour — it is the test infrastructure the rest
+of the work lands against, and it is here because the existing infrastructure
+could not fail.
+
+### Testing
+
+- **The mock stopped agreeing with a store that ignores the filter.**
+  `src/__tests__/mockSupabase.ts` accepted `contains`, `containedBy`, `overlaps`
+  and `textSearch` into its filter list and had no case for any of them, so its
+  `default: return true` matched every row; `not()`, `or()` and `filter()`
+  recorded nothing at all. `update` and `delete` honoured only `eq` and treated
+  every other filter as a match, so a delete carrying a `gt` emptied the table.
+  All are implemented, one predicate now serves reads and writes alike, and the
+  `default` arm throws rather than passing an operator it does not know.
+
+  Implementing them broke no existing test, which is the more uncomfortable half
+  of the finding: in 657 tests, none had ever driven one of these operators
+  through the mock.
+
+- **The mock gained what the next releases need to be testable at all:**
+  `.schema(name)` (every schema-scoped store previously threw `TypeError`),
+  `_setError(table, op, error, {status, once})` for failure paths — with an
+  explicit `status`, because `isTransportError` only classifies a failure as
+  never-having-reached-Postgres at `status: 0` — `status`/`statusText` on every
+  response, `PGRST116` on a write whose `.single()` got nothing back, and a
+  `channel()` that records bindings and can be driven with
+  `_fireEvent`/`_fireStatus`/`send`/`track`/`presenceState`.
+
+- **`like`/`ilike` are anchored in the mock**, as SQL `LIKE` is. The previous
+  translation produced an unanchored regex, so `like('abc')` matched `xabcx`.
+
+- **React hooks can be tested.** All 18 files in `src/hooks/` had no tests
+  because the runner is `environment: "node"` with no DOM and no `react-dom` —
+  a hook could not be mounted. jsdom, `react-dom` and `@testing-library/react`
+  are now dev dependencies, and hook tests opt into jsdom per file rather than
+  changing the default for the other 56 files. `useQuery` has 8 tests.
+
+- **The adapter packages run their tests.** Neither defined a `test` script, so
+  `packages/adapter-react-native/src/expoOAuth.test.ts` had never executed, in
+  CI or locally — it passes. `packages/adapter-web` had no tests at all and now
+  covers `LocalStorageAdapter`, including that `clear()` removes only
+  `anchor:`-prefixed keys and leaves a session token alone.
+
 ## [2.2.3] - 2026-08-13
 
 Two more on the queue path, found by reading 2.2.1 and 2.2.2 back. The first is
