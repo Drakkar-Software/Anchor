@@ -30,9 +30,16 @@ export function useAuth(authStore: StoreApi<AuthStore>) {
   const error = useStore(authStore, (s) => s.error)
 
   useEffect(() => {
+    // Listener first, then the snapshot. Both report the same fact — supabase-js
+    // answers a new subscriber with `INITIAL_SESSION` carrying exactly what
+    // `getSession()` would have returned — and both write `isLoading: false`,
+    // so the order they settle in used to decide the result. Subscribing first
+    // means the store knows a listener exists before the round-trip can resolve,
+    // and `initialize()` defers to it rather than overwriting a transition that
+    // arrived meanwhile.
+    const unsubscribe = authStore.getState().onAuthStateChange()
     // Error is captured in authStore.error state; prevent unhandled rejection
     authStore.getState().initialize().catch(() => {})
-    const unsubscribe = authStore.getState().onAuthStateChange()
     return unsubscribe
   }, [authStore])
 

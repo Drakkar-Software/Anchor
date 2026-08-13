@@ -90,6 +90,16 @@ each is a path that does the wrong thing today.
   `PGRST116` from a batch update, a prefetch or an aggregate, not only from a
   single-row store write.
 
+- **`useAuth` no longer reads the session twice and races itself.** It called
+  `initialize()` — a `getSession()` round-trip — and registered a listener that
+  supabase-js answers with `INITIAL_SESSION` carrying the same session. Both
+  wrote `isLoading: false`, so whichever settled last won, and the later one
+  could be the staler: a `SIGNED_OUT` arriving mid-flight (the ordinary end of a
+  long offline session, once a refresh token fails to renew) was overwritten by
+  the session the in-flight `getSession()` had already resolved with. The hook
+  now subscribes before it reads, and `initialize()` defers to a listener that
+  has already spoken instead of overwriting it.
+
 - **A hand-built `{op: "match"}` filter is evaluated locally.** It fell through
   `matchRow`'s default arm and included every row, so a local read showed rows
   the server would not have returned. The `match()` helper deliberately still

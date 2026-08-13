@@ -43,6 +43,23 @@ export function createAuthStore(
 ): StoreApi<AuthStore> {
   const { supabase } = options
 
+  /**
+   * Whether `onAuthStateChange` has delivered anything yet.
+   *
+   * `useAuth` calls `initialize()` — a `getSession()` round-trip — and registers
+   * a listener, and supabase-js answers the listener with `INITIAL_SESSION`
+   * carrying the same session. Two reads of one fact, and two writes of
+   * `isLoading: false` racing each other. The order is not fixed: whichever
+   * settles last wins, so a `SIGNED_OUT` arriving while the `getSession()`
+   * promise was in flight could be overwritten by the stale session it had
+   * already resolved with.
+   *
+   * A listener is always the fresher source — it reports transitions, not a
+   * snapshot — so once one has spoken, `initialize()` stops writing session
+   * state and only clears the loading flag.
+   */
+  let sawAuthEvent = false
+
   return createStore<AuthStore>()((set, get) => ({
     // State
     session: null,
@@ -54,11 +71,17 @@ export function createAuthStore(
     // Actions
     async initialize() {
       try {
-        const {
-          data: { session },
-          error,
-        } = await supabase.auth.getSession()
+        const { data, error } = await supabase.auth.getSession()
 
+        // A listener answered while this round-trip was in flight; its answer is
+        // the newer one. Clearing the flag is still this call's job — nothing
+        // else does it when `getSession()` resolves last.
+        if (sawAuthEvent) {
+          set({ isLoading: false, error: error ? fromSupabaseError(error) : null })
+          return
+        }
+
+        const session = data?.session ?? null
         set({
           session,
           user: session?.user ?? null,
@@ -175,6 +198,7 @@ export function createAuthStore(
       const {
         data: { subscription },
       } = supabase.auth.onAuthStateChange((_event, session) => {
+        sawAuthEvent = true
         set({
           session,
           user: session?.user ?? null,
