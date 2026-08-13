@@ -944,6 +944,11 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
     removeChannel(channel: any) {
       const idx = channels.indexOf(channel)
       if (idx >= 0) channels.splice(idx, 1)
+      // A removed channel delivers nothing. Dropping it from the list but
+      // leaving its bindings live would let `_fireEvent` keep reaching a store
+      // that had unsubscribed — the mock agreeing with an unsubscribe that
+      // works and one that does not.
+      if (channel) channel._removed = true
     },
     getChannels() {
       return [...channels]
@@ -1037,8 +1042,10 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
       // Test drivers
       _bindings: bindings,
       _sent: sent,
+      _removed: false,
       /** Deliver a payload to every binding whose type and event match. */
       _fireEvent(type: string, payload: any, event?: string) {
+        if (channel._removed) return
         for (const b of bindings) {
           if (b.type !== type) continue
           const want = event ?? payload?.eventType

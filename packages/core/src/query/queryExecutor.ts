@@ -108,9 +108,17 @@ export function applySort(
 ): any {
   let q = builder
   for (const s of sorts) {
+    // `nullsFirst` is passed through only when the caller named it.
+    //
+    // It used to default to `false`, which is not PostgREST's default and is
+    // not Postgres': `NULLS LAST` is the default for ASC, but `NULLS FIRST` is
+    // the default for DESC. Forcing `false` therefore moved nulls to the bottom
+    // of every descending sort — a silent difference from the same query run
+    // against the database, and one that changes which rows a `limit` keeps.
+    // postgrest-js omits the token entirely when the option is `undefined`.
     q = q.order(s.column, {
       ascending: s.ascending ?? true,
-      nullsFirst: s.nullsFirst ?? false,
+      nullsFirst: s.nullsFirst,
     })
   }
   return q

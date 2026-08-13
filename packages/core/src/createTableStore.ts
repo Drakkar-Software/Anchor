@@ -21,6 +21,8 @@ import { AnchorError, fromSupabaseError, isTransportError } from "./errors.js"
 import { queryKey, isKeyable } from "./query/queryKey.js"
 import { selectAllRows, selectQueryRows } from "./query/selectRows.js"
 import { executeQuery, executeQueryOne, fromTable, applyFilters } from "./query/queryExecutor.js"
+import type { RealtimeManager } from "./realtime/realtimeManager.js"
+import { bindRealtimeToStore } from "./realtime/realtimeBindings.js"
 
 type StoreSet<Row, InsertRow, UpdateRow> = StoreApi<
   TableStore<Row, InsertRow, UpdateRow>
@@ -62,6 +64,7 @@ export function createTableStore<
     validate,
     cacheStrategy: defaultCacheStrategy = "replace",
     _queue,
+    _realtimeManager,
     extend,
   } = options
 
@@ -93,6 +96,12 @@ export function createTableStore<
   }
 
   const queue = _queue as OfflineQueue | undefined
+
+  // Assigned once the store exists, because `bindRealtimeToStore` writes through
+  // the real `StoreApi` (the same one `createSupabaseStores` hands it) rather
+  // than through the creator's `set`, which the immer middleware wraps.
+  let storeRef: StoreApi<TableStore<Row, InsertRow, UpdateRow> & Extensions> | null = null
+  let realtimeCleanup: (() => void) | null = null
 
   // Queuing needs all three: somewhere to put the mutation, a way to know the
   // server is unreachable, and the caller having asked for it. Missing any one
@@ -1319,13 +1328,62 @@ export function createTableStore<
         return actions.fetch({ ...fetchOpts, cacheStrategy: "replace" })
       },
 
-      // ── Realtime (stub — implemented in realtimeBindings) ─────
+      // ── Realtime ──────────────────────────────────────────────
+      //
+      // These two were permanent no-ops returning `() => {}`, which made
+      // `hooks/useRealtime.ts`'s subscribe path and `appLifecycle`'s
+      // `pauseRealtimeOnBackground` do nothing at all while reporting success.
+      // Realtime only ever worked declaratively, through
+      // `createSupabaseStores({realtime: {enabled: true}})`.
 
-      subscribe(_filter) {
-        return () => {}
+      subscribe(filter) {
+        const manager = _realtimeManager as RealtimeManager | undefined
+        if (!manager) {
+          // Throwing beats returning a no-op: a caller who asked for realtime
+          // and silently got none has no way to find out, which is the whole
+          // bug this replaces.
+          throw new Error(
+            `[anchor:${table}] subscribe() needs the shared RealtimeManager, which only ` +
+              `createSupabaseStores() creates. Build the store with createSupabaseStores(), ` +
+              `or call bindRealtimeToStore(manager, store, {...}) yourself.`,
+          )
+        }
+        if (isView) {
+          // Postgres publishes changes under the underlying table's name, so a
+          // channel on a view's name never fires. Same reason
+          // `createSupabaseStores` skips realtime for views.
+          throw new Error(
+            `[anchor:${table}] is a view. Postgres publishes changes under the underlying ` +
+              `table's name, so a channel on a view never fires — subscribe to that table instead.`,
+          )
+        }
+
+        // One subscription per store: a second call replaces the first rather
+        // than leaving an orphaned channel nothing can reach.
+        realtimeCleanup?.()
+
+        const cleanup = bindRealtimeToStore(manager, storeRef!, {
+          table,
+          schema,
+          primaryKey,
+          events: realtimeOpts?.events,
+          filter: (filter ?? realtimeOpts?.filter) as FilterDescriptor[] | string | undefined,
+          select: realtimeOpts?.select,
+          conflict: conflictOpts,
+          getPendingMutations: (t) =>
+            (queue?.pendingMutations ?? []).filter((m) => m.table === t),
+        })
+
+        realtimeCleanup = () => {
+          cleanup()
+          realtimeCleanup = null
+        }
+        return realtimeCleanup
       },
 
-      unsubscribe() {},
+      unsubscribe() {
+        realtimeCleanup?.()
+      },
 
       // ── Persistence ───────────────────────────────────────────
 
@@ -1424,6 +1482,7 @@ export function createTableStore<
   const store = createStore<TableStore<Row, InsertRow, UpdateRow> & Extensions>()(
     combinedCreator as any,
   )
+  storeRef = store
 
   // Auto-hydrate if persistence configured
   if (persistence) {

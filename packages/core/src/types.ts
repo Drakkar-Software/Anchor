@@ -761,6 +761,15 @@ export type CreateTableStoreOptions<
   /** @internal Used by createSupabaseStores to inject shared queue */
   _queue?: unknown
 
+  /**
+   * @internal Used by createSupabaseStores to inject the shared RealtimeManager.
+   *
+   * Without it `store.subscribe()` has nothing to subscribe *with*: one channel
+   * per table is the manager's job, and a store opening its own would duplicate
+   * the ones `createSupabaseStores` already opened.
+   */
+  _realtimeManager?: unknown
+
   // Extension
   extend?: (
     set: StoreApi<TableStore<Row, InsertRow, UpdateRow>>["setState"],

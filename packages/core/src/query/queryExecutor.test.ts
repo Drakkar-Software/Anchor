@@ -104,7 +104,7 @@ describe("applySort", () => {
     expect(calls).toHaveLength(2)
     expect(calls[0]).toEqual({
       method: "order",
-      args: ["created_at", { ascending: false, nullsFirst: false }],
+      args: ["created_at", { ascending: false, nullsFirst: undefined }],
     })
     expect(calls[1]).toEqual({
       method: "order",
@@ -112,7 +112,7 @@ describe("applySort", () => {
     })
   })
 
-  it("defaults to ascending with nullsFirst false", () => {
+  it("defaults to ascending and leaves nullsFirst to PostgREST", () => {
     const calls: Array<{ method: string; args: unknown[] }> = []
     const builder = new Proxy(
       {},
@@ -128,10 +128,39 @@ describe("applySort", () => {
 
     applySort(builder, [{ column: "id" }])
 
+    // `nullsFirst: false` used to be forced here. That is not PostgREST's
+    // default and not Postgres': NULLS LAST is the default for ASC but NULLS
+    // FIRST is the default for DESC, so forcing `false` moved nulls to the
+    // bottom of every descending sort — silently different from the same query
+    // run against the database, and enough to change which rows a `limit`
+    // keeps. postgrest-js omits the token when the option is `undefined`.
     expect(calls[0]).toEqual({
       method: "order",
-      args: ["id", { ascending: true, nullsFirst: false }],
+      args: ["id", { ascending: true, nullsFirst: undefined }],
     })
+  })
+
+  it("still forwards an explicit nullsFirst in both positions", () => {
+    const calls: Array<{ method: string; args: unknown[] }> = []
+    const builder: any = new Proxy(
+      {},
+      {
+        get(_target, prop) {
+          return (...args: unknown[]) => {
+            calls.push({ method: String(prop), args })
+            return builder
+          }
+        },
+      },
+    )
+
+    applySort(builder, [
+      { column: "a", ascending: false, nullsFirst: true },
+      { column: "b", ascending: false, nullsFirst: false },
+    ])
+
+    expect(calls[0]!.args[1]).toEqual({ ascending: false, nullsFirst: true })
+    expect(calls[1]!.args[1]).toEqual({ ascending: false, nullsFirst: false })
   })
 })
 

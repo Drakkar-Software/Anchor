@@ -177,6 +177,9 @@ export function createSupabaseStores<
       devtools,
       logger,
       _queue: offlineQueue,
+      // Views deliberately do not get this: Postgres publishes changes under the
+      // underlying table's name, so a channel on a view never fires.
+      _realtimeManager: realtimeManager,
     })
 
     stores[tableName as string] = store

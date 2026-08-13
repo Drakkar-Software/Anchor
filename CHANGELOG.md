@@ -1,21 +1,27 @@
 # Changelog
 
-## [Unreleased] — will release as 3.0.0
+## [Unreleased]
 
-Work towards full parity with the pinned `@supabase/supabase-js` (2.112.3).
+## [3.0.0] - 2026-08-13
 
-**Why a major.** Nothing in this first slice is breaking, but three changes on
-this branch are, and the version is settled now rather than after they land:
-`nullsFirst` stops being forced to `false`, so DESC ordering over a nullable
-column matches PostgREST's own NULLS FIRST default and silently changes row
-order; `store.subscribe()` stops being a no-op and starts opening channels; and
-the cache gate lets `fetch()` short-circuit when a query is still fresh.
+First slice of the work towards full parity with the pinned
+`@supabase/supabase-js` (2.112.3). This release is not the parity work itself —
+it is the test infrastructure that makes the parity work falsifiable, plus
+twelve defects in features that already shipped. The parity surface (PostgREST
+operators, auth, storage, realtime, the unified cache) lands in later versions.
 
-Two slices so far. The **Testing** section came first and changes no library
-behaviour: it is the infrastructure the rest of the work lands against, and it
-went first because the infrastructure that existed could not fail. The **Fixed**
-section is defects in features that already shipped — none is a missing feature;
-each is a path that does the wrong thing today.
+**Why a major.** Two changes below alter behaviour that existing code depends
+on, and neither errors when it changes: `nullsFirst` stops being forced to
+`false`, so DESC ordering over a nullable column follows PostgREST's own NULLS
+FIRST default and silently reorders rows; and `store.subscribe()` stops being a
+no-op, so code that called it now opens realtime channels. Both are detailed
+under **Changed — breaking**.
+
+The **Testing** section changes no library behaviour: it is the infrastructure
+the rest of the work lands against, and it went first because the infrastructure
+that existed could not fail. The **Fixed** section is defects in features that
+already shipped — none is a missing feature; each is a path that did the wrong
+thing.
 
 ### Added
 
@@ -43,6 +49,32 @@ each is a path that does the wrong thing today.
 - **`SyncLogger.realtimeError?(table, status, error?)`** (optional, so existing
   loggers keep compiling), carrying the `err` argument `subscribe()` passes and
   Anchor dropped.
+
+### Changed — breaking
+
+- **`nullsFirst` is no longer forced to `false`.** `applySort` passed
+  `nullsFirst: s.nullsFirst ?? false` unconditionally. That is neither
+  PostgREST's default nor Postgres': `NULLS LAST` is the default for ASC, but
+  **`NULLS FIRST` is the default for DESC**. So every descending sort over a
+  nullable column put nulls at the bottom — silently different from the same
+  query run against the database, and enough to change which rows a `limit`
+  keeps. It is now passed through only when you name it, and postgrest-js omits
+  the token entirely when it is `undefined`. **If you relied on the old
+  behaviour, pass `nullsFirst: false` explicitly.**
+
+- **`store.subscribe()` and `store.unsubscribe()` do something.** They were
+  permanent no-op stubs returning `() => {}`, which silently made
+  `hooks/useRealtime.ts`'s subscribe path and `appLifecycle`'s
+  `pauseRealtimeOnBackground` do nothing while reporting success — realtime only
+  ever worked declaratively, through
+  `createSupabaseStores({realtime: {enabled: true}})`. `subscribe()` now binds
+  the store to the shared `RealtimeManager` and returns a real cleanup; calling
+  it twice replaces the first subscription rather than orphaning a channel.
+  **Code that called `subscribe()` "harmlessly" now opens a channel.** On a
+  standalone `createTableStore` — which has no shared manager — it throws with
+  the reason rather than returning a no-op, and it refuses on a view, because
+  Postgres publishes changes under the underlying table's name and a channel on
+  a view never fires.
 
 ### Fixed
 

@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest"
 import { bindRealtimeToStore } from "./realtimeBindings.js"
 import { RealtimeManager } from "./realtimeManager.js"
 import { createTableStore } from "../createTableStore.js"
+import { createSupabaseStores } from "../createSupabaseStores.js"
 import { createMockSupabase } from "../__tests__/mockSupabase.js"
 
 type Todo = { id: number; title: string; completed: boolean }
@@ -129,5 +130,85 @@ describe("bindRealtimeToStore", () => {
 
     cleanup()
     expect(supabase.removeChannel).toHaveBeenCalled()
+  })
+})
+
+describe("store.subscribe() is no longer a no-op", () => {
+  // `subscribe(filter)` and `unsubscribe()` returned `() => {}` and did nothing.
+  // That silently made `hooks/useRealtime.ts`'s subscribe path and
+  // `appLifecycle`'s `pauseRealtimeOnBackground` do nothing while reporting
+  // success — realtime only ever worked through
+  // `createSupabaseStores({realtime: {enabled: true}})`.
+
+  it("opens a channel and applies an INSERT to the store", () => {
+    const supabase = createMockSupabase({ todos: [] })
+    const stores = createSupabaseStores<any>({
+      supabase,
+      tables: ["todos"],
+      auth: false,
+      fetchRemoteOnBoot: false,
+    })
+
+    stores.todos.getState().subscribe()
+
+    const channel = supabase.getChannels()[0]
+    expect(channel).toBeDefined()
+    channel._fireEvent("postgres_changes", { eventType: "INSERT", new: { id: 1, title: "live" } })
+
+    expect(stores.todos.getState().records.get(1)).toMatchObject({ title: "live" })
+  })
+
+  it("stops applying events after unsubscribe()", () => {
+    const supabase = createMockSupabase({ todos: [] })
+    const stores = createSupabaseStores<any>({
+      supabase,
+      tables: ["todos"],
+      auth: false,
+      fetchRemoteOnBoot: false,
+    })
+
+    stores.todos.getState().subscribe()
+    const channel = supabase.getChannels()[0]
+
+    stores.todos.getState().unsubscribe()
+    channel._fireEvent("postgres_changes", { eventType: "INSERT", new: { id: 1, title: "late" } })
+
+    expect(stores.todos.getState().records.size).toBe(0)
+  })
+
+  it("returns a cleanup that also stops it", () => {
+    const supabase = createMockSupabase({ todos: [] })
+    const stores = createSupabaseStores<any>({
+      supabase, tables: ["todos"], auth: false, fetchRemoteOnBoot: false,
+    })
+
+    const cleanup = stores.todos.getState().subscribe()
+    const channel = supabase.getChannels()[0]
+    cleanup()
+
+    channel._fireEvent("postgres_changes", { eventType: "INSERT", new: { id: 1 } })
+    expect(stores.todos.getState().records.size).toBe(0)
+  })
+
+  it("replaces the previous subscription rather than orphaning a channel", () => {
+    const supabase = createMockSupabase({ todos: [] })
+    const stores = createSupabaseStores<any>({
+      supabase, tables: ["todos"], auth: false, fetchRemoteOnBoot: false,
+    })
+
+    stores.todos.getState().subscribe()
+    stores.todos.getState().subscribe()
+
+    // One live channel, not two firing the same event twice.
+    expect(supabase.getChannels()).toHaveLength(1)
+  })
+
+  it("throws on a standalone store, instead of quietly subscribing to nothing", () => {
+    const supabase = createMockSupabase({ todos: [] })
+    const store = createTableStore<any, any, any, any>({ supabase, table: "todos" })
+
+    // A caller who asked for realtime and silently got none has no way to find
+    // out, which is the bug this replaces.
+    expect(() => store.getState().subscribe()).toThrow(/createSupabaseStores/)
   })
 })
