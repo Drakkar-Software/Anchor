@@ -1,6 +1,6 @@
 {
   "name": "@drakkar.software/anchor-adapter-web",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "Web platform adapters for Anchor (localStorage, IndexedDB)",
   "repository": {
     "type": "git",

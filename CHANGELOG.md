@@ -2,6 +2,77 @@
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-08-16
+
+Anchor can now create the client, and covers the auth calls that live outside
+the session. Both exist for the same reason: a consumer could depend on Anchor
+for its entire data layer and still had to name `@supabase/supabase-js` in its
+own `package.json` — for the `createClient` call, for the `SupabaseClient` type
+it then passed back in, and for the six `supabase.auth.*` methods the auth store
+does not wrap. So "nothing outside the data layer talks to supabase-js directly"
+was a rule no project could actually keep.
+
+Additive. Nothing existing changes behaviour, and the one packaging change is
+the point of the release.
+
+### Added
+
+- **`createAnchorClient(url, key, options?)`** and the **`AnchorClient<DB>`**
+  type, from the root or `@drakkar.software/anchor/client`. The options object
+  is supabase-js's own, forwarded untouched — a platform `auth.storage`,
+  `detectSessionInUrl` for an app handling its own callback, `autoRefreshToken`
+  are settings supabase-js defines, and anything reshaped here would be a second
+  place to keep them right.
+
+  `AnchorClient<DB>` is a plain alias of `SupabaseClient<DB>`, deliberately not
+  a wrapper: `.from()`, `.auth`, `.rpc()` and `.storage` keep supabase-js's own
+  generics, so a `Database` type still reaches per-table row inference. A facade
+  would mean restating postgrest-js's builder generics — four of them as of
+  2.112 (`PostgrestQueryBuilder<ClientOptions, Schema, Table, TableName>`), an
+  arity that has changed between minor versions.
+
+- **The supabase-js types a consumer would otherwise import for itself**, re-exported
+  as types: `SupabaseClient`, `SupabaseClientOptions`, `Session`, `User`,
+  `AuthChangeEvent`, `AuthError`, `PostgrestError`. Types only, matching how
+  `errors.ts` already duck-types rather than reaching for `instanceof
+  PostgrestError` — nothing here is meant to be constructed or
+  `instanceof`-checked, and `AnchorError.code` remains the way to branch.
+
+- **Six headless auth functions** in `auth/authActions.ts`, from the root or
+  `@drakkar.software/anchor/auth/actions`: `getSession`, `getUser`,
+  `signUpWithPassword`, `signInWithPassword`, `updateUser` and `resendOtp`.
+  Free functions taking the client first, like `callRpc` and `verifyOtp`, none
+  throwing, each wrapping its failure with `fromSupabaseError` so a caller can
+  branch on `.code`.
+
+  Each returns `AnchorError | null` rather than `Error | null`, so `code` is on
+  the declared type and not only on the runtime value — a caller branching on
+  `invalid_credentials` or `weak_password` gets there without a cast, which is
+  the whole point of having wrapped the error at all.
+
+  `createAuthStore` owns the session and the five actions that change who is
+  signed in. These are the flows *around* it: confirming a sign-up, resending a
+  code, changing a password, or reading the current user from a function with no
+  React in sight. Two overlap the store on purpose — `signInWithPassword` is the
+  re-authentication step in front of a destructive account change, where the
+  point is to verify the current password without disturbing store state, and
+  `getUser`/`getSession` are for code with no store to read.
+
+  `signUpWithPassword` reads `error` before `data`, because supabase-js
+  populates `data` with a null pair on failure and a confirmation-pending
+  sign-up is *also* a null session — reading `data` first makes a refusal
+  indistinguishable from the one success case a caller is meant to treat as
+  success.
+
+### Changed
+
+- **`@supabase/supabase-js` moved from `peerDependencies` to `dependencies`**
+  (`^2.112.3`). A peer would still have to be installed by the consumer, which
+  is precisely the coupling the additions above exist to remove. `zustand` stays
+  a peer; `react` and `immer` stay optional. Installs that already had
+  supabase-js are unaffected — the version range it was pinned at is the range
+  it is pinned at now.
+
 ## [3.0.0] - 2026-08-13
 
 First slice of the work towards full parity with the pinned

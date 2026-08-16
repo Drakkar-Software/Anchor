@@ -22,7 +22,7 @@
 ## Installation
 
 ```bash
-npm install @drakkar.software/anchor zustand @supabase/supabase-js
+npm install @drakkar.software/anchor zustand
 # Web adapters
 npm install @drakkar.software/anchor-adapter-web
 # React Native adapters
@@ -40,12 +40,11 @@ npx supabase gen types typescript --project-id $PROJECT_REF > database.types.ts
 ### 2. Create stores for all tables
 
 ```typescript
-import { createClient } from '@supabase/supabase-js'
-import { createSupabaseStores } from '@drakkar.software/anchor'
+import { createAnchorClient, createSupabaseStores } from '@drakkar.software/anchor'
 import { LocalStorageAdapter, WebNetworkStatus } from '@drakkar.software/anchor-adapter-web'
 import type { Database } from './database.types'
 
-const supabase = createClient<Database>(
+const supabase = createAnchorClient<Database>(
   process.env.SUPABASE_URL!,
   process.env.SUPABASE_PUBLISHABLE_KEY!, // sb_publishable_... (new format) or the legacy anon key
 )
@@ -587,6 +586,36 @@ const cleanup = setupAuthGate(supabase, stores.auth, [stores.todos, stores.profi
 })
 ```
 
+### Auth Actions
+
+The auth store owns the session and the five actions that change who is signed
+in. The flows *around* it are free functions, for code with no store to read —
+or no React at all:
+
+```typescript
+import {
+  getSession, getUser,
+  signUpWithPassword, signInWithPassword,
+  updateUser, resendOtp,
+  verifyOtp, sendPasswordRecovery,
+} from '@drakkar.software/anchor'
+
+// Sign up, then confirm from the emailed code
+const { user, session } = await signUpWithPassword(supabase, {
+  email, password, options: { emailRedirectTo: getWebAuthRedirectTo() },
+})
+// `session` is null when the project requires confirmation — not an error.
+await verifyOtp(supabase, { email, token: code, type: 'signup' })
+await resendOtp(supabase, { type: 'signup', email })   // "I didn't get the code"
+
+// Change a password, after re-verifying the current one
+await signInWithPassword(supabase, { email, password: currentPassword })
+await updateUser(supabase, { password: newPassword })
+```
+
+None of them throws: each returns its result beside an `error` wrapped as an
+`AnchorError`, so a caller branches on `.code` rather than on message prose.
+
 ### Incremental Sync
 
 Delta fetch — only get rows changed since last sync:
@@ -1047,6 +1076,12 @@ import { createTableStore, useQuery, eq } from '@drakkar.software/anchor'
 // Hooks only
 import { useQuery, useMutation, useSyncStatus } from '@drakkar.software/anchor/hooks'
 
+// Client only
+import { createAnchorClient, type AnchorClient } from '@drakkar.software/anchor/client'
+
+// Auth actions only (no store, no React)
+import { getSession, updateUser } from '@drakkar.software/anchor/auth/actions'
+
 // Query builder only
 import { query, QueryBuilder } from '@drakkar.software/anchor/query/queryBuilder'
 
@@ -1081,7 +1116,10 @@ very list, and `exports` is an allowlist: a path missing from it throws
 ## Requirements
 
 - **zustand** >= 4.5.0
-- **@supabase/supabase-js** >= 2.0.0
+- **@supabase/supabase-js** — a dependency since 3.1.0, installed with Anchor.
+  You no longer name it yourself; `createAnchorClient` creates the client and
+  the types it needs (`SupabaseClient`, `Session`, `User`, `PostgrestError`, …)
+  are re-exported from the root.
 - **TypeScript** >= 5.0 (recommended)
 - **React** >= 18.0 (optional, for hooks)
 - **immer** (optional, for draft-based mutations)
