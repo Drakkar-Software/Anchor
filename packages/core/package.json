@@ -1,6 +1,6 @@
 {
   "name": "@drakkar.software/anchor",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "Anchor: auto-generated Zustand stores for Supabase, offline-first, realtime, type-safe",
   "repository": {
     "type": "git",
@@ -23,6 +23,11 @@
       "types": "./dist/hooks/index.d.ts",
       "import": "./dist/hooks/index.mjs",
       "require": "./dist/hooks/index.js"
+    },
+    "./client": {
+      "types": "./dist/client/createClient.d.ts",
+      "import": "./dist/client/createClient.mjs",
+      "require": "./dist/client/createClient.js"
     },
     "./query": {
       "types": "./dist/query/filters.d.ts",
@@ -53,6 +58,11 @@
       "types": "./dist/auth/authGate.d.ts",
       "import": "./dist/auth/authGate.mjs",
       "require": "./dist/auth/authGate.js"
+    },
+    "./auth/actions": {
+      "types": "./dist/auth/authActions.d.ts",
+      "import": "./dist/auth/authActions.mjs",
+      "require": "./dist/auth/authActions.js"
     },
     "./functions": {
       "types": "./dist/functions/edgeFunctions.d.ts",
@@ -166,8 +176,10 @@
     "test": "vitest run",
     "test:watch": "vitest"
   },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.112.3"
+  },
   "peerDependencies": {
-    "@supabase/supabase-js": ">=2.111.0",
     "zustand": ">=4.5.0"
   },
   "peerDependenciesMeta": {
@@ -179,7 +191,6 @@
     }
   },
   "devDependencies": {
-    "@supabase/supabase-js": "^2.112.3",
     "@testing-library/react": "^16.3.2",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",

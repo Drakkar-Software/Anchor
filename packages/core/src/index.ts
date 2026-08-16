@@ -71,6 +71,19 @@ export {
   consoleLogger,
 } from "./types.js"
 
+// ─── Client ──────────────────────────────────────────────────────────
+export { createAnchorClient } from "./client/createClient.js"
+export type {
+  AnchorClient,
+  SupabaseClient,
+  SupabaseClientOptions,
+  Session,
+  User,
+  AuthChangeEvent,
+  AuthError,
+  PostgrestError,
+} from "./client/createClient.js"
+
 // ─── Store Factories ─────────────────────────────────────────────────
 export { createTableStore } from "./createTableStore.js"
 export { createSupabaseStores } from "./createSupabaseStores.js"
@@ -141,6 +154,19 @@ export type {
   AuthCallbackRoutes,
   VerifyOtpParams,
 } from "./auth/authCallbacks.js"
+export {
+  getSession,
+  getUser,
+  signUpWithPassword,
+  signInWithPassword,
+  updateUser,
+  resendOtp,
+} from "./auth/authActions.js"
+export type {
+  SignUpOptions,
+  UpdateUserAttributes,
+  ResendOtpParams,
+} from "./auth/authActions.js"
 
 // ─── Persistence ─────────────────────────────────────────────────────
 export { MemoryAdapter } from "./persistence/persistenceAdapter.js"
