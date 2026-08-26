@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [3.2.1] - 2026-08-26
+
+### Changed
+
+- **Bumped `@supabase/supabase-js` to `^2.112.4`** (core's dependency, and the
+  react-native adapter's dev dependency used for its test suite) to pick up
+  upstream fixes. No API changes on Anchor's side.
+
 ## [3.2.0] - 2026-08-26
 
 Three gaps found while migrating a real clinical app onto Anchor's store/queue
