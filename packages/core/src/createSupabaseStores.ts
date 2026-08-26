@@ -171,7 +171,7 @@ export function createSupabaseStores<
       supabase,
       table: tableName as string,
       schema: schema as string | undefined,
-      primaryKey: (tableOpts?.primaryKey as string) ?? "id",
+      primaryKey: (tableOpts?.primaryKey as string | string[]) ?? "id",
       defaultFilters: tableOpts?.defaultFilters as any,
       defaultSort: tableOpts?.defaultSort as any,
       defaultSelect: tableOpts?.defaultSelect as string,
@@ -200,7 +200,7 @@ export function createSupabaseStores<
       createMutationExecutor(
         supabase as SupabaseClient,
         tableName as string,
-        (tableOpts?.primaryKey as string) ?? "id",
+        (tableOpts?.primaryKey as string | string[]) ?? "id",
         store,
         tableOpts?.defaultSelect as string,
         schema as string | undefined,
@@ -210,13 +210,25 @@ export function createSupabaseStores<
     // Set up realtime if enabled
     const tableRealtime = (tableOpts?.realtime as any) ?? realtime
     if (tableRealtime?.enabled) {
+      const rawPk = (tableOpts?.primaryKey as string | string[] | undefined) ?? "id"
+      const pkColumns = Array.isArray(rawPk) ? rawPk : [rawPk]
+      if (pkColumns.length > 1) {
+        // Same reason `createTableStore`'s own `subscribe()` refuses this:
+        // `bindRealtimeToStore`/`RealtimeManager` key a single-column
+        // `primaryKey: string`. Fail loudly at setup time rather than
+        // silently binding realtime to the wrong (first) column.
+        throw new Error(
+          `[anchor:${tableName as string}] has a composite primary key (${pkColumns.join(", ")}); ` +
+            `realtime is not supported for composite-key tables.`,
+        )
+      }
       const unsubscribe = bindRealtimeToStore(
         realtimeManager,
         store,
         {
           table: tableName as string,
           schema: schema as string | undefined,
-          primaryKey: (tableOpts?.primaryKey as string) ?? "id",
+          primaryKey: pkColumns[0]!,
           events: tableRealtime.events,
           filter: tableRealtime.filter,
           select: tableRealtime.select,

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 import type { FilterDescriptor, SortDescriptor, FetchOptions } from "../types.js"
 import { fromSupabaseError } from "../errors.js"
+import { applyPkFilters } from "../utils/compositeKey.js"
 
 /**
  * Returns a schema-aware query builder for a table.
@@ -198,15 +199,16 @@ export async function executeQuery<Row>(
 export async function executeQueryOne<Row>(
   supabase: SupabaseClient,
   table: string,
-  primaryKey: string,
+  primaryKey: string | string[],
   id: string | number,
   select?: string,
   schema?: string,
 ): Promise<{ data: Row | null; error: Error | null }> {
-  const { data, error } = await fromTable(supabase, table, schema)
-    .select(select ?? "*")
-    .eq(primaryKey, id)
-    .maybeSingle()
+  const { data, error } = await applyPkFilters(
+    fromTable(supabase, table, schema).select(select ?? "*"),
+    primaryKey,
+    id,
+  ).maybeSingle()
 
   if (error) {
     return { data: null, error: fromSupabaseError(error) }

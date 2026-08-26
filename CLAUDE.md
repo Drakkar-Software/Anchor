@@ -138,7 +138,7 @@ When passed to standalone `createTableStore()`, these trigger a `console.warn`. 
 - **Don't restore full `order` array on rollback** — it destroys concurrent mutations. Re-insert specific rows instead.
 - **Don't use `order.includes()` in loops** — use Set. Single-call is OK.
 - **Don't use reference equality for echo prevention** — use boolean flags (`receiving`).
-- **Composite PKs**: `createTableStore` throws at runtime for array PKs with >1 column. Use `encodeKey`/`applyPkFilters` utilities directly.
+- **Composite PKs**: supported since the composite-primary-key work — `createTableStore` no longer throws for an array `primaryKey`. A composite key is stored as one JSON-encoded string via `encodeKey`, so `records`/`order` still key on a single `string | number` and every single-column-PK path is unchanged. `update`/`remove`/`fetchOne`/`setRecord`/`removeRecord` accept either the encoded key or a plain `{ column: value }` object (`PrimaryKeyValue`). `insert`/`upsert` require every PK column present in the payload for a composite table — no temp-id minting, since every real composite-PK table is a join table with client-supplied FKs. `subscribe()` and `tableOptions[x].realtime` both throw for a composite-key table: realtime binding stays single-column only.
 - **`fromTable()` helper**: Always use for Supabase queries to support non-public schemas.
 - **`order` is the one PostgREST parameter that accumulates.** `.order()` appends
   to whatever is already in the query string; `.limit()`/`.range()` overwrite, and

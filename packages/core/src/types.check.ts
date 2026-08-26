@@ -251,6 +251,50 @@ export async function _upsertOptionsProbe(
   await actions.upsert({ pain: 3 }, { onConflict: ["journey_id", "date"] })
 }
 
+// ── composite primary keys ────────────────────────────────────────────
+
+/**
+ * `PrimaryKeyValue` on a composite-key table's mutators, exercised where the
+ * compiler can see it.
+ *
+ * `update`/`remove`/`fetchOne`/`setRecord`/`removeRecord` widened from
+ * `string | number` to accept a plain `{ column: value }` object too — a
+ * widening that is easy to lose silently back to `any` at a refactor, which
+ * would stop catching the one real typo this shape has (a misnamed column
+ * key). Never called. Exported so `noUnusedLocals` keeps it.
+ */
+export async function _primaryKeyValueProbe(
+  store: StoreApi<
+    TableStore<
+      { stay_id: string; service_id: string; note?: string },
+      { stay_id: string; service_id: string; note?: string },
+      { note?: string }
+    >
+  >,
+) {
+  const actions = store.getState()
+
+  // The pre-encoded key a single-column table has always used still works.
+  await actions.update("stay1::svc1", { note: "n" })
+  // The plain-object shape composite keys exist for.
+  await actions.update({ stay_id: "s1", service_id: "svc1" }, { note: "n" })
+  await actions.remove({ stay_id: "s1", service_id: "svc1" })
+  await actions.fetchOne({ stay_id: "s1", service_id: "svc1" })
+  actions.setRecord({ stay_id: "s1", service_id: "svc1" }, {
+    stay_id: "s1",
+    service_id: "svc1",
+  })
+  actions.removeRecord({ stay_id: "s1", service_id: "svc1" })
+
+  // A misspelt column must not be swallowed — the object is a bare
+  // `Record<string, unknown>` at the type level, so this specifically checks
+  // that a NUMBER or other non-object/non-string/non-number value is still
+  // rejected, not that every key name is validated (it cannot be, without a
+  // generic over the table's own column names).
+  // @ts-expect-error - a boolean is not a PrimaryKeyValue
+  await actions.update(true, { note: "n" })
+}
+
 // ─── verifyOtp ───────────────────────────────────────────────────────
 //
 // `verifyOtp` passes its params to `supabase.auth.verifyOtp(params as never)`.

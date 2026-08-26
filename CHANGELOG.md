@@ -2,6 +2,50 @@
 
 ## [Unreleased]
 
+## [3.3.0] - 2026-08-26
+
+### Added
+
+- **Composite primary key support**: `createTableStore`'s `primaryKey: string
+  | string[]` no longer throws on an array — it now genuinely wires through
+  the `encodeKey`/`buildPkFilter`/`applyPkFilters` utilities the error
+  message itself pointed at, which existed, were exported, and were never
+  called from anywhere in the store. A composite key is stored as a single
+  JSON-encoded string (`encodeKey`'s own scheme), so `records`/`order` keep
+  keying on one `string | number` exactly as a single-column table always
+  has — nothing about the Map, persistence, or the query/select layer
+  changes, and every single-column-PK call takes the same scalar branch as
+  before (byte-identical behavior, not just API-compatible).
+
+  `update`/`remove`/`fetchOne`/`setRecord`/`removeRecord` widen from
+  `id: string | number` to a new exported `PrimaryKeyValue = string | number
+  | Record<string, unknown>` — a composite-key table's caller can pass
+  either the pre-encoded key or the plain `{ column: value, ... }` object it
+  likely already has (the row itself, or its primary-key columns), rather
+  than importing `encodeKey` at every call site.
+
+  `insert`/`insertMany`/`upsert` require every PK column present in the
+  payload for a composite-key table, with no optimistic temp-id minting —
+  every composite-PK table in practice is a join table whose columns are
+  all client-supplied foreign keys, so there is no server-generated id to
+  stand in for. `subscribe()` and `createSupabaseStores`'s
+  `tableOptions[x].realtime` both now throw for a composite-key table:
+  `bindRealtimeToStore`/`RealtimeManager` are single-column only, and
+  failing loudly beats silently binding the wrong (first) column.
+
+### Fixed
+
+- **`setupMultiDeviceSync`'s `ConflictContext.primaryKey` was hardcoded to
+  `{ id }`, regardless of a table's actual configured primary key.** Any
+  table's store built with a non-`id` `primaryKey` got a wrong conflict
+  context from multi-device sync, silently — found while auditing every
+  `primaryKey`-shaped call site for the composite-key work above, unrelated
+  to composite keys itself (the bug already existed for any single non-`id`
+  column). Fixed by a new `MultiDeviceSyncOptions.primaryKeys?:
+  Record<string, string | string[]>`, defaulting a table not listed to
+  `"id"` — this function's only behavior before the option existed, so
+  nothing changes for a caller that doesn't set it.
+
 ## [3.2.1] - 2026-08-26
 
 ### Changed

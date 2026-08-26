@@ -7,6 +7,7 @@ import type {
 import { isTempId } from "../types.js"
 import { fromTable } from "../query/queryExecutor.js"
 import { fromSupabaseError } from "../errors.js"
+import { encodeKey, applyPkFilters } from "../utils/compositeKey.js"
 
 /**
  * Execute a remote mutation against Supabase.
@@ -15,7 +16,7 @@ import { fromSupabaseError } from "../errors.js"
 export async function executeRemoteMutation(
   supabase: SupabaseClient,
   table: string,
-  primaryKey: string,
+  primaryKey: string | string[],
   mutation: QueuedMutation,
   tempIdMap: Map<string, unknown>,
   select?: string,
@@ -40,18 +41,24 @@ export async function executeRemoteMutation(
     }
   }
 
-  const pkValue = Object.values(pk)[0]
+  const pkValue = encodeKey(pk, primaryKey)
+  // Temp-id stripping only ever applies to a single-column PK: a composite-key
+  // insert/upsert requires every PK column supplied as a real value up front
+  // (the store's `insert()`/`upsert()` enforce this — see `createTableStore.ts`),
+  // so no composite PK column ever carries a `_temp:…` placeholder to strip.
+  const singleColumnPk = typeof primaryKey === "string" ? primaryKey : undefined
 
   switch (mutation.operation) {
     case "INSERT": {
       // For inserts, don't send temp IDs to the server
       const insertPayload = { ...payload }
-      const pkFieldValue = insertPayload?.[primaryKey]
+      const pkFieldValue = singleColumnPk ? insertPayload?.[singleColumnPk] : undefined
       if (
+        singleColumnPk &&
         typeof pkFieldValue === "string" &&
         isTempId(pkFieldValue)
       ) {
-        delete insertPayload[primaryKey]
+        delete insertPayload[singleColumnPk]
       }
 
       const { data, error } = await fromTable(supabase, table, schema)
@@ -62,14 +69,16 @@ export async function executeRemoteMutation(
       if (error) throw fromSupabaseError(error)
 
       const d = data as unknown as Record<string, unknown>
-      const serverId = d[primaryKey]
+      const serverId = encodeKey(d, primaryKey)
       return { data: d, serverId }
     }
 
     case "UPDATE": {
-      const { data, error } = await fromTable(supabase, table, schema)
-        .update(payload as any)
-        .eq(primaryKey, pkValue as any)
+      const { data, error } = await applyPkFilters(
+        fromTable(supabase, table, schema).update(payload as any),
+        primaryKey,
+        pkValue,
+      )
         .select(select ?? "*")
         .single()
 
@@ -88,7 +97,9 @@ export async function executeRemoteMutation(
       // `_temp:…` string reaching Postgres as a uuid fails the statement
       // outright instead of writing the row.
       const upsertPayload = { ...payload }
-      if (isTempId(upsertPayload[primaryKey])) delete upsertPayload[primaryKey]
+      if (singleColumnPk && isTempId(upsertPayload[singleColumnPk])) {
+        delete upsertPayload[singleColumnPk]
+      }
 
       const upsertQuery = fromTable(supabase, table, schema)
         .upsert(upsertPayload as any, mutation.upsertOptions)
@@ -108,14 +119,16 @@ export async function executeRemoteMutation(
       if (data === null) return { data: null }
 
       const d = data as unknown as Record<string, unknown>
-      const serverId = d[primaryKey]
+      const serverId = encodeKey(d, primaryKey)
       return { data: d, serverId }
     }
 
     case "DELETE": {
-      const { error } = await fromTable(supabase, table, schema)
-        .delete()
-        .eq(primaryKey, pkValue as any)
+      const { error } = await applyPkFilters(
+        fromTable(supabase, table, schema).delete(),
+        primaryKey,
+        pkValue,
+      )
 
       if (error) throw fromSupabaseError(error)
       return { data: null }
@@ -133,7 +146,7 @@ export async function executeRemoteMutation(
 export function createMutationExecutor(
   supabase: SupabaseClient,
   table: string,
-  primaryKey: string,
+  primaryKey: string | string[],
   store: StoreApi<TableStore<any, any, any>>,
   select?: string,
   schema?: string,
@@ -154,18 +167,14 @@ export function createMutationExecutor(
 
     // Update store with server response
     if (data && mutation.operation !== "DELETE") {
-      const id = (data as Record<string, unknown>)[primaryKey] as
-        | string
-        | number
+      const id = encodeKey(data as Record<string, unknown>, primaryKey)
 
       store.setState((prev: any) => {
         const records = new Map(prev.records)
         const order = [...prev.order]
 
         // Remove temp entry if ID changed
-        const oldPk = Object.values(mutation.primaryKey)[0] as
-          | string
-          | number
+        const oldPk = encodeKey(mutation.primaryKey, primaryKey)
         if (oldPk !== id) {
           records.delete(oldPk)
           const idx = order.indexOf(oldPk)
@@ -191,7 +200,7 @@ export function createMutationExecutor(
       // already exists. There is no server row to adopt, but the row this
       // mutation was about is still marked pending under the id it was
       // enqueued with, and nothing else on this path will ever clear that.
-      const pendingId = Object.values(mutation.primaryKey)[0] as string | number
+      const pendingId = encodeKey(mutation.primaryKey, primaryKey)
       store.setState((prev: any) => {
         const records = new Map<string | number, Record<string, unknown>>(prev.records)
         const current = records.get(pendingId)
