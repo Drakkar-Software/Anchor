@@ -301,6 +301,21 @@ export type RealtimeStatus =
 
 // ─── Table Store Actions ─────────────────────────────────────────────
 
+/**
+ * A row's identity, as a caller may pass it to `update`/`remove`/`fetchOne`/
+ * `setRecord`/`removeRecord`.
+ *
+ * `string | number` is the pre-encoded key every store keys `records` by
+ * (`encodeKey`'s own return type) — the only shape a single-column-PK table
+ * ever needs, and unchanged from before composite keys existed. A composite-PK
+ * table additionally accepts the plain `{ column: value, ... }` object a
+ * caller already has on hand (the row itself, or its primary-key columns
+ * picked off it) rather than making every call site import `encodeKey` to
+ * build the Map key by hand; each mutator normalizes it via `encodeKey`
+ * at the boundary, once.
+ */
+export type PrimaryKeyValue = string | number | Record<string, unknown>
+
 export type TableStoreActions<
   Row,
   InsertRow,
@@ -308,7 +323,7 @@ export type TableStoreActions<
 > = {
   // Query
   fetch: (options?: FetchOptions<Row>) => Promise<TrackedRow<Row>[]>
-  fetchOne: (id: string | number) => Promise<TrackedRow<Row> | null>
+  fetchOne: (id: PrimaryKeyValue) => Promise<TrackedRow<Row> | null>
   /** Replays every live query, not only the one that fetched last. */
   refetch: () => Promise<TrackedRow<Row>[]>
   /**
@@ -336,16 +351,16 @@ export type TableStoreActions<
   insert: (row: InsertRow) => Promise<TrackedRow<Row>>
   insertMany: (rows: InsertRow[]) => Promise<TrackedRow<Row>[]>
   update: (
-    id: string | number,
+    id: PrimaryKeyValue,
     changes: UpdateRow,
   ) => Promise<TrackedRow<Row>>
   upsert: (row: InsertRow, options?: UpsertOptions) => Promise<TrackedRow<Row>>
-  remove: (id: string | number) => Promise<void>
+  remove: (id: PrimaryKeyValue) => Promise<void>
   removeWhere: (filters: FilterDescriptor<Row>[]) => Promise<void>
 
   // Local-only (no remote call)
-  setRecord: (id: string | number, row: TrackedRow<Row>) => void
-  removeRecord: (id: string | number) => void
+  setRecord: (id: PrimaryKeyValue, row: TrackedRow<Row>) => void
+  removeRecord: (id: PrimaryKeyValue) => void
   clearAll: () => void
   mergeRecords: (rows: Row[]) => void
   clearAndFetch: (options?: FetchOptions<Row>) => Promise<TrackedRow<Row>[]>

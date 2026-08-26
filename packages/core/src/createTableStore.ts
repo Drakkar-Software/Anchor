@@ -23,6 +23,7 @@ import { selectAllRows, selectQueryRows } from "./query/selectRows.js"
 import { executeQuery, executeQueryOne, fromTable, applyFilters } from "./query/queryExecutor.js"
 import type { RealtimeManager } from "./realtime/realtimeManager.js"
 import { bindRealtimeToStore } from "./realtime/realtimeBindings.js"
+import { encodeKey, applyPkFilters, buildPkFilter, normalizePk } from "./utils/compositeKey.js"
 
 type StoreSet<Row, InsertRow, UpdateRow> = StoreApi<
   TableStore<Row, InsertRow, UpdateRow>
@@ -68,16 +69,18 @@ export function createTableStore<
     extend,
   } = options
 
-  // Composite primary keys are supported via the encodeKey/applyPkFilters utilities.
-  // createTableStore currently operates on a single PK column for Map key usage.
-  // If an array PK is passed, throw to prevent silent data corruption.
-  if (Array.isArray(rawPrimaryKey) && rawPrimaryKey.length > 1) {
-    throw new Error(
-      `createTableStore does not yet support composite primary keys (received [${rawPrimaryKey.join(", ")}] for table "${table}"). ` +
-      `Use the encodeKey/applyPkFilters utilities from "@drakkar.software/anchor" for composite key tables.`,
-    )
-  }
-  const primaryKey = typeof rawPrimaryKey === "string" ? rawPrimaryKey : rawPrimaryKey[0]!
+  // A composite primary key is stored as a single JSON-encoded string (via
+  // `encodeKey`) so `records`/`order` keep keying on one `string | number`
+  // exactly as a single-column table always has — nothing about the Map, its
+  // persistence, or the query/select layer changes. `primaryKeyArg` is what
+  // every `encodeKey`/`applyPkFilters`/`buildPkFilter` call below is given:
+  // the single column name (string) for the common case, so those helpers
+  // take their scalar branch and this is byte-identical to the pre-composite
+  // behavior; the full array only for a genuinely composite key.
+  const pkColumns = normalizePk(rawPrimaryKey)
+  const isComposite = pkColumns.length > 1
+  const primaryKeyColumn = pkColumns[0]!
+  const primaryKeyArg: string | string[] = isComposite ? pkColumns : primaryKeyColumn
 
   // Warn about options that only work via createSupabaseStores
   if (!_queue) {
@@ -179,16 +182,31 @@ export function createTableStore<
      * fetch/hydrate try, which turns it into a query error naming the column.
      */
     function rowId(row: Row): string | number {
-      const id = (row as Record<string, unknown>)[primaryKey]
-      if (id == null) {
+      const record = row as Record<string, unknown>
+      const missing = pkColumns.filter((c) => record[c] == null)
+      if (missing.length > 0) {
         const where = isView ? "viewOptions" : "tableOptions"
         throw new AnchorError(
-          `${isView ? "View" : "Table"} "${table}" returned a row with no "${primaryKey}". ` +
+          `${isView ? "View" : "Table"} "${table}" returned a row with no "${missing.join(", ")}". ` +
           `Set ${where}.${table}.primaryKey to a column that is present and unique, ` +
           `and make sure defaultSelect includes it.`,
         )
       }
-      return id as string | number
+      return encodeKey(record, primaryKeyArg)
+    }
+
+    /**
+     * Normalizes a caller-supplied identity into the same encoded key
+     * `records` is keyed by. A single-column table's callers keep passing the
+     * bare `string | number` they always have; a composite-key table's
+     * callers may pass either that same pre-encoded key or the plain
+     * `{ column: value, ... }` object it was likely already holding (the row
+     * itself, or its primary-key columns) — `update`/`remove`/`fetchOne`/
+     * `setRecord`/`removeRecord` all take this at the boundary so nothing
+     * downstream has to know the difference.
+     */
+    function normalizeId(id: string | number | Record<string, unknown>): string | number {
+      return typeof id === "object" ? encodeKey(id, primaryKeyArg) : id
     }
 
     /**
@@ -279,7 +297,7 @@ export function createTableStore<
     /** Everything still queued for one row, oldest first. */
     function pendingFor(id: string | number) {
       return queue!.pendingMutations.filter(
-        (m) => m.table === table && m.primaryKey[primaryKey] === id,
+        (m) => m.table === table && encodeKey(m.primaryKey, primaryKeyArg) === id,
       )
     }
 
@@ -349,7 +367,7 @@ export function createTableStore<
         table,
         operation,
         payload,
-        primaryKey: { [primaryKey]: id },
+        primaryKey: buildPkFilter(primaryKeyArg, id),
         dependsOn: priorForRow[priorForRow.length - 1]?.id,
         createdAt: Date.now(),
         status: "pending",
@@ -652,11 +670,12 @@ export function createTableStore<
       },
 
       async fetchOne(id) {
+        const key = normalizeId(id)
         const { data, error } = await executeQueryOne<Row>(
           supabase as SupabaseClient,
           table,
-          primaryKey,
-          id,
+          primaryKeyArg,
+          key,
           defaultSelect,
           schema,
         )
@@ -668,11 +687,15 @@ export function createTableStore<
         if (!data) return null
 
         const tracked = data as TrackedRow<Row>
+        // Derived from the row itself, not the caller's `key` — the two agree
+        // whenever the fetch matched, and this is the same pattern every other
+        // mutator uses to key a confirmed server row.
+        const rowKey = rowId(tracked as unknown as Row)
         set((prev) => {
           const records = new Map(prev.records)
           const order = [...prev.order]
-          records.set(id, tracked)
-          if (!prev.records.has(id)) order.push(id)
+          records.set(rowKey, tracked)
+          if (!prev.records.has(rowKey)) order.push(rowKey)
           return { ...prev, records, order }
         })
 
@@ -704,13 +727,33 @@ export function createTableStore<
         const start = Date.now()
         logger.mutationStart(table, "INSERT")
 
-        // Optimistically add
-        const tempId =
-          (row as Record<string, unknown>)[primaryKey] ??
-          createTempId()
+        // Optimistically add.
+        //
+        // A composite-key table has no server-generated id to optimistically
+        // stand in for one — every composite-PK table here is a join table
+        // whose columns are all client-supplied foreign keys, so the payload
+        // is required to carry every one of them already, and the "temp" id
+        // is really just that row's real, final key, computed up front.
+        let tempId: string | number
+        if (isComposite) {
+          const record = row as Record<string, unknown>
+          const missing = pkColumns.filter((c) => record[c] == null)
+          if (missing.length > 0) {
+            throw new AnchorError(
+              `insert on composite-key table "${table}" requires every primary key column ` +
+              `(${pkColumns.join(", ")}) in the payload; missing: ${missing.join(", ")}.`,
+            )
+          }
+          tempId = encodeKey(record, primaryKeyArg)
+        } else {
+          tempId = ((row as Record<string, unknown>)[primaryKeyColumn] as
+            | string
+            | number
+            | undefined) ?? createTempId()
+        }
         const optimisticRow: TrackedRow<Row> = {
           ...(row as unknown as Row),
-          [primaryKey]: tempId,
+          ...(isComposite ? {} : { [primaryKeyColumn]: tempId }),
           _anchor_pending: "insert",
           _anchor_optimistic: true,
         }
@@ -757,9 +800,7 @@ export function createTableStore<
         }
 
         const serverRow = data as unknown as Row
-        const serverId = (serverRow as Record<string, unknown>)[
-          primaryKey
-        ] as string | number
+        const serverId = rowId(serverRow)
 
         // Confirm: replace optimistic with server response
         set((prev) => {
@@ -803,17 +844,30 @@ export function createTableStore<
         const start = Date.now()
         logger.mutationStart(table, "INSERT")
 
-        // Build optimistic rows
+        // Build optimistic rows. See `insert()`'s comment on why a
+        // composite-key table requires every PK column in the payload rather
+        // than minting a temp id.
         const tempIds: (string | number)[] = []
         const optimisticRows: TrackedRow<Row>[] = []
         for (const row of rows) {
-          const tempId =
-            (row as Record<string, unknown>)[primaryKey] ??
-            createTempId()
-          tempIds.push(tempId as string | number)
+          const record = row as Record<string, unknown>
+          let tempId: string | number
+          if (isComposite) {
+            const missing = pkColumns.filter((c) => record[c] == null)
+            if (missing.length > 0) {
+              throw new AnchorError(
+                `insertMany on composite-key table "${table}" requires every primary key ` +
+                `column (${pkColumns.join(", ")}) in every row's payload; missing: ${missing.join(", ")}.`,
+              )
+            }
+            tempId = encodeKey(record, primaryKeyArg)
+          } else {
+            tempId = (record[primaryKeyColumn] as string | number | undefined) ?? createTempId()
+          }
+          tempIds.push(tempId)
           optimisticRows.push({
             ...(row as unknown as Row),
-            [primaryKey]: tempId,
+            ...(isComposite ? {} : { [primaryKeyColumn]: tempId }),
             _anchor_pending: "insert",
             _anchor_optimistic: true,
           } as TrackedRow<Row>)
@@ -866,9 +920,7 @@ export function createTableStore<
 
           // Add server rows to records and order
           for (const serverRow of serverRows) {
-            const serverId = (serverRow as Record<string, unknown>)[
-              primaryKey
-            ] as string | number
+            const serverId = rowId(serverRow)
             records.set(serverId, serverRow as TrackedRow<Row>)
             order.push(serverId)
           }
@@ -881,8 +933,9 @@ export function createTableStore<
         return serverRows as TrackedRow<Row>[]
       },
 
-      async update(id, changes) {
+      async update(rawId, changes) {
         assertNotView()
+        const id = normalizeId(rawId)
         runValidation(validate?.update, changes, "update")
         const start = Date.now()
         logger.mutationStart(table, "UPDATE")
@@ -939,9 +992,12 @@ export function createTableStore<
         }
 
         // Execute remote
-        const { data, error, status } = await fromTable(supabase as unknown as SupabaseClient, table, schema)
-          .update(changes as any)
-          .eq(primaryKey, id as any)
+        const { data, error, status } = await applyPkFilters(
+          fromTable(supabase as unknown as SupabaseClient, table, schema)
+            .update(changes as any),
+          primaryKeyArg,
+          id,
+        )
           .select(defaultSelect ?? "*")
           .single()
 
@@ -1011,10 +1067,10 @@ export function createTableStore<
         //
         // No temp id is ever sent: `row` reaches the builder untouched.
         const mutationId = randomId()
-        const givenId = (row as Record<string, unknown>)[primaryKey] as
-          | string
-          | number
-          | undefined
+        const record = row as Record<string, unknown>
+        const givenId: string | number | undefined = isComposite
+          ? (pkColumns.every((c) => record[c] != null) ? encodeKey(record, primaryKeyArg) : undefined)
+          : (record[primaryKeyColumn] as string | number | undefined)
         const optimisticId =
           givenId ?? findByConflict(get().records, row, options?.onConflict) ?? createTempId()
         const snapshot = get().records.get(optimisticId)
@@ -1029,7 +1085,7 @@ export function createTableStore<
             // server answered.
             ...(snapshot as object | undefined),
             ...(row as unknown as Row),
-            [primaryKey]: optimisticId,
+            ...(isComposite ? {} : { [primaryKeyColumn]: optimisticId }),
             _anchor_pending: "update",
             _anchor_optimistic: true,
             _anchor_mutationId: mutationId,
@@ -1112,9 +1168,7 @@ export function createTableStore<
         }
 
         const serverRow = data as unknown as Row
-        const id = (serverRow as Record<string, unknown>)[primaryKey] as
-          | string
-          | number
+        const id = rowId(serverRow)
 
         set((prev) => {
           const records = new Map(prev.records)
@@ -1149,8 +1203,9 @@ export function createTableStore<
         return serverRow as TrackedRow<Row>
       },
 
-      async remove(id) {
+      async remove(rawId) {
         assertNotView()
+        const id = normalizeId(rawId)
         const start = Date.now()
         logger.mutationStart(table, "DELETE")
 
@@ -1177,9 +1232,11 @@ export function createTableStore<
         }
 
         // Execute remote
-        const { error, status } = await fromTable(supabase as unknown as SupabaseClient, table, schema)
-          .delete()
-          .eq(primaryKey, id as any)
+        const { error, status } = await applyPkFilters(
+          fromTable(supabase as unknown as SupabaseClient, table, schema).delete(),
+          primaryKeyArg,
+          id,
+        )
 
         if (error) {
           if (failedInTransit(error, status)) {
@@ -1270,7 +1327,8 @@ export function createTableStore<
 
       // ── Local-only ────────────────────────────────────────────
 
-      setRecord(id, row) {
+      setRecord(rawId, row) {
+        const id = normalizeId(rawId)
         set((prev) => {
           const records = new Map(prev.records)
           const order = [...prev.order]
@@ -1281,7 +1339,8 @@ export function createTableStore<
         persistIfConfigured()
       },
 
-      removeRecord(id) {
+      removeRecord(rawId) {
+        const id = normalizeId(rawId)
         set((prev) => {
           const records = new Map(prev.records)
           const order = prev.order.filter((o) => o !== id)
@@ -1319,9 +1378,7 @@ export function createTableStore<
           const records = new Map(prev.records)
           const order = [...prev.order]
           for (const row of rows) {
-            const id = (row as Record<string, unknown>)[primaryKey] as
-              | string
-              | number
+            const id = rowId(row as unknown as Row)
             // Don't overwrite pending records
             const existing = records.get(id)
             if (existing?._anchor_pending) continue
@@ -1388,6 +1445,15 @@ export function createTableStore<
               `table's name, so a channel on a view never fires — subscribe to that table instead.`,
           )
         }
+        if (isComposite) {
+          // `bindRealtimeToStore`/`RealtimeManager` take a single-column
+          // `primaryKey: string` — composite-key support here is scoped to
+          // the store's own CRUD/queue paths, not realtime.
+          throw new Error(
+            `[anchor:${table}] has a composite primary key (${pkColumns.join(", ")}); ` +
+              `realtime is not supported for composite-key tables.`,
+          )
+        }
 
         // One subscription per store: a second call replaces the first rather
         // than leaving an orphaned channel nothing can reach.
@@ -1396,7 +1462,7 @@ export function createTableStore<
         const cleanup = bindRealtimeToStore(manager, storeRef!, {
           table,
           schema,
-          primaryKey,
+          primaryKey: primaryKeyColumn,
           events: realtimeOpts?.events,
           filter: (filter ?? realtimeOpts?.filter) as FilterDescriptor[] | string | undefined,
           select: realtimeOpts?.select,

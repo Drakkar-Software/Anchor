@@ -124,6 +124,28 @@ const todosStore = createTableStore<Database, TodoRow, TodoInsert, TodoUpdate>({
 
 > **Note:** `realtime`, `conflict`, `network`, and `offlineQueue` options require `createSupabaseStores()` which wires up the shared RealtimeManager and OfflineQueue. Use `createSupabaseStores()` for full-featured stores, or manually set up these features with `RealtimeManager`, `bindRealtimeToStore`, and `OfflineQueue`.
 
+**Composite primary keys.** `primaryKey` also accepts an array, for a join
+table whose real key spans more than one column:
+
+```typescript
+const stayServicesStore = createTableStore<Database, StayServiceRow, StayServiceRow, Partial<StayServiceRow>>({
+  supabase,
+  table: 'stay_services',
+  primaryKey: ['stay_id', 'service_id'],   // no surrogate `id` column
+})
+
+// update/remove/fetchOne/setRecord/removeRecord all accept either the
+// pre-encoded key OR the plain columns, whichever you already have:
+await stayServicesStore.getState().update({ stay_id, service_id }, { note: 'late checkout' })
+```
+
+`insert`/`upsert` require every primary-key column in the payload for a
+composite-key table — there is no server-generated id to optimistically
+stand in for one, since a composite-key table is always a join table whose
+columns are client-supplied foreign keys. Realtime is not supported on a
+composite-key table (`subscribe()` and `tableOptions[x].realtime` both throw)
+— `bindRealtimeToStore`/`RealtimeManager` key a single column.
+
 #### `createSupabaseStores(options)`
 
 Creates typed stores for multiple tables at once.

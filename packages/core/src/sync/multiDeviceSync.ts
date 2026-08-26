@@ -7,6 +7,7 @@ import type {
   ConflictContext,
 } from "../types.js"
 import { resolveConflict } from "../mutation/conflictResolution.js"
+import { buildPkFilter } from "../utils/compositeKey.js"
 
 export type MultiDeviceSyncOptions = {
   /** Unique device identifier (auto-generated if not provided) */
@@ -19,6 +20,15 @@ export type MultiDeviceSyncOptions = {
   debounceMs?: number
   /** Subset of table names to sync (default: all) */
   tables?: string[]
+  /**
+   * Each synced table's real primary key, by table name — needed to build a
+   * correct `ConflictContext.primaryKey` when `conflict` is set. A table not
+   * listed here defaults to `"id"`, which was this function's only behavior
+   * before this option existed: every conflict context reported `{ id }`
+   * regardless of the table's actual key, silently wrong for any table whose
+   * store was configured with a different `primaryKey`.
+   */
+  primaryKeys?: Record<string, string | string[]>
 }
 
 type BroadcastPayload = {
@@ -83,7 +93,7 @@ export function setupMultiDeviceSync(
           if (existing && options?.conflict) {
             const context: ConflictContext = {
               table: tableName,
-              primaryKey: { id },
+              primaryKey: buildPkFilter(options?.primaryKeys?.[tableName] ?? "id", id),
               hasPendingMutations: false,
               pendingMutations: [],
             }
