@@ -77,6 +77,16 @@ export function createSupabaseStores<
     logger,
   })
 
+  // `createTableStore`'s own default key is `anchor:${schema}:${table}`; a
+  // `keyPrefix` is prepended to that, not a replacement for it, so two
+  // `createSupabaseStores` callers sharing one physical adapter (or a single
+  // caller rotating namespaces) don't have to also restate the schema/table
+  // part `createTableStore` already computes correctly.
+  const persistenceKeyFor = (relationSchema: string | undefined, relation: string) =>
+    persistence?.keyPrefix
+      ? `${persistence.keyPrefix}anchor:${relationSchema ?? "public"}:${relation}`
+      : undefined
+
   // Declared before the queue because `onRollback` closes over it. Nothing
   // reads it until a flush, which is long after both loops below have filled it.
   const stores: Record<string, StoreApi<TableStore<any, any, any>>> = {}
@@ -167,7 +177,7 @@ export function createSupabaseStores<
       defaultSelect: tableOpts?.defaultSelect as string,
       defaultQueryFn: tableOpts?.defaultQueryFn as any,
       persistence: persistence
-        ? { adapter: persistence.adapter }
+        ? { adapter: persistence.adapter, key: persistenceKeyFor(schema as string | undefined, tableName as string) }
         : undefined,
       network,
       offlineQueue: offlineQueueOpts,
@@ -244,7 +254,9 @@ export function createSupabaseStores<
       defaultSort: viewOpts?.defaultSort as any,
       defaultSelect: viewOpts?.defaultSelect as string,
       defaultQueryFn: viewOpts?.defaultQueryFn as any,
-      persistence: persistence ? { adapter: persistence.adapter } : undefined,
+      persistence: persistence
+        ? { adapter: persistence.adapter, key: persistenceKeyFor(schema as string | undefined, viewName as string) }
+        : undefined,
       network,
       cacheStrategy: (viewOpts?.cacheStrategy as any) ?? options.cacheStrategy,
       immer,

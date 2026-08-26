@@ -196,20 +196,30 @@ export type SortDescriptor<Row = Record<string, unknown>> = {
  * names the constraint's columns — `"journey_id,date"` — as the one
  * comma-separated string supabase-js takes.
  *
- * **`ignoreDuplicates` is deliberately absent.** It swaps `ON CONFLICT DO
- * UPDATE` for `DO NOTHING`, and every store mutation ends its chain in
- * `.single()`: a conflict it ignored returns no representation, so `.single()`
- * fails with `PGRST116` and the store reports a write the server carried out
- * exactly as asked as a failure — rolling the optimistic row back off the
- * screen. On the offline replay it is worse: `executeRemoteMutation` throws and
- * the queue stops at the first failure, so one ignored duplicate stalls every
- * pending mutation on every table behind it. Supporting it means
- * `.maybeSingle()` plus a "the server accepted and wrote nothing" resolution
- * path — a real feature, not a keyword — so it waits until something needs it.
+ * **`ignoreDuplicates` swaps `ON CONFLICT DO UPDATE` for `DO NOTHING`.**
+ * Needed for a join table granted only `select, insert, delete` — no
+ * `update` — where a plain upsert's `ON CONFLICT DO UPDATE` clause is
+ * refused with `42501` even on a row that would not actually change,
+ * because Postgres checks UPDATE privilege for that clause whether or not a
+ * conflict occurs. `store.upsert(row, { onConflict, ignoreDuplicates: true
+ * })` is the only shape such a table can be upserted through at all.
+ *
+ * Because a `DO NOTHING` conflict returns no representation, `upsert` reads
+ * the row back with `.maybeSingle()` rather than `.single()` when this is
+ * set, and a `null` response with no error resolves to the store's own
+ * already-merged optimistic row (cleared of its pending flag) rather than
+ * throwing `PGRST116` — "the server confirmed this already exists" is a
+ * success, not a failure to roll back.
  */
 export type UpsertOptions = {
   /** Comma-separated columns of the unique constraint to conflict on. */
   onConflict?: string
+  /**
+   * `ON CONFLICT DO NOTHING` instead of `DO UPDATE`. See this type's own
+   * docblock for why this is the one option a no-`update`-grant join table
+   * needs, and what a resolved conflict returns when set.
+   */
+  ignoreDuplicates?: boolean
 }
 
 export type FetchOptions<Row = Record<string, unknown>> = {
@@ -806,7 +816,21 @@ export type CreateSupabaseStoresOptions<
   views?: ViewNames<DB, SchemaName>[]
 
   // Global defaults
-  persistence?: { adapter: PersistenceAdapter }
+  persistence?: {
+    adapter: PersistenceAdapter
+    /**
+     * Prepended to every table/view's own persistence key
+     * (`anchor:${schema}:${table}` by default, from `createTableStore`).
+     *
+     * Without this, `createSupabaseStores` had no way to namespace a shared
+     * `adapter` at all — `createTableStore`'s own `persistence.key` exists
+     * one level down, but the bulk factory never exposed an equivalent, so a
+     * caller wanting one (key rotation, multi-tenant namespacing on a shared
+     * `localStorage`/`AsyncStorage`) had to reach below `createSupabaseStores`
+     * entirely and hand-wrap the adapter itself.
+     */
+    keyPrefix?: string
+  }
   network?: NetworkStatusAdapter
   /**
    * The shared mutation queue.
@@ -847,6 +871,17 @@ export type CreateSupabaseStoresOptions<
    *
    * `maxRetries` and `flushDebounceMs` reach the queue from here; before
    * `queueWrites` existed there was nothing in it to configure.
+   *
+   * **`maxRetries` defaults to 3, and past it a mutation is `rolled_back` —
+   * removed from local state via `onRollback`, not merely abandoned.** That
+   * default is a reasonable one for a todo app; it is very likely the wrong
+   * one for a write that must never quietly disappear (a clinical check-in, a
+   * financial record) once the *offline stretch* it can be exposed to may run
+   * to hours or days rather than a few failed fetches in a row. Set it high
+   * enough that "we gave up and deleted this" cannot happen within any
+   * offline duration the app is meant to tolerate, and drive user-facing
+   * "this still hasn't sent" messaging off `useSyncStatus`'s `failedCount` —
+   * a read, not a reason to roll anything back.
    */
   offlineQueue?: {
     queueWrites?: boolean

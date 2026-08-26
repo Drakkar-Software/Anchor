@@ -83,6 +83,50 @@ describe("createSupabaseStores", () => {
     expect(persisted).toHaveLength(1)
   })
 
+  it("prepends persistence.keyPrefix to every table's default key", async () => {
+    const adapter = new MemoryAdapter()
+    const supabase = createMockSupabase({
+      todos: [{ id: 1, title: "A" }],
+    })
+
+    const stores = createSupabaseStores<any>({
+      supabase,
+      tables: ["todos"],
+      persistence: { adapter, keyPrefix: "tenant-42:" },
+      fetchRemoteOnBoot: false,
+    })
+
+    await stores.todos.getState().fetch()
+    await new Promise((r) => setTimeout(r, 200))
+
+    // The unprefixed default key must be untouched — this is a namespace, not
+    // a rename of what createTableStore already computes.
+    expect(await adapter.getItem<any[]>("anchor:public:todos")).toBeNull()
+    const persisted = await adapter.getItem<any[]>("tenant-42:anchor:public:todos")
+    expect(persisted).toHaveLength(1)
+  })
+
+  it("prepends persistence.keyPrefix for a view store too", async () => {
+    const adapter = new MemoryAdapter()
+    const supabase = createMockSupabase({
+      todo_summary: [{ id: 1, total: 3 }],
+    })
+
+    const stores = createSupabaseStores<any>({
+      supabase,
+      tables: [],
+      views: ["todo_summary"],
+      persistence: { adapter, keyPrefix: "tenant-42:" },
+      fetchRemoteOnBoot: false,
+    })
+
+    await stores.todo_summary.getState().fetch()
+    await new Promise((r) => setTimeout(r, 200))
+
+    const persisted = await adapter.getItem<any[]>("tenant-42:anchor:public:todo_summary")
+    expect(persisted).toHaveLength(1)
+  })
+
   it("respects fetchRemoteOnBoot: false", () => {
     const supabase = createMockSupabase({
       todos: [{ id: 1, title: "A" }],

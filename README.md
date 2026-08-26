@@ -307,17 +307,22 @@ function TodoList() {
 </Suspense>
 ```
 
-#### `useInfiniteQuery(store, options)`
+#### `useInfiniteQuery(supabase, options)`
 
-Cursor-based infinite scroll with load-more support.
+Cursor-based infinite scroll with load-more support. **Takes the Supabase client
+directly, not a store** -- it queries the table itself and bypasses the store
+entirely, so a list built with it gets no optimistic rows, no realtime updates,
+and no persistence. Reach for `useQuery` first; use this only when a screen
+genuinely needs cursor pagination a store's `records`/`order` can't express.
 
 ```tsx
 import { useInfiniteQuery } from '@drakkar.software/anchor/hooks'
 
 function InfiniteTodoList() {
-  const { data, hasNextPage, fetchNextPage, isLoading } = useInfiniteQuery(
-    stores.todos,
+  const { data, hasMore, loadMore, isLoading, isLoadingMore } = useInfiniteQuery(
+    supabase,
     {
+      table: 'todos',
       cursorColumn: 'created_at',
       pageSize: 20,
       sort: [{ column: 'created_at', ascending: false }],
@@ -327,7 +332,7 @@ function InfiniteTodoList() {
   return (
     <>
       <ul>{data.map(t => <li key={t.id}>{t.title}</li>)}</ul>
-      {hasNextPage && <button onClick={fetchNextPage}>Load more</button>}
+      {hasMore && <button onClick={loadMore} disabled={isLoadingMore}>Load more</button>}
     </>
   )
 }
@@ -496,6 +501,32 @@ on what the mutator returns.
 
 `insert`, `update`, `upsert` and `remove` queue. `insertMany` and `removeWhere` do not, and
 still roll back and throw — see their notes in `createTableStore.ts`.
+
+`offlineQueue.maxRetries` defaults to **3**, and past it a mutation is `rolled_back` —
+removed from local state, not merely abandoned. That default suits a write that can fail a
+few times in a row and reasonably be given up on; it is very likely the wrong one for a
+write that must never quietly disappear once the offline stretch it can be exposed to may
+run to hours or days. Set it high enough that "we gave up and deleted this" cannot happen
+within any offline duration the app is meant to tolerate, and drive "this still hasn't
+sent" messaging off `useSyncStatus`'s `failedCount` instead — a read, not a reason to roll
+anything back.
+
+A join table granted only `select, insert, delete` — no `update` — needs
+`ignoreDuplicates` on `upsert`: a plain upsert's `ON CONFLICT DO UPDATE` is refused
+`42501` even on a conflict that would not actually change anything, because Postgres
+checks UPDATE privilege for that clause regardless of whether one occurs.
+
+```typescript
+await stores.post_likes.getState().upsert(
+  { post_id, profile_id },
+  { onConflict: 'post_id,profile_id', ignoreDuplicates: true },
+)
+```
+
+A `DO NOTHING` conflict returns no row to read back, so this resolves to the store's own
+already-merged optimistic row (cleared of its pending flag) rather than throwing
+`PGRST116` — "the server confirmed this already exists" is a success, not a failure to
+roll back. Works the same way live and on a queued replay.
 
 The queue supports:
 - **Coalescing** — insert+update becomes single insert; insert+delete cancels both
@@ -1004,6 +1035,19 @@ export default async function TodosPage() {
 
 ### Platform Adapters
 
+`createSupabaseStores`'s `persistence.keyPrefix` prepends a string to every table/view's
+own default key (`anchor:${schema}:${table}`) — for namespacing one physical adapter
+shared across tenants, environments, or a key-rotation migration, without having to
+restate the schema/table part `createTableStore` already computes:
+
+```typescript
+createSupabaseStores({
+  supabase,
+  tables: ['todos'],
+  persistence: { adapter: new LocalStorageAdapter(), keyPrefix: `tenant-${tenantId}:` },
+})
+```
+
 #### Web
 
 ```typescript
@@ -1026,13 +1070,19 @@ import {
   RNNetworkStatus, RNAppLifecycle,
   RNBackgroundSync, createExpoOAuthHandler,
 } from '@drakkar.software/anchor-adapter-react-native'
+import * as SQLite from 'expo-sqlite'
+import AsyncStorage from '@react-native-async-storage/async-storage'
+import NetInfo from '@react-native-community/netinfo'
+import * as Linking from 'expo-linking'
 
-new ExpoSqliteAdapter()     // Structured (recommended)
-new AsyncStorageAdapter()   // Simple fallback
-new RNNetworkStatus()       // Network detection
-new RNAppLifecycle()        // App lifecycle (AppState API)
-new RNBackgroundSync()      // Background task (expo-task-manager)
-createExpoOAuthHandler(supabase)  // OAuth with deep links
+// Each of these takes its underlying module as an argument, to avoid bundler
+// resolution issues in pnpm virtual store environments.
+new ExpoSqliteAdapter(SQLite)         // Structured (recommended)
+new AsyncStorageAdapter(AsyncStorage) // Simple fallback
+new RNNetworkStatus(NetInfo)          // Network detection
+new RNAppLifecycle()                  // App lifecycle (AppState API)
+new RNBackgroundSync()                // Background task (expo-task-manager)
+createExpoOAuthHandler(supabase, Linking)  // OAuth with deep links
 ```
 
 ### Middleware

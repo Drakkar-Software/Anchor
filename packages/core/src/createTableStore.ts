@@ -1048,10 +1048,16 @@ export function createTableStore<
           return get().records.get(optimisticId) as TrackedRow<Row>
         }
 
-        const { data, error, status } = await fromTable(supabase as unknown as SupabaseClient, table, schema)
+        const upsertQuery = fromTable(supabase as unknown as SupabaseClient, table, schema)
           .upsert(row as any, options)
           .select(defaultSelect ?? "*")
-          .single()
+
+        // `ignoreDuplicates`'s `DO NOTHING` returns no row on a real conflict —
+        // that is a successful no-op, not the "no rows" `.single()` would throw
+        // as `PGRST116`.
+        const { data, error, status } = options?.ignoreDuplicates
+          ? await upsertQuery.maybeSingle()
+          : await upsertQuery.single()
 
         if (error) {
           if (failedInTransit(error, status)) {
@@ -1078,6 +1084,31 @@ export function createTableStore<
             return { ...prev, records, order, error: fromSupabaseError(error) }
           })
           throw fromSupabaseError(error)
+        }
+
+        if (data === null) {
+          // `ignoreDuplicates` conflicted and Postgres wrote nothing to read
+          // back. The server's answer is "this already exists," not "here is
+          // what it now holds" — resolve to the store's own optimistic merge,
+          // cleared of its pending flags, rather than treating an absent row
+          // as a failure to roll back.
+          set((prev) => {
+            const records = new Map(prev.records)
+            const current = records.get(optimisticId)
+            if (current?._anchor_mutationId === mutationId) {
+              const {
+                _anchor_pending: _pending,
+                _anchor_optimistic: _optimistic,
+                _anchor_mutationId: _mutationId,
+                ...resolved
+              } = current as Record<string, unknown>
+              records.set(optimisticId, resolved as TrackedRow<Row>)
+            }
+            return { ...prev, records }
+          })
+          logger.mutationSuccess(table, "UPSERT", Date.now() - start)
+          persistIfConfigured()
+          return get().records.get(optimisticId) as TrackedRow<Row>
         }
 
         const serverRow = data as unknown as Row

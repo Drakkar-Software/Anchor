@@ -42,11 +42,17 @@ All peer dependencies are optional -- install only the ones your app uses.
 
 Persistence adapter backed by `expo-sqlite`. Recommended for structured data and larger datasets.
 
+Takes the `expo-sqlite` module as its first argument -- to avoid bundler
+resolution issues in pnpm virtual store environments, the same reason
+`RNNetworkStatus` and `createExpoOAuthHandler` below take `NetInfo`/`Linking` the
+same way -- and an optional database name (defaults to `"anchor"`).
+
 ```typescript
 import { ExpoSqliteAdapter } from '@drakkar.software/anchor-adapter-react-native'
+import * as SQLite from 'expo-sqlite'
 
 createSupabaseStores({
-  persistence: { adapter: new ExpoSqliteAdapter() },
+  persistence: { adapter: new ExpoSqliteAdapter(SQLite, 'my-app-cache') },
 })
 ```
 
@@ -66,11 +72,15 @@ createSupabaseStores({
 
 Detects online/offline state using `@react-native-community/netinfo`. Enables automatic offline queue flush on reconnect.
 
+Takes the NetInfo default export as its argument, for the same bundler-resolution
+reason `ExpoSqliteAdapter` above takes the `expo-sqlite` module.
+
 ```typescript
 import { RNNetworkStatus } from '@drakkar.software/anchor-adapter-react-native'
+import NetInfo from '@react-native-community/netinfo'
 
 createSupabaseStores({
-  network: new RNNetworkStatus(),
+  network: new RNNetworkStatus(NetInfo),
 })
 ```
 
@@ -103,11 +113,15 @@ await setupBackgroundSync(offlineQueue, new RNBackgroundSync())
 
 Handles OAuth flows with Supabase using Expo deep links (`expo-linking`).
 
+Takes the `expo-linking` module as its second argument, for the same
+bundler-resolution reason as the adapters above.
+
 ```typescript
 import { createExpoOAuthHandler } from '@drakkar.software/anchor-adapter-react-native'
+import * as Linking from 'expo-linking'
 
-const oauth = createExpoOAuthHandler(supabase)
-await oauth.signInWithGoogle()
+const oauth = createExpoOAuthHandler(supabase, Linking)
+const { url } = await oauth.signInWithProvider('google')
 ```
 
 ## Full Example
@@ -115,6 +129,8 @@ await oauth.signInWithGoogle()
 ```typescript
 import { createClient } from '@supabase/supabase-js'
 import AsyncStorage from '@react-native-async-storage/async-storage'
+import NetInfo from '@react-native-community/netinfo'
+import * as SQLite from 'expo-sqlite'
 import { createSupabaseStores, setupAppLifecycle, setupBackgroundSync } from '@drakkar.software/anchor'
 import {
   ExpoSqliteAdapter, RNNetworkStatus, RNAppLifecycle, RNBackgroundSync,
@@ -137,8 +153,8 @@ const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, 
 const stores = createSupabaseStores<Database>({
   supabase,
   tables: ['todos', 'profiles'],
-  persistence: { adapter: new ExpoSqliteAdapter() },
-  network: new RNNetworkStatus(),
+  persistence: { adapter: new ExpoSqliteAdapter(SQLite) },
+  network: new RNNetworkStatus(NetInfo),
   realtime: { enabled: true },
 })
 

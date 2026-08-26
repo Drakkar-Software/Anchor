@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest"
-import { executeRemoteMutation } from "./mutationPipeline.js"
+import { executeRemoteMutation, createMutationExecutor } from "./mutationPipeline.js"
 import { createTableStore } from "../createTableStore.js"
 import { createMockSupabase } from "../__tests__/mockSupabase.js"
 import type { QueuedMutation } from "../types.js"
@@ -316,6 +316,94 @@ describe("upsert optimistic apply without a primary key", () => {
   })
 })
 
+describe("upsert with ignoreDuplicates", () => {
+  it("resolves the row rather than throwing PGRST116 when the conflict already exists", async () => {
+    const { store } = await seededStore([
+      { id: "c1", journey_id: "j1", date: "2026-08-12", pain: 3 },
+    ])
+
+    const resolved = await store.getState().upsert(
+      { journey_id: "j1", date: "2026-08-12", pain: 9 } as any,
+      { onConflict: "journey_id,date", ignoreDuplicates: true },
+    )
+
+    expect(resolved).toBeTruthy()
+  })
+
+  it("writes DO NOTHING — the existing row's columns are untouched, not overwritten", async () => {
+    const { supabase, store } = await seededStore([
+      { id: "c1", journey_id: "j1", date: "2026-08-12", pain: 3 },
+    ])
+
+    await store.getState().upsert(
+      { journey_id: "j1", date: "2026-08-12", pain: 9 } as any,
+      { onConflict: "journey_id,date", ignoreDuplicates: true },
+    )
+
+    const stored = (supabase as any)._tables.daily_check_ins as CheckIn[]
+    expect(stored).toHaveLength(1)
+    // A real DO NOTHING never applied `pain: 9` — proves this isn't secretly
+    // still doing DO UPDATE under a different name.
+    expect(stored[0]!.pain).toBe(3)
+  })
+
+  it("clears the row's pending flag once the server confirms the no-op", async () => {
+    const { store } = await seededStore([
+      { id: "c1", journey_id: "j1", date: "2026-08-12", pain: 3 },
+    ])
+
+    const resolved = await store.getState().upsert(
+      { journey_id: "j1", date: "2026-08-12", pain: 9 } as any,
+      { onConflict: "journey_id,date", ignoreDuplicates: true },
+    )
+
+    expect((resolved as any)._anchor_pending).toBeUndefined()
+    expect((resolved as any)._anchor_optimistic).toBeUndefined()
+    expect(store.getState().records.get("c1")?._anchor_pending).toBeUndefined()
+    expectOrderIntegrity(store)
+  })
+
+  it("still inserts normally when nothing conflicts", async () => {
+    const { supabase, store } = await seededStore([
+      { id: "c1", journey_id: "j1", date: "2026-08-11", pain: 3 },
+    ])
+
+    await store.getState().upsert(
+      { journey_id: "j1", date: "2026-08-12", pain: 5 } as any,
+      { onConflict: "journey_id,date", ignoreDuplicates: true },
+    )
+
+    const stored = (supabase as any)._tables.daily_check_ins as CheckIn[]
+    expect(stored.map((r) => r.date).sort()).toEqual(["2026-08-11", "2026-08-12"])
+    expectOrderIntegrity(store)
+  })
+
+  it("still rolls back on a real error — ignoreDuplicates only changes the no-conflict case", async () => {
+    const { supabase, store } = await seededStore([
+      { id: "c1", journey_id: "j1", date: "2026-08-12", pain: 3 },
+    ])
+    ;(supabase as any)._setError(
+      "daily_check_ins",
+      "upsert",
+      { message: "insufficient privilege", code: "42501" },
+      { status: 403 },
+    )
+
+    await expect(
+      store.getState().upsert(
+        { journey_id: "j1", date: "2026-08-13", pain: 5 } as any,
+        { onConflict: "journey_id,date", ignoreDuplicates: true },
+      ),
+    ).rejects.toThrow()
+
+    // Only the seeded row remains — the optimistic insert rolled back.
+    const rows = [...store.getState().records.values()]
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.id).toBe("c1")
+    expectOrderIntegrity(store)
+  })
+})
+
 describe("the queued replay", () => {
   function queuedUpsert(overrides: Partial<QueuedMutation> = {}): QueuedMutation {
     return {
@@ -366,5 +454,75 @@ describe("the queued replay", () => {
     )
 
     expect((supabase as any)._tables.daily_check_ins).toHaveLength(2)
+  })
+
+  it("does not throw when a carried ignoreDuplicates conflicts on the drain", async () => {
+    // The failure `ignoreDuplicates` exists to prevent on this path
+    // specifically: a queue stops at its first failure, so a `PGRST116` here
+    // would stall every OTHER pending mutation behind it, on every table, for
+    // a write the server had already confirmed.
+    const supabase = createMockSupabase({
+      daily_check_ins: [{ id: "c1", journey_id: "j1", date: "2026-08-12", pain: 3 }],
+    })
+
+    const result = await executeRemoteMutation(
+      supabase,
+      "daily_check_ins",
+      "id",
+      queuedUpsert({
+        upsertOptions: { onConflict: "journey_id,date", ignoreDuplicates: true },
+      }),
+      new Map(),
+    )
+
+    expect(result.data).toBeNull()
+    // DO NOTHING really did nothing — the existing row is untouched.
+    const stored = (supabase as any)._tables.daily_check_ins as CheckIn[]
+    expect(stored).toHaveLength(1)
+    expect(stored[0]!.pain).toBe(3)
+  })
+
+  it("clears the store's pending flag via the executor when the drain confirms a no-op", async () => {
+    const supabase = createMockSupabase({
+      daily_check_ins: [{ id: "c1", journey_id: "j1", date: "2026-08-12", pain: 3 }],
+    })
+    const store = createTableStore<any, CheckIn, any, any>({
+      supabase: supabase as any,
+      table: "daily_check_ins",
+      primaryKey: "id",
+    })
+    // A row already marked pending under the id this mutation is about — the
+    // state left behind by the live `upsert()` call that got queued.
+    store.setState((prev: any) => {
+      const records = new Map(prev.records)
+      records.set("c1", {
+        id: "c1",
+        journey_id: "j1",
+        date: "2026-08-12",
+        pain: 9,
+        _anchor_pending: "update",
+        _anchor_optimistic: true,
+        _anchor_mutationId: "mut-1",
+      })
+      return { ...prev, records, order: ["c1"] }
+    })
+
+    const executor = createMutationExecutor(
+      supabase as any,
+      "daily_check_ins",
+      "id",
+      store,
+    )
+    await executor(
+      queuedUpsert({
+        primaryKey: { id: "c1" },
+        upsertOptions: { onConflict: "journey_id,date", ignoreDuplicates: true },
+      }),
+      new Map(),
+    )
+
+    const row = store.getState().records.get("c1") as any
+    expect(row?._anchor_pending).toBeUndefined()
+    expect(row?._anchor_optimistic).toBeUndefined()
   })
 })

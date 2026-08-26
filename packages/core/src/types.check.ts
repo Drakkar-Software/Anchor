@@ -235,8 +235,9 @@ export async function _upsertOptionsProbe(
 
   // The whole point: a conflict target that is not the primary key.
   await actions.upsert({ pain: 3 }, { onConflict: "journey_id,date" })
-  // @ts-expect-error - ignoreDuplicates is deliberately not an UpsertOptions key
-  await actions.upsert({ pain: 3 }, { ignoreDuplicates: true })
+  // A no-`update`-grant join table's whole reason to exist: DO NOTHING
+  // alongside a real conflict target, not a bare boolean on its own.
+  await actions.upsert({ pain: 3 }, { onConflict: "journey_id,date", ignoreDuplicates: true })
   // Optional, because every existing call site passes one argument.
   await actions.upsert({ pain: 3 })
 

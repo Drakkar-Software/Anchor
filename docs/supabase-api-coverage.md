@@ -36,7 +36,7 @@ Until 2.1.0 the builder it received had only `.select()` applied: `executeQuery`
 
 Why upsert went first: without `onConflict`, PostgREST conflicts on the primary key, so a table whose uniqueness rule lives in a *different* constraint could not be upserted through a store at all — the statement inserted a duplicate and raised `23505`. A missing option presenting as a caller bug is worse than an absent feature.
 
-**`ignoreDuplicates` is the one `.upsert()` option deliberately left out**, and the reason generalises to any option that changes whether a row comes back. Every mutation ends in `.single()`, so a `DO NOTHING` that ignored its conflict returns no representation and the store reports a successful write as `PGRST116` — rolling the optimistic row off the screen — while the replay throws and stalls the queue at its first failure. Adding it means `.maybeSingle()` and an explicit "accepted, wrote nothing" resolution.
+**`ignoreDuplicates` is now wired** (`store.upsert(row, {onConflict, ignoreDuplicates: true})`, live and on the queued replay), closing the gap this section used to describe: a `DO NOTHING` conflict reads back with `.maybeSingle()` instead of `.single()`, and a `null`/no-error response resolves to the store's own already-merged optimistic row, cleared of its pending flag, rather than throwing `PGRST116` and rolling back — or, on the replay, stalling the queue at its first failure for a write the server had already confirmed. Needed for any join table granted only `select, insert, delete` (no `update`), where a plain upsert's `ON CONFLICT DO UPDATE` clause is refused `42501` even on a no-op conflict, since Postgres checks UPDATE privilege for that clause regardless of whether one occurs.
 
 **What enqueues, since 2.2.0.** With `createSupabaseStores({ offlineQueue: { queueWrites: true } })`, four of the six mutators feed the queue: `insert`, `update`, `upsert` and `remove`, either from the `NetworkStatusAdapter`'s pre-check or from a failure that `isTransportError` classifies as never having reached Postgres. `insertMany` and `removeWhere` never enqueue — a batch would have to become N single-row mutations and could half-succeed, and `removeWhere`'s local matcher is a deliberate superset that must not become the basis of a replayed delete. Without `queueWrites` nothing enqueues at all and the replay path is reachable only by constructing a `QueuedMutation` by hand, which is what every version before 2.2.0 did.
 
@@ -76,13 +76,13 @@ No third options argument is ever passed to `.rpc()` (`rpc/rpcAction.ts`, `query
 
 ## Auth (auth-js)
 
-### Methods — 12 of ~50 wired
+### Methods — 15 of ~50 wired
 
-Wired: `getSession`, `signInWithPassword`, `signUp`, `signOut`, `signInWithOAuth` (two implementations — `auth/authStore.ts` and `adapter-react-native/src/expoOAuth.ts`), `refreshSession`, `onAuthStateChange`, `setSession`, `exchangeCodeForSession` (now with `flowId`, see CHANGELOG), `resetPasswordForEmail`, `verifyOtp`.
+Wired: `getSession`, `signInWithPassword`, `signUp`, `signOut`, `signInWithOAuth` (two implementations — `auth/authStore.ts` and `adapter-react-native/src/expoOAuth.ts`), `refreshSession`, `onAuthStateChange`, `setSession`, `exchangeCodeForSession` (now with `flowId`, see CHANGELOG), `resetPasswordForEmail`, `verifyOtp` (generic since 3.0.0 — see below), plus three free functions added in 3.1.0 (`auth/authActions.ts`): `getUser`, `updateUser`, `resend` (as `resendOtp`).
 
-**Missing:** `signInWithOtp` (so **magic-link sending is impossible** through Anchor — only password *recovery* email is wired), `signInWithIdToken` (native Google/Apple — a real gap for the RN adapter), `signInWithSSO`, `signInAnonymously`, `signInWithWeb3`, `getUser`, `getClaims`, `updateUser`, `reauthenticate`, `resend`, `getUserIdentities`/`linkIdentity`/`unlinkIdentity`, `startAutoRefresh`/`stopAutoRefresh` (so the canonical RN `AppState` pattern is absent — `lifecycle/appLifecycle.ts:71` calls `refreshSession()` manually on foreground instead), `signOut({scope})`.
+**Missing:** `signInWithOtp` (so **magic-link sending is impossible** through Anchor — only password *recovery* email is wired), `signInWithIdToken` (native Google/Apple — a real gap for the RN adapter), `signInWithSSO`, `signInAnonymously`, `signInWithWeb3`, `getClaims` (see `getVerifiedClaims()` below — it does call this, so the gap is narrower than "missing" implies: nothing else does), `reauthenticate`, `getUserIdentities`/`linkIdentity`/`unlinkIdentity`, `startAutoRefresh`/`stopAutoRefresh` (so the canonical RN `AppState` pattern is absent — `lifecycle/appLifecycle.ts:71` calls `refreshSession()` manually on foreground instead), `signOut({scope})`.
 
-`verifyOtp` hardcodes `type: "recovery"` (`auth/authCallbacks.ts:253`), so `signup`/`magiclink`/`email_change`/`invite`/`sms`/`phone_change`/`token_hash` OTP verification is unreachable.
+`verifyOtp` no longer hardcodes `type: "recovery"` — that behaviour moved to the newer, separately-named `verifyRecoveryOTP` (which delegates to it), and `verifyOtp` itself takes any real `VerifyOtpParams` union member, so `signup`/`magiclink`/`email_change`/`invite`/`sms`/`phone_change`/`token_hash` OTP verification are all reachable.
 
 Whole namespaces unwired: **`mfa.*`** (`enroll` for TOTP *and* phone *and* WebAuthn, `challenge`, `verify`, `challengeAndVerify`, `unenroll`, `listFactors`, `getAuthenticatorAssuranceLevel`, plus the experimental `mfa.webauthn`), **`auth.passkey.*`** and the `signInWithPasskey`/`registerPasskey` shortcuts, **`auth.oauth.*`** (OAuth 2.1 consent-page API), **`auth.admin.*`** (including the newer `admin.oauth`/`admin.passkey`).
 
@@ -97,7 +97,7 @@ Just as significant as the missing methods, and cheaper to close:
 - `signInWithOAuth` forwards only `redirectTo` and **discards `data.url`** (`auth/authStore.ts:132`) → `skipBrowserRedirect`, `scopes`, `queryParams` unreachable; only `expoOAuth.ts:47` returns the URL.
 - `resetPasswordForEmail` → no `captchaToken`.
 - `refreshSession` → no explicit `{refresh_token}` argument.
-- `updateUser`'s `currentPassword` (re-auth on password change) and the `custom:`-prefixed `Provider` form have no path in at all — `updateUser` isn't called.
+- `updateUser` is now called (`auth/authActions.ts`'s free function, since 3.1.0), but its `currentPassword` (re-auth on password change) and the `custom:`-prefixed `Provider` form still have no path in — the free function forwards only `UpdateUserAttributes`'s `email`/`password`/`phone`/`data`/`nonce`.
 
 ### Events
 
@@ -109,7 +109,7 @@ Redundancy at `hooks/useAuth.ts:34-35`: `initialize()` does a `getSession()` rou
 
 ### `getClaim` vs `getClaims`
 
-`AuthStore.getClaim` (`auth/authStore.ts:14-26`) is a **hand-rolled, unverified** local JWT decode — `atob` + `JSON.parse` on the payload segment, no signature check, `atob` assumed global — while `getClaims()`, which verifies via JWKS, exists in the pinned SDK and is never used. The docstring ("Supabase handles that") is misleading about what "handles" means here.
+`AuthStore.getClaim` (`auth/authStore.ts:14-26`) is a **hand-rolled, unverified** local JWT decode — `atob` + `JSON.parse` on the payload segment, no signature check, `atob` assumed global — for deciding what to render. `getClaims()`, JWKS-verified, is now called too: `AuthStore.getVerifiedClaims()` (since 3.0.0) wraps it and returns `{claims, error}`. `getClaim` is unchanged and still the right tool for the local-decode case its docstring describes; the two exist for different jobs (a fast local read to render from vs. a verified one to actually trust) rather than one superseding the other.
 
 ## Client options — none reachable
 
@@ -152,10 +152,12 @@ Also untouched: `httpSend()` (needs Realtime server ≥ v2.97.0), `.on('system')
 
 Worth noting the upstream side of this refactor is now better supported than when Anchor's pattern was written: 2.112.0 added `code` to `StorageApiError`, and recent versions added `toJSON` to `FunctionsError`/`WebAuthnError`.
 
-## Two pre-existing bugs (found, not fixed here)
+## Two pre-existing bugs, since fixed
 
-- `realtime/realtimeManager.ts`'s `pause()` docstring promises a `resume()` method that does not exist anywhere in the codebase. `pause()` also leaves entries in `this.subscriptions` after removing their channels, so a later `destroy()` calls `removeChannel` on already-removed channels.
-- `TableStore.subscribe()`/`.unsubscribe()` (`createTableStore.ts:844-848`) are permanent no-op stubs. This silently makes `hooks/useRealtime.ts`'s subscribe path and `lifecycle/appLifecycle.ts`'s `pauseRealtimeOnBackground` no-ops — real realtime wiring only happens via `createSupabaseStores()` → `bindRealtimeToStore()`.
+Both were true when this document was first written and are recorded here only so a reader who remembers them from an earlier version of this file doesn't act on stale information — neither is a current gap.
+
+- ~~`realtime/realtimeManager.ts`'s `pause()` docstring promises a `resume()` method that does not exist~~. `resume()` exists (`realtimeManager.ts`) and rebuilds every channel `pause()` tore down; `pause()`'s own idempotence (a `paused` flag per subscription) means `destroy()` no longer double-removes a channel.
+- ~~`TableStore.subscribe()`/`.unsubscribe()` are permanent no-op stubs~~. Both are real (`createTableStore.ts`): `subscribe()` throws if no shared `RealtimeManager` was injected (i.e. the store wasn't built via `createSupabaseStores()`) rather than silently doing nothing, and otherwise wires `bindRealtimeToStore()` and returns its cleanup. `hooks/useRealtime.ts` and `lifecycle/appLifecycle.ts`'s `pauseRealtimeOnBackground` both work as documented.
 
 ## supabase-js v3 — forward-looking note only
 

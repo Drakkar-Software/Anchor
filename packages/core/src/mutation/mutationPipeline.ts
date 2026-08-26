@@ -90,12 +90,22 @@ export async function executeRemoteMutation(
       const upsertPayload = { ...payload }
       if (isTempId(upsertPayload[primaryKey])) delete upsertPayload[primaryKey]
 
-      const { data, error } = await fromTable(supabase, table, schema)
+      const upsertQuery = fromTable(supabase, table, schema)
         .upsert(upsertPayload as any, mutation.upsertOptions)
         .select(select ?? "*")
-        .single()
+
+      // Mirrors the live `upsert()` path: `ignoreDuplicates`'s `DO NOTHING` on
+      // a real conflict returns no row, which is a successful no-op replay,
+      // not a `PGRST116` to fail the drain on — a queue stops at its first
+      // failure, so treating this as an error would stall every pending
+      // mutation behind it, on every table, for a write the server already
+      // confirmed.
+      const { data, error } = mutation.upsertOptions?.ignoreDuplicates
+        ? await upsertQuery.maybeSingle()
+        : await upsertQuery.single()
 
       if (error) throw fromSupabaseError(error)
+      if (data === null) return { data: null }
 
       const d = data as unknown as Record<string, unknown>
       const serverId = d[primaryKey]
@@ -170,6 +180,30 @@ export function createMutationExecutor(
         // reach, since `selectAllRows`/`selectQueryRows` walk `order` alone.
         if (!order.includes(id)) order.push(id)
         return { ...prev, records, order }
+      })
+    } else if (
+      data === null &&
+      mutation.operation === "UPSERT" &&
+      mutation.upsertOptions?.ignoreDuplicates
+    ) {
+      // The only way an UPSERT reaches here with `data === null` and no thrown
+      // error is `ignoreDuplicates`'s `DO NOTHING` confirming a row that
+      // already exists. There is no server row to adopt, but the row this
+      // mutation was about is still marked pending under the id it was
+      // enqueued with, and nothing else on this path will ever clear that.
+      const pendingId = Object.values(mutation.primaryKey)[0] as string | number
+      store.setState((prev: any) => {
+        const records = new Map<string | number, Record<string, unknown>>(prev.records)
+        const current = records.get(pendingId)
+        if (!current?._anchor_pending) return prev
+        const {
+          _anchor_pending: _pending,
+          _anchor_optimistic: _optimistic,
+          _anchor_mutationId: _mutationId,
+          ...resolved
+        } = current
+        records.set(pendingId, resolved)
+        return { ...prev, records }
       })
     }
 

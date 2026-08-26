@@ -2,6 +2,67 @@
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-08-26
+
+Three gaps found while migrating a real clinical app onto Anchor's store/queue
+layer — a persistence-namespacing option the bulk factory never exposed, an
+upsert option a no-`update`-grant join table cannot be wired without, and a
+default that would have silently deleted unsynced data. Additive; nothing
+existing changes behaviour.
+
+### Added
+
+- **`createSupabaseStores`'s `persistence.keyPrefix`**, prepended to every
+  table/view's own default key (`anchor:${schema}:${table}`, computed by
+  `createTableStore`). The bulk factory only ever forwarded `.adapter`, with
+  no way to namespace a shared adapter at all — a caller wanting one
+  (multi-tenant namespacing, key rotation) had to reach below
+  `createSupabaseStores` and hand-wrap the adapter itself.
+
+- **`UpsertOptions.ignoreDuplicates`**, wired both live (`store.upsert()`) and
+  on the queued replay (`executeRemoteMutation`). This is the one option a
+  join table granted only `select, insert, delete` — no `update` — needs to
+  be upserted through a store at all: without it, `ON CONFLICT DO UPDATE`
+  is refused `42501` even on a conflict that would not actually change
+  anything, because Postgres checks UPDATE privilege for that clause
+  whether or not one occurs. Because `DO NOTHING` returns no row on a real
+  conflict, `upsert` reads back with `.maybeSingle()` rather than
+  `.single()` when this is set, and resolves a `null`/no-error response to
+  the store's own already-merged optimistic row (cleared of its pending
+  flag) instead of throwing `PGRST116` and rolling back — or, on the
+  replay, stalling the queue at its first failure for a write the server
+  had already confirmed.
+
+### Changed
+
+- **Documented, not defaulted: `offlineQueue.maxRetries` is 3, and past it a
+  mutation is `rolled_back` — deleted from local state, not merely
+  abandoned.** That default is reasonable for a todo app and was silently
+  the wrong one for a consumer syncing data that must never quietly
+  disappear across a multi-hour or multi-day offline stretch. Nothing in
+  the library changes here — this is a docblock addition
+  (`CreateSupabaseStoresOptions.offlineQueue`, and the README's
+  Offline-First section) so the next consumer with that requirement sets it
+  explicitly rather than discovering the default by losing data.
+
+### Fixed
+
+- **`docs/supabase-api-coverage.md` and the React Native adapter README had
+  drifted from source.** `RealtimeManager.resume()` and `TableStore.
+  subscribe()`/`.unsubscribe()` were both documented as unfixed gaps that
+  had, in fact, already been fixed; the auth-methods count and "missing"
+  list predated the 3.1.0 free functions (`getUser`, `updateUser`,
+  `resendOtp`) and `verifyOtp`'s generalisation off the hardcoded
+  `type: "recovery"`; `getVerifiedClaims()` was documented as calling
+  `getClaims()` in one place and as never called in another. Separately,
+  `ExpoSqliteAdapter`, `AsyncStorageAdapter`, `RNNetworkStatus` and
+  `createExpoOAuthHandler` were all documented with a no-argument
+  constructor call when every one of them takes its underlying platform
+  module as an argument, and `useInfiniteQuery`'s own README example called
+  it as `useInfiniteQuery(store, options)` returning `hasNextPage`/
+  `fetchNextPage`, when the real signature takes the Supabase client
+  directly (bypassing the store entirely) and returns `hasMore`/`loadMore`.
+
 ## [3.1.0] - 2026-08-16
 
 Anchor can now create the client, and covers the auth calls that live outside
