@@ -131,6 +131,7 @@ When passed to standalone `createTableStore()`, these trigger a `console.warn`. 
 
 - **CHANGELOG.md must be updated** with every user-facing change (features, fixes, breaking changes, build/packaging). Add entries under the appropriate version heading before committing.
 - Update `examples/todo-app` when adding new features or APIs to keep examples current.
+- **`docs/llms.md` must be updated with every change to the public API surface** (new exports, new options, signature or behavior changes, new subpath entry points). It is a from-source reference for LLMs generating Anchor code, not a copy of the README, so update it in the same change that adds or alters the feature, not as a follow-up.
 
 ## Common Pitfalls
 

@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`docs/llms.md`**: a full API reference written for an LLM generating Anchor code
+  rather than a human reading prose, covering every export, subpath entry point, option
+  shape, and behavioral invariant, sourced directly from `packages/*/src` rather than
+  from the README. Docs-only; no library code changes.
+
 ## [3.3.0] - 2026-08-26
 
 ### Added
