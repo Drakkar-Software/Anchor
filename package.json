@@ -6,11 +6,18 @@
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "lint:doctor": "react-doctor --yes --scope full --blocking none",
     "clean": "pnpm -r clean",
     "publish:all": "pnpm build && pnpm -r publish",
     "publish:all:dry": "pnpm build && pnpm -r publish --dry-run"
   },
   "engines": {
     "node": ">=22"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.1",
+    "eslint-config-hardcore": "^50.1.0",
+    "react-doctor": "^0.9.13"
   }
 }

@@ -1,6 +1,6 @@
-import { describe, it, expect, vi } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
-const createClientSpy = vi.fn(() => ({ from: () => ({}), auth: {}, rpc: () => ({}) }))
+const createClientSpy = vi.fn(() => ({ auth: {}, from: () => ({}), rpc: () => ({}) }))
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: (...args: unknown[]) => createClientSpy(...(args as [])),
@@ -16,10 +16,10 @@ describe("createAnchorClient", () => {
     // this wrapper reshaped would be a second place to keep them correct.
     const options = {
       auth: {
-        storage: { getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() },
         autoRefreshToken: true,
-        persistSession: true,
         detectSessionInUrl: false,
+        persistSession: true,
+        storage: { getItem: vi.fn(), removeItem: vi.fn(), setItem: vi.fn() },
       },
     }
 

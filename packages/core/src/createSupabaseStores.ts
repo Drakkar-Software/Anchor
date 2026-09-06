@@ -1,17 +1,18 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 import type { StoreApi } from "zustand"
+
+import { setupAuthGate } from "./auth/authGate.js"
+import { createAuthStore } from "./auth/authStore.js"
+import { createTableStore } from "./createTableStore.js"
+import { createMutationExecutor } from "./mutation/mutationPipeline.js"
+import { OfflineQueue } from "./mutation/offlineQueue.js"
+import { bindRealtimeToStore } from "./realtime/realtimeBindings.js"
+import { RealtimeManager } from "./realtime/realtimeManager.js"
 import type {
   CreateSupabaseStoresOptions,
   SupabaseStores,
   TableStore,
 } from "./types.js"
-import { createTableStore } from "./createTableStore.js"
-import { createAuthStore } from "./auth/authStore.js"
-import { RealtimeManager } from "./realtime/realtimeManager.js"
-import { bindRealtimeToStore } from "./realtime/realtimeBindings.js"
-import { OfflineQueue } from "./mutation/offlineQueue.js"
-import { createMutationExecutor } from "./mutation/mutationPipeline.js"
-import { setupAuthGate } from "./auth/authGate.js"
 
 /**
  * Creates typed stores for all specified tables in a Supabase Database.
@@ -36,24 +37,24 @@ export function createSupabaseStores<
   options: CreateSupabaseStoresOptions<DB, SchemaName>,
 ): SupabaseStores<DB, SchemaName> {
   const {
-    supabase,
-    schema,
-    tables,
-    views = [],
-    persistence,
-    network,
-    realtime,
-    conflict,
-    immer,
-    devtools,
-    logger,
-    tableOptions = {},
-    viewOptions = {},
-    tableOrder,
-    fetchRemoteOnBoot = true,
     auth = true,
     authGate: authGateOpts,
+    conflict,
+    devtools,
+    fetchRemoteOnBoot = true,
+    immer,
+    logger,
+    network,
     offlineQueue: offlineQueueOpts,
+    persistence,
+    realtime,
+    schema,
+    supabase,
+    tableOptions = {},
+    tableOrder,
+    tables,
+    viewOptions = {},
+    views = [],
   } = options
 
   // Both loops write into one flat map, views second, so a name in both lists
@@ -61,20 +62,20 @@ export function createSupabaseStores<
   // the offline-queue executor stayed wired to the writable one nobody holds —
   // every write rejected with `Cannot mutate view`, live updates landing
   // nowhere, and two boot fetches for the same relation. Refuse it instead.
-  const duplicated = (views as string[]).filter((v) =>
-    (tables as string[]).includes(v),
-  )
+  const tableSet = new Set(tables as string[])
+  const duplicated = (views as string[]).filter((v) => tableSet.has(v))
+
   if (duplicated.length > 0) {
     throw new Error(
       `createSupabaseStores: ${duplicated.map((d) => `"${d}"`).join(", ")} ` +
-      `named in both "tables" and "views". A relation belongs to one of them.`,
+      "named in both \"tables\" and \"views\". A relation belongs to one of them.",
     )
   }
 
   // Shared instances
   const realtimeManager = new RealtimeManager({
-    supabase: supabase as SupabaseClient,
     logger,
+    supabase: supabase as SupabaseClient,
   })
 
   // `createTableStore`'s own default key is `anchor:${schema}:${table}`; a
@@ -93,10 +94,12 @@ export function createSupabaseStores<
 
   const offlineQueue = new OfflineQueue({
     adapter: persistence?.adapter,
-    network,
+    flushDebounceMs: offlineQueueOpts?.flushDebounceMs,
     logger,
     maxRetries: offlineQueueOpts?.maxRetries,
-    flushDebounceMs: offlineQueueOpts?.flushDebounceMs,
+    network,
+
+
     /**
      * The last exit for a queued write that the server will never accept.
      *
@@ -142,19 +145,26 @@ export function createSupabaseStores<
      */
     onRollback: (mutation) => {
       const store = stores[mutation.table]
-      logger?.mutationError?.(
+
+      logger?.mutationError(
         mutation.table,
         mutation.operation,
         `Abandoned after ${mutation.retryCount} attempts: ${mutation.lastError ?? "unknown error"}`,
       )
-      if (!store) return
+
+      if (!store) {return}
+
       const id = Object.values(mutation.primaryKey)[0] as string | number
       const current = store.getState().records.get(id)
-      if (current && !current._anchor_optimistic) return
-      if (!current && mutation.operation !== "DELETE") return
+
+      if (current && !current._anchor_optimistic) {return}
+
+      if (!current && mutation.operation !== "DELETE") {return}
+
       const snapshot = mutation.rollbackSnapshot
-      if (snapshot) store.getState().setRecord(id, snapshot as any)
-      else if (current) store.getState().removeRecord(id)
+
+      if (snapshot) {store.getState().setRecord(id, snapshot as any)}
+      else if (current) {store.getState().removeRecord(id)}
     },
   })
 
@@ -162,44 +172,48 @@ export function createSupabaseStores<
   const cleanupFns: (() => void)[] = []
 
   const orderedTables = tableOrder ?? tables
+
   for (const tableName of orderedTables) {
     const tableOpts = (tableOptions as Record<string, any>)[
-      tableName as string
+      tableName
     ] as Record<string, unknown> | undefined
 
     const store = createTableStore<DB, any, any, any>({
-      supabase,
-      table: tableName as string,
-      schema: schema as string | undefined,
-      primaryKey: (tableOpts?.primaryKey as string | string[]) ?? "id",
-      defaultFilters: tableOpts?.defaultFilters as any,
-      defaultSort: tableOpts?.defaultSort as any,
-      defaultSelect: tableOpts?.defaultSelect as string,
-      defaultQueryFn: tableOpts?.defaultQueryFn as any,
-      persistence: persistence
-        ? { adapter: persistence.adapter, key: persistenceKeyFor(schema as string | undefined, tableName as string) }
-        : undefined,
-      network,
-      offlineQueue: offlineQueueOpts,
-      conflict: (tableOpts?.conflict as any) ?? conflict,
-      cacheStrategy: (tableOpts?.cacheStrategy as any) ?? options.cacheStrategy,
-      immer,
-      devtools,
-      logger,
       _queue: offlineQueue,
+
       // Views deliberately do not get this: Postgres publishes changes under the
       // underlying table's name, so a channel on a view never fires.
       _realtimeManager: realtimeManager,
+      cacheStrategy: (tableOpts?.cacheStrategy as any) ?? options.cacheStrategy,
+      conflict: (tableOpts?.conflict as any) ?? conflict,
+      defaultFilters: tableOpts?.defaultFilters as any,
+      defaultQueryFn: tableOpts?.defaultQueryFn as any,
+      defaultSelect: tableOpts?.defaultSelect as string,
+      defaultSort: tableOpts?.defaultSort as any,
+      devtools,
+      immer,
+      logger,
+      network,
+      offlineQueue: offlineQueueOpts,
+
+      persistence: persistence
+        ? { adapter: persistence.adapter, key: persistenceKeyFor(schema as string | undefined, tableName) }
+        : undefined,
+
+      primaryKey: (tableOpts?.primaryKey as string | string[]) ?? "id",
+      schema: schema as string | undefined,
+      supabase,
+      table: tableName,
     })
 
-    stores[tableName as string] = store
+    stores[tableName] = store
 
     // Register mutation executor for offline queue
     offlineQueue.registerExecutor(
-      tableName as string,
+      tableName,
       createMutationExecutor(
         supabase as SupabaseClient,
-        tableName as string,
+        tableName,
         (tableOpts?.primaryKey as string | string[]) ?? "id",
         store,
         tableOpts?.defaultSelect as string,
@@ -209,33 +223,37 @@ export function createSupabaseStores<
 
     // Set up realtime if enabled
     const tableRealtime = (tableOpts?.realtime as any) ?? realtime
+
     if (tableRealtime?.enabled) {
       const rawPk = (tableOpts?.primaryKey as string | string[] | undefined) ?? "id"
       const pkColumns = Array.isArray(rawPk) ? rawPk : [rawPk]
+
       if (pkColumns.length > 1) {
         // Same reason `createTableStore`'s own `subscribe()` refuses this:
         // `bindRealtimeToStore`/`RealtimeManager` key a single-column
         // `primaryKey: string`. Fail loudly at setup time rather than
         // silently binding realtime to the wrong (first) column.
         throw new Error(
-          `[anchor:${tableName as string}] has a composite primary key (${pkColumns.join(", ")}); ` +
-            `realtime is not supported for composite-key tables.`,
+          `[anchor:${tableName}] has a composite primary key (${pkColumns.join(", ")}); ` +
+            "realtime is not supported for composite-key tables.",
         )
       }
+
       const unsubscribe = bindRealtimeToStore(
         realtimeManager,
         store,
         {
-          table: tableName as string,
-          schema: schema as string | undefined,
-          primaryKey: pkColumns[0]!,
+          conflict: (tableOpts?.conflict as any) ?? conflict,
           events: tableRealtime.events,
           filter: tableRealtime.filter,
-          select: tableRealtime.select,
-          conflict: (tableOpts?.conflict as any) ?? conflict,
           getPendingMutations: (t) => offlineQueue.pendingMutations.filter((m) => m.table === t),
+          primaryKey: pkColumns[0]!,
+          schema: schema as string | undefined,
+          select: tableRealtime.select,
+          table: tableName,
         },
       )
+
       cleanupFns.push(unsubscribe)
     }
   }
@@ -257,54 +275,61 @@ export function createSupabaseStores<
       | undefined
 
     stores[viewName as string] = createTableStore<DB, any, any, any>({
-      supabase,
-      table: viewName as string,
-      schema: schema as string | undefined,
-      isView: true,
-      primaryKey: (viewOpts?.primaryKey as string) ?? "id",
+      _queue: offlineQueue,
+      cacheStrategy: (viewOpts?.cacheStrategy as any) ?? options.cacheStrategy,
       defaultFilters: viewOpts?.defaultFilters as any,
-      defaultSort: viewOpts?.defaultSort as any,
-      defaultSelect: viewOpts?.defaultSelect as string,
       defaultQueryFn: viewOpts?.defaultQueryFn as any,
+      defaultSelect: viewOpts?.defaultSelect as string,
+      defaultSort: viewOpts?.defaultSort as any,
+      devtools,
+      immer,
+      isView: true,
+      logger,
+      network,
+
       persistence: persistence
         ? { adapter: persistence.adapter, key: persistenceKeyFor(schema as string | undefined, viewName as string) }
         : undefined,
-      network,
-      cacheStrategy: (viewOpts?.cacheStrategy as any) ?? options.cacheStrategy,
-      immer,
-      devtools,
-      logger,
-      _queue: offlineQueue,
+
+      primaryKey: (viewOpts?.primaryKey as string) ?? "id",
+      schema: schema as string | undefined,
+      supabase,
+      table: viewName as string,
     })
   }
 
   // Create auth store
   const authStore = auth
-    ? createAuthStore({ supabase: supabase as SupabaseClient, devtools: !!devtools })
+    ? createAuthStore({ devtools: Boolean(devtools), supabase: supabase as SupabaseClient })
     : createAuthStore({ supabase: supabase as SupabaseClient })
 
   // Wire auth gate with shared realtime + queue instances
   if (auth) {
-    const tableStoreList = Object.values(stores) as StoreApi<TableStore<any, any, any>>[]
+    const tableStoreList = Object.values(stores)
     const unsubAuthGate = setupAuthGate(
       supabase as SupabaseClient,
       authStore,
       tableStoreList,
       {
         ...authGateOpts,
-        realtimeManager,
         offlineQueue,
+
         onAuthChange: (_event, session) => {
           // Keep offline queue's userId in sync with current auth
           const userId = (session as any)?.user?.id as string | undefined
+
           offlineQueue.setUserId(userId)
         },
+
+        realtimeManager,
       },
     )
+
     cleanupFns.push(unsubAuthGate)
 
     // Set initial userId from auth store state
     const initialUser = authStore.getState().user
+
     if (initialUser?.id) {
       offlineQueue.setUserId(initialUser.id)
     }
@@ -313,6 +338,8 @@ export function createSupabaseStores<
   // Hydrate offline queue
   offlineQueue.hydrate().then(() => {
     offlineQueue.startAutoFlush()
+
+
     // A queue read back off disk needs a flush scheduled for it, and this is a
     // race with the auth event that would otherwise schedule one: reading
     // storage and supabase-js recovering a stored session are both in flight
@@ -325,36 +352,39 @@ export function createSupabaseStores<
     // It matters more than it did: until a tagged mutation began waiting for
     // its own user, an unauthenticated flush from any source would have drained
     // the queue regardless. Now nothing else can.
-    if (offlineQueue.isDirty) offlineQueue.scheduleFlush()
-  }).catch((err) => {
-    logger?.fetchError?.("__queue", err instanceof Error ? err.message : String(err))
+    if (offlineQueue.isDirty) {offlineQueue.scheduleFlush()}
+  }).catch((error: unknown) => {
+    logger?.fetchError("__queue", error instanceof Error ? error.message : String(error))
   })
 
   // Fetch remote data on boot
   if (fetchRemoteOnBoot) {
     for (const name of [...orderedTables, ...views]) {
-      stores[name as string]?.getState().fetch().catch((err: unknown) => {
-        logger?.fetchError?.(name as string, err instanceof Error ? err.message : String(err))
+      stores[name]?.getState().fetch().catch((error: unknown) => {
+        logger?.fetchError(name, error instanceof Error ? error.message : String(error))
       })
     }
   }
 
   // Build the result object
-  const result = {
+  return {
     ...stores,
-    auth: authStore,
-    _supabase: supabase,
+
     _destroy: () => {
-      for (const fn of cleanupFns) fn()
+      for (const fn of cleanupFns) {fn()}
+
       // Clean up cross-tab sync for each store
       for (const name of [...orderedTables, ...views]) {
-        const s = stores[name as string] as any
-        if (s?._destroyCrossTab) s._destroyCrossTab()
+        const s = stores[name] as any
+
+        if (s?._destroyCrossTab) {s._destroyCrossTab()}
       }
+
       realtimeManager.destroy()
       offlineQueue.destroy()
     },
-  } as SupabaseStores<DB, SchemaName>
 
-  return result
+    _supabase: supabase,
+    auth: authStore,
+  } as SupabaseStores<DB, SchemaName>
 }

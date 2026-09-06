@@ -1,54 +1,70 @@
 "use client"
 
-import { useState, useCallback, useRef } from "react"
 import type { SupabaseClient } from "@supabase/supabase-js"
-import type { FilterDescriptor, SortDescriptor } from "../types.js"
+import { useCallback, useEffect,useRef, useState } from "react"
+
 import {
   buildCursorQuery,
-  processCursorResults,
   type CursorPaginationOptions,
   type PaginationState,
+  processCursorResults,
 } from "../query/pagination.js"
 import { applyFilters, applySort, fromTable } from "../query/queryExecutor.js"
+import type { FilterDescriptor, SortDescriptor } from "../types.js"
 
 export type UseInfiniteQueryOptions<Row> = {
   /** Column to paginate on (must be sortable, e.g. created_at, id) */
   cursorColumn: string & keyof Row
-  /** Number of items per page (default: 20) */
-  pageSize?: number
-  /** Additional filters to apply */
-  filters?: FilterDescriptor<Row>[]
-  /** Additional sort rules (cursor column sort is added automatically) */
-  sort?: SortDescriptor<Row>[]
-  /** Select specific columns */
-  select?: string
-  /** Schema for non-public tables */
-  schema?: string
-  /** Table name */
-  table: string
+
   /** Whether the query is enabled (default: true) */
   enabled?: boolean
+
+  /** Additional filters to apply */
+  filters?: FilterDescriptor<Row>[]
+
+  /** Number of items per page (default: 20) */
+  pageSize?: number
+
+  /** Schema for non-public tables */
+  schema?: string
+
+  /** Select specific columns */
+  select?: string
+
+  /** Additional sort rules (cursor column sort is added automatically) */
+  sort?: SortDescriptor<Row>[]
+
+  /** Table name */
+  table: string
 }
 
 export type UseInfiniteQueryResult<Row> = {
   /** All loaded pages flattened into a single array */
   data: Row[]
-  /** All pages as separate arrays */
-  pages: Row[][]
-  /** Whether the initial page is loading */
-  isLoading: boolean
-  /** Whether a subsequent page is loading */
-  isLoadingMore: boolean
-  /** Whether there are more pages to load */
-  hasMore: boolean
+
   /** Error from the last operation */
   error: Error | null
+
+  /** Whether there are more pages to load */
+  hasMore: boolean
+
+  /** Whether the initial page is loading */
+  isLoading: boolean
+
+  /** Whether a subsequent page is loading */
+  isLoadingMore: boolean
+
   /** Load the next page */
   loadMore: () => Promise<void>
-  /** Reset and refetch from the beginning */
-  reset: () => Promise<void>
+
+  /** All pages as separate arrays */
+  pages: Row[][]
+
   /** Current pagination state */
   pagination: PaginationState | null
+
+  /** Reset and refetch from the beginning */
+  reset: () => Promise<void>
 }
 
 /**
@@ -69,13 +85,13 @@ export function useInfiniteQuery<Row extends Record<string, unknown>>(
 ): UseInfiniteQueryResult<Row> {
   const {
     cursorColumn,
-    pageSize = 20,
-    filters = [],
-    sort = [],
-    select,
-    schema,
-    table,
     enabled = true,
+    filters = [],
+    pageSize = 20,
+    schema,
+    select,
+    sort = [],
+    table,
   } = options
 
   const [pages, setPages] = useState<Row[][]>([])
@@ -85,6 +101,13 @@ export function useInfiniteQuery<Row extends Record<string, unknown>>(
   const [pagination, setPagination] = useState<PaginationState | null>(null)
   const cursorRef = useRef<unknown>(undefined)
   const hasInitiallyFetched = useRef(false)
+  const filtersRef = useRef(filters)
+  const sortRef = useRef(sort)
+
+  useEffect(() => {
+    filtersRef.current = filters
+    sortRef.current = sort
+  }, [filters, sort])
 
   const fetchPage = useCallback(async (cursor: unknown, isInitial: boolean) => {
     if (isInitial) {
@@ -92,31 +115,35 @@ export function useInfiniteQuery<Row extends Record<string, unknown>>(
     } else {
       setIsLoadingMore(true)
     }
+
     setError(null)
 
     try {
       const cursorOpts: CursorPaginationOptions<Row> = {
-        cursorColumn,
-        pageSize,
         cursor: cursor ?? undefined,
+        cursorColumn,
         direction: "forward",
+        pageSize,
       }
 
-      const { filters: cursorFilters, sort: cursorSort, limit } = buildCursorQuery(cursorOpts)
+      const { filters: cursorFilters, limit, sort: cursorSort } = buildCursorQuery(cursorOpts)
+      const currentFilters = filtersRef.current
+      const currentSort = sortRef.current
 
       let query = fromTable(supabase, table, schema)
         .select(select ?? "*")
 
       // Apply user filters + cursor filters
-      query = applyFilters(query, [...filters as FilterDescriptor<Record<string, unknown>>[], ...cursorFilters as FilterDescriptor<Record<string, unknown>>[]])
+      query = applyFilters(query, [...currentFilters as FilterDescriptor[], ...cursorFilters as FilterDescriptor[]])
+
       // Apply user sort + cursor sort (cursor sort takes precedence for pagination correctness)
-      query = applySort(query, [...sort as SortDescriptor<Record<string, unknown>>[], ...cursorSort as SortDescriptor<Record<string, unknown>>[]])
+      query = applySort(query, [...currentSort as SortDescriptor[], ...cursorSort as SortDescriptor[]])
       query = query.limit(limit)
 
       const { data, error: queryError } = await query
 
       if (queryError) {
-        throw new Error((queryError as any).message ?? String(queryError))
+        throw new Error((queryError).message ?? String(queryError))
       }
 
       const rows = (data ?? []) as Row[]
@@ -130,22 +157,25 @@ export function useInfiniteQuery<Row extends Record<string, unknown>>(
       } else {
         setPages((prev) => [...prev, result.data])
       }
-    } catch (err) {
-      setError(err instanceof Error ? err : new Error(String(err)))
+    } catch (error_) {
+      setError(error_ instanceof Error ? error_ : new Error(String(error_)))
     } finally {
       setIsLoading(false)
       setIsLoadingMore(false)
     }
-  }, [supabase, table, schema, cursorColumn, pageSize, select, JSON.stringify(filters), JSON.stringify(sort)])
+  }, [supabase, table, schema, cursorColumn, pageSize, select])
 
-  // Auto-fetch first page
-  if (enabled && !hasInitiallyFetched.current && !isLoading) {
+  // Auto-fetch first page (must not run during render — React can replay it)
+  useEffect(() => {
+    if (!enabled || hasInitiallyFetched.current) {return}
+
     hasInitiallyFetched.current = true
-    fetchPage(undefined, true)
-  }
+    void fetchPage(undefined, true)
+  }, [enabled, fetchPage])
 
   const loadMore = useCallback(async () => {
-    if (isLoadingMore || isLoading || !pagination?.hasNextPage) return
+    if (isLoadingMore || isLoading || !pagination?.hasNextPage) {return}
+
     await fetchPage(cursorRef.current, false)
   }, [fetchPage, isLoadingMore, isLoading, pagination?.hasNextPage])
 
@@ -160,13 +190,13 @@ export function useInfiniteQuery<Row extends Record<string, unknown>>(
 
   return {
     data,
-    pages,
+    error,
+    hasMore: pagination?.hasNextPage ?? false,
     isLoading,
     isLoadingMore,
-    hasMore: pagination?.hasNextPage ?? false,
-    error,
     loadMore,
-    reset,
+    pages,
     pagination,
+    reset,
   }
 }

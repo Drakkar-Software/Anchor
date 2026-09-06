@@ -1,19 +1,20 @@
 "use client"
 
-import { useState, useEffect, useRef, useCallback } from "react"
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react"
 import type { StoreApi } from "zustand"
+
 import type { TableStore } from "../types.js"
 
 export type UseLinkedQueryResult<T> = {
   data: T | undefined
-  isLoading: boolean
   error: Error | null
+  isLoading: boolean
   refetch: () => Promise<void>
 }
 
 // Module-level cache: persists { data, lastFetchedAt } across component unmount/remount.
 // Keyed by queryKey option — survives back-navigation, avoids re-fetching fresh data.
-const queryCache = new Map<string, { lastFetchedAt: number; data: unknown }>()
+const queryCache = new Map<string, { data: unknown; lastFetchedAt: number; }>()
 
 /**
  * Custom async query that auto-refetches when linked stores mutate.
@@ -55,9 +56,9 @@ const queryCache = new Map<string, { lastFetchedAt: number; data: unknown }>()
 export function useLinkedQuery<T>(
   queryFn: () => Promise<T>,
   options?: {
-    stores?: StoreApi<TableStore<any, any, any>>[]
     deps?: unknown[]
     enabled?: boolean
+
     /**
      * Seed the initial data before the first fetch resolves.
      * Accepts a value or a getter function called once on mount.
@@ -65,6 +66,7 @@ export function useLinkedQuery<T>(
      * network fetch still fires in the background (stale-while-revalidate).
      */
     initialData?: T | (() => T | undefined)
+
     /**
      * Write successful query results back into this store via `mergeRecords()`.
      * Only applies when the result is an array — no-op otherwise.
@@ -72,6 +74,16 @@ export function useLinkedQuery<T>(
      * `initialData` to serve cached records instantly.
      */
     mergeToStore?: StoreApi<TableStore<any, any, any>>
+
+    /**
+     * Stable string key for cross-remount staleTime tracking. When provided
+     * with `staleTime > 0`, the fetch timestamp and cached data survive
+     * component unmount so back-navigation doesn't re-fetch within the
+     * staleTime window. Must be unique across all `useLinkedQuery` calls —
+     * include entity type and any filter params (e.g. `"offers:${userId}"`).
+     */
+    queryKey?: string
+
     /**
      * Time in ms before data is considered stale. When data is fresh (fetched
      * within this window), mount- and dep-change-triggered refetches are skipped
@@ -85,14 +97,7 @@ export function useLinkedQuery<T>(
      * Without `queryKey`, the timer resets on component unmount.
      */
     staleTime?: number
-    /**
-     * Stable string key for cross-remount staleTime tracking. When provided
-     * with `staleTime > 0`, the fetch timestamp and cached data survive
-     * component unmount so back-navigation doesn't re-fetch within the
-     * staleTime window. Must be unique across all `useLinkedQuery` calls —
-     * include entity type and any filter params (e.g. `"offers:${userId}"`).
-     */
-    queryKey?: string
+    stores?: StoreApi<TableStore<any, any, any>>[]
   },
 ): UseLinkedQueryResult<T> {
   const enabled = options?.enabled ?? true
@@ -106,6 +111,7 @@ export function useLinkedQuery<T>(
 
   const resolveInitialData = (): T | undefined => {
     const raw = options?.initialData
+
     return typeof raw === "function" ? (raw as () => T | undefined)() : raw
   }
 
@@ -118,87 +124,126 @@ export function useLinkedQuery<T>(
   const [error, setError] = useState<Error | null>(null)
 
   const queryFnRef = useRef(queryFn)
-  queryFnRef.current = queryFn
   const generationRef = useRef(0)
   const mergeToStoreRef = useRef(mergeToStore)
-  mergeToStoreRef.current = mergeToStore
+
   // Flag to suppress store subscription during own mergeToStore writes
   const isMergingRef = useRef(false)
+
   // Tracks whether we already have data to display (suppresses isLoading during background SWR refetch)
   const hasDataRef = useRef(hasInitialData)
+
   // Timestamp of last successful fetch — seeded from module-level cache for cross-remount SWR
   const lastFetchedAtRef = useRef<number | null>(cachedEntry?.lastFetchedAt ?? null)
+
   // Tracks storeVersion at last effect execution to detect store-mutation-driven refetches
   const prevStoreVersionRef = useRef(0)
+  const inflightRef = useRef(0)
 
-  // Track store mutation version — increments when any linked store's records change
-  const [storeVersion, setStoreVersion] = useState(0)
+  // Bumped when any linked store's `records` reference changes (via useSyncExternalStore)
+  const linkedVersionRef = useRef(0)
 
   useEffect(() => {
-    if (linkedStores.length === 0) return
+    queryFnRef.current = queryFn
+  }, [queryFn])
 
-    // Capture initial records refs to avoid refetching on mount
-    const prevRecords = linkedStores.map((s) => s.getState().records)
+  useEffect(() => {
+    mergeToStoreRef.current = mergeToStore
+  }, [mergeToStore])
 
-    const unsubs = linkedStores.map((store, i) =>
-      store.subscribe((state) => {
-        if (state.records !== prevRecords[i]) {
-          prevRecords[i] = state.records
-          // Skip version bump when this hook's own mergeToStore caused the change
-          if (!isMergingRef.current) {
-            setStoreVersion((v) => v + 1)
+  // Subscribe to linked stores through useSyncExternalStore so React owns teardown.
+  const subscribeLinked = useCallback(
+    (onStoreChange: () => void) => {
+      const prevRecords = linkedStores.map((s) => s.getState().records)
+      const unsubscribers = linkedStores.map((store, i) =>
+        store.subscribe((state) => {
+          if (state.records !== prevRecords[i]) {
+            prevRecords[i] = state.records
+
+            if (!isMergingRef.current) {
+              linkedVersionRef.current += 1
+              onStoreChange()
+            }
           }
-        }
-      }),
-    )
-    return () => unsubs.forEach((u) => u())
-    // Re-subscribe only when the store array identity changes
+        }),
+      )
+
+      return () => {
+        for (const stop of unsubscribers) {stop()}
+      }
+    },
+
+    // Re-subscribe only when the store set changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [linkedStores.length, ...linkedStores])
+    [linkedStores.length, ...linkedStores],
+  )
+
+  const storeVersion = useSyncExternalStore(
+    subscribeLinked,
+    () => linkedVersionRef.current,
+    () => 0,
+  )
 
   const refetch = useCallback(async () => {
     const gen = ++generationRef.current
+
+    inflightRef.current++
+
     if (!hasDataRef.current) {
       setIsLoading(true)
     }
+
     setError(null)
+
     try {
       const result = await queryFnRef.current()
+
       if (gen === generationRef.current) {
         setData(result)
         hasDataRef.current = result !== undefined
+
         const now = Date.now()
+
         lastFetchedAtRef.current = now
+
         if (cacheKey) {
-          queryCache.set(cacheKey, { lastFetchedAt: now, data: result })
+          queryCache.set(cacheKey, { data: result, lastFetchedAt: now })
         }
+
         if (mergeToStoreRef.current && Array.isArray(result)) {
           isMergingRef.current = true
           mergeToStoreRef.current.getState().mergeRecords(result)
           isMergingRef.current = false
         }
       }
-    } catch (err) {
+    } catch (error_) {
       if (gen === generationRef.current) {
-        setError(err instanceof Error ? err : new Error(String(err)))
+        setError(error_ instanceof Error ? error_ : new Error(String(error_)))
       }
     } finally {
-      if (gen === generationRef.current) {
-        setIsLoading(false)
-      }
+      inflightRef.current--
+
+      // Always assign in `finally` (not only on the idle path). Keep loading
+      // false while we already have data to show during overlapping SWR refetches.
+      setIsLoading(inflightRef.current > 0 && !hasDataRef.current)
     }
+
     // cacheKey is stable (comes from options literal), safe to include
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [cacheKey])
 
   // Fetch on mount, when deps change, or when linked stores mutate
   useEffect(() => {
     if (!enabled) {
       setIsLoading(false)
+
       return
     }
+
     const storeVersionChanged = prevStoreVersionRef.current !== storeVersion
+
     prevStoreVersionRef.current = storeVersion
+
     if (
       !storeVersionChanged &&
       staleTime > 0 &&
@@ -207,9 +252,10 @@ export function useLinkedQuery<T>(
     ) {
       return
     }
-    refetch()
+
+    void refetch()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, refetch, staleTime, storeVersion, ...deps])
 
-  return { data, isLoading, error, refetch }
+  return { data, error, isLoading, refetch }
 }

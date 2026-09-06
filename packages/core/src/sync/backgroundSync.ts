@@ -8,11 +8,21 @@ export type BackgroundSyncOptions = {
 }
 
 /**
+ * Check if the background sync task is currently registered.
+ */
+export async function isBackgroundSyncRegistered(
+  adapter: BackgroundTaskAdapter,
+  taskName = TASK_NAME,
+): Promise<boolean> {
+  return await adapter.isRegistered(taskName)
+}
+
+/**
  * Register a background task that flushes the offline mutation queue.
  * Returns a cleanup function that unregisters the task.
  */
 export async function setupBackgroundSync(
-  queue: { flush(): Promise<unknown> },
+  queue: { flush: () => Promise<unknown> },
   adapter: BackgroundTaskAdapter,
   options?: BackgroundSyncOptions,
 ): Promise<() => Promise<void>> {
@@ -25,14 +35,4 @@ export async function setupBackgroundSync(
   return async () => {
     await adapter.unregister(taskName)
   }
-}
-
-/**
- * Check if the background sync task is currently registered.
- */
-export async function isBackgroundSyncRegistered(
-  adapter: BackgroundTaskAdapter,
-  taskName = TASK_NAME,
-): Promise<boolean> {
-  return adapter.isRegistered(taskName)
 }

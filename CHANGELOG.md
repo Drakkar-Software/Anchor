@@ -4,10 +4,62 @@
 
 ### Added
 
+- **ESLint via [`eslint-config-hardcore`](https://github.com/EvgenyOrekhov/eslint-config-hardcore)**
+  across publishable packages (`pnpm lint` / per-package `lint`). Configs chosen
+  per package: `core` extends `hardcore` + `ts` + `react` + `react-performance` +
+  `react-testing-library` (with `hardcore/node` for `tsup`/`vitest` configs);
+  `adapter-web` and `adapter-react-native` extend `hardcore` + `ts` (same node
+  override for tooling). Shared monorepo tweaks live in
+  `eslint-hardcore-shared.cjs` (disables broken `putout`/`etc` rules under
+  Babel 8 / TS 6, and softens rules that fight Anchor’s public API —
+  `_anchor_*`, PostgREST `null`, intentional generics/`any` at store
+  boundaries, barrel exports). Skipped `fp` (Zustand/Immer), `jest` (Vitest),
+  and `vue`. Source autofixed / cleaned until `pnpm lint` is green.
+
+- **React Doctor: all 906 rules enabled** in [`doctor.config.json`](doctor.config.json)
+  at each rule’s recommended severity (`warn` / `error`), including
+  previously opt-in / `defaultEnabled: false` families (design, effect
+  anti-patterns, etc.). `react-in-jsx-scope` is off (automatic JSX runtime).
+  Intentional sequential awaits are suppressed inline; see
+  `.react-doctor/false-positives.md`. Run with `pnpm lint:doctor`.
+
+- **`PrimaryKeyValue` is exported** from the package root (public composite-key
+  id type used by mutators).
+
 - **`docs/llms.md`**: a full API reference written for an LLM generating Anchor code
   rather than a human reading prose, covering every export, subpath entry point, option
   shape, and behavioral invariant, sourced directly from `packages/*/src` rather than
   from the README. Docs-only; no library code changes.
+
+### Fixed
+
+- **Remaining `eslint-config-hardcore` findings** in `core`: floating promises
+  marked with `void`, catch callbacks typed as `unknown`, `import()` type
+  annotations replaced with named imports, switch `default` cases, sort
+  comparators, Suspense throw suppressions, and rename of local
+  `findByConflict` → `lookupByConflict` (avoids a false
+  `testing-library/await-async-queries` hit). Upsert no longer incorrectly
+  `await`s the sync conflict lookup. Restored Map/`order` type assertions that
+  ESLint autofix had stripped (broke `tsup` DTS for incremental sync, realtime
+  bindings, and multi-device sync). Typed IndexedDB `multiSet` as
+  `Promise<void>` so `resolve()` satisfies TS 6 under `await new Promise`.
+
+- **React hooks no longer mutate refs or kick off fetches during render.**
+  `useMutation`, `useQuery`, `useRpc`, `useLinkedQuery`, and `useInfiniteQuery`
+  keep latest callbacks/options in effects; `useInfiniteQuery`'s first page
+  loads from an effect instead of the render body; `useSyncStatus` closes over
+  the current store list instead of writing refs during render. Loading flags
+  in `useMutation` clear in `finally`.
+
+- **O(n) `includes` lookups in hot merge/rollback paths** now use `Set` —
+  `createSupabaseStores` duplicate-name check, `removeWhere` / batch-delete
+  rollback, conflict field-ownership checks, `matchRow` array operators, and
+  multi-device sync order pruning.
+
+- **Independent persistence I/O no longer awaits serially** in
+  `EncryptedAdapter.multiSet` fallback, schema-version cache clear, and
+  storage-quota estimate/evict helpers (`Promise.all`). Offline-queue flush
+  and priority sync stay sequential on purpose (`dependsOn` / priority order).
 
 ## [3.3.0] - 2026-08-26
 

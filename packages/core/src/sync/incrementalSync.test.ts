@@ -1,7 +1,8 @@
-import { describe, it, expect, vi } from "vitest"
-import { incrementalSync } from "./incrementalSync.js"
-import { createTableStore } from "../createTableStore.js"
+import { describe, expect,it } from "vitest"
+
 import { createMockSupabase } from "../__tests__/mockSupabase.js"
+import { createTableStore } from "../createTableStore.js"
+import { incrementalSync } from "./incrementalSync.js"
 
 type Todo = { id: number; title: string; updated_at: string }
 
@@ -46,13 +47,13 @@ describe("incrementalSync", () => {
 
     // Set a pending record
     store.getState().setRecord(1, {
+      _anchor_pending: "update",
       id: 1,
       title: "Local pending",
       updated_at: "2024-01-01",
-      _anchor_pending: "update",
     } as any)
 
-    const result = await incrementalSync(supabase, "todos", "id", store)
+    await incrementalSync(supabase, "todos", "id", store)
 
     // Pending record should NOT be overwritten
     expect(store.getState().records.get(1)?.title).toBe("Local pending")
@@ -75,7 +76,8 @@ describe("incrementalSync error routing", () => {
   it("throws an error carrying the Postgres code", async () => {
     const supabase = createMockSupabase({ todos: [] })
     const store = createTableStore<any, Todo, any, any>({ supabase, table: "todos" })
-    supabase._setError("todos", "select", { message: "permission denied", code: "42501" })
+
+    supabase._setError("todos", "select", { code: "42501", message: "permission denied" })
 
     await expect(
       incrementalSync(supabase, "todos", "id", store, { timestampColumn: "updated_at" }),

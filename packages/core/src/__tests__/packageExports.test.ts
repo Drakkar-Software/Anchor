@@ -1,6 +1,8 @@
-import { describe, it, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
+
+import { describe, expect,it } from "vitest"
+
 import tsupConfig from "../../tsup.config.js"
 
 /**
@@ -21,14 +23,14 @@ import tsupConfig from "../../tsup.config.js"
 const pkg = JSON.parse(
   readFileSync(fileURLToPath(new URL("../../package.json", import.meta.url)), "utf8"),
 ) as {
-  exports: Record<string, { types: string; import: string; require: string }>
+  exports: Record<string, { import: string; require: string; types: string; }>
 }
 
 const entries = (tsupConfig as { entry: Record<string, string> }).entry
 
 /** `./dist/query/filters.mjs` → `query/filters` */
 function entryNameOf(importPath: string): string {
-  return importPath.replace(/^\.\/dist\//, "").replace(/\.mjs$/, "")
+  return importPath.replace(/^\.\/dist\//v, "").replace(/\.mjs$/v, "")
 }
 
 describe("package exports cover every build entry", () => {
@@ -43,6 +45,7 @@ describe("package exports cover every build entry", () => {
     // a 404 at install time rather than a missing feature, and is just as
     // invisible to the build.
     const built = new Set(Object.keys(entries))
+
     for (const [subpath, target] of Object.entries(pkg.exports)) {
       expect(built, `${subpath} points at ${target.import}`).toContain(entryNameOf(target.import))
     }
@@ -51,6 +54,7 @@ describe("package exports cover every build entry", () => {
   it("keeps types, import and require on the same entry", () => {
     for (const [subpath, target] of Object.entries(pkg.exports)) {
       const base = entryNameOf(target.import)
+
       expect(target.types, subpath).toBe(`./dist/${base}.d.ts`)
       expect(target.require, subpath).toBe(`./dist/${base}.js`)
     }

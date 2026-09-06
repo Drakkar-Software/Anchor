@@ -1,11 +1,14 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
+import { afterEach,beforeEach, describe, expect, it } from "vitest"
 import { createStore } from "zustand/vanilla"
+
 import { setupBroadcastSync } from "./crossTabSync.js"
 
 // Mock BroadcastChannel for Node.js test environment
 class MockBroadcastChannel {
   static instances: MockBroadcastChannel[] = []
+
   name: string
+
   onmessage: ((event: { data: any }) => void) | null = null
 
   constructor(name: string) {
@@ -24,26 +27,29 @@ class MockBroadcastChannel {
 
   close() {
     const idx = MockBroadcastChannel.instances.indexOf(this)
-    if (idx >= 0) MockBroadcastChannel.instances.splice(idx, 1)
+
+    if (idx !== -1) {MockBroadcastChannel.instances.splice(idx, 1)}
   }
 }
 
 // Install globally
-;(globalThis as any).BroadcastChannel = MockBroadcastChannel
+;
+
+(globalThis as any).BroadcastChannel = MockBroadcastChannel
 
 type TestState = {
-  records: Map<string | number, unknown>
-  order: (string | number)[]
-  isRestoring: boolean
   isHydrated: boolean
+  isRestoring: boolean
+  order: (string | number)[]
+  records: Map<string | number, unknown>
 }
 
 function createTestStore(overrides: Partial<TestState> = {}) {
   return createStore<TestState>()(() => ({
-    records: new Map(),
-    order: [],
-    isRestoring: false,
     isHydrated: true,
+    isRestoring: false,
+    order: [],
+    records: new Map(),
     ...overrides,
   }))
 }
@@ -66,8 +72,8 @@ describe("crossTabSync", () => {
 
     // Mutate store A
     storeA.setState({
-      records: new Map([[1, { id: 1, title: "Hello" }]]),
       order: [1],
+      records: new Map([[1, { id: 1, title: "Hello" }]]),
     })
 
     // Store B should have received the update
@@ -87,8 +93,8 @@ describe("crossTabSync", () => {
 
     // Mutate store A
     storeA.setState({
-      records: new Map([[1, { id: 1, title: "Hello" }]]),
       order: [1],
+      records: new Map([[1, { id: 1, title: "Hello" }]]),
     })
 
     // Store B should NOT receive (not yet hydrated)
@@ -107,8 +113,8 @@ describe("crossTabSync", () => {
 
     // Mutate store A (user-1)
     storeA.setState({
-      records: new Map([[1, { id: 1, title: "Private data" }]]),
       order: [1],
+      records: new Map([[1, { id: 1, title: "Private data" }]]),
     })
 
     // Store B (user-2) should NOT receive user-1's data
@@ -124,8 +130,8 @@ describe("crossTabSync", () => {
 
     // Store B has a pending mutation
     storeB.setState({
-      records: new Map([[99, { id: 99, title: "Pending", _anchor_pending: "insert" }]]),
       order: [99],
+      records: new Map([[99, { _anchor_pending: "insert", id: 99, title: "Pending" }]]),
     })
 
     const cleanupA = setupBroadcastSync(storeA, "test-pending")
@@ -133,8 +139,8 @@ describe("crossTabSync", () => {
 
     // Store A broadcasts its state (doesn't include id=99)
     storeA.setState({
-      records: new Map([[1, { id: 1, title: "From A" }]]),
       order: [1],
+      records: new Map([[1, { id: 1, title: "From A" }]]),
     })
 
     // Store B should have BOTH: incoming from A and preserved pending

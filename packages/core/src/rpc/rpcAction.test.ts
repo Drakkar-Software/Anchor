@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest"
+import { beforeEach,describe, expect, it, vi } from "vitest"
+
 import { callRpc, createRpcAction, createSchemaRpc, invalidateRpcCache } from "./rpcAction.js"
 
 function createMockSupabase(rpcResult: { data: any; error: any }) {
@@ -10,18 +11,18 @@ function createMockSupabase(rpcResult: { data: any; error: any }) {
 describe("callRpc", () => {
   it("calls supabase.rpc with function name and args", async () => {
     const supabase = createMockSupabase({
-      data: { count: 42, avg: 3.5 },
+      data: { avg: 3.5, count: 42 },
       error: null,
     })
 
-    const result = await callRpc<{ count: number; avg: number }>(
+    const result = await callRpc<{ avg: number; count: number; }>(
       supabase,
       "get_stats",
       { user_id: "123" },
     )
 
     expect(supabase.rpc).toHaveBeenCalledWith("get_stats", { user_id: "123" })
-    expect(result.data).toEqual({ count: 42, avg: 3.5 })
+    expect(result.data).toEqual({ avg: 3.5, count: 42 })
     expect(result.error).toBeNull()
   })
 
@@ -72,6 +73,7 @@ describe("createRpcAction", () => {
     })
 
     const action = createRpcAction(supabase, "ping")
+
     await action()
     await action()
 
@@ -95,6 +97,7 @@ describe("RPC caching", () => {
 
   it("deduplicates in-flight requests", async () => {
     let resolveRpc: (val: any) => void
+
     const supabase = {
       rpc: vi.fn().mockReturnValue(new Promise(r => { resolveRpc = r })),
     } as any
@@ -103,6 +106,7 @@ describe("RPC caching", () => {
     const p2 = callRpc(supabase, "slow_fn", undefined, { cache: { ttlMs: 5000 } })
 
     resolveRpc!({ data: "done", error: null })
+
     const [r1, r2] = await Promise.all([p1, p2])
 
     expect(supabase.rpc).toHaveBeenCalledTimes(1)
@@ -139,14 +143,14 @@ describe("RPC caching", () => {
 describe("createSchemaRpc", () => {
   type DB = {
     public: {
-      Tables: Record<string, never>
       Functions: {
+        current_day: { Args: Record<string, never>; Returns: number }
         record_consent: {
-          Args: { p_kind: string; p_granted: boolean }
+          Args: { p_granted: boolean; p_kind: string; }
           Returns: string
         }
-        current_day: { Args: Record<string, never>; Returns: number }
       }
+      Tables: Record<string, never>
     }
   }
 
@@ -154,11 +158,11 @@ describe("createSchemaRpc", () => {
     const supabase = createMockSupabase({ data: "consent-1", error: null })
     const rpc = createSchemaRpc<DB>(supabase)
 
-    const result = await rpc("record_consent", { p_kind: "care", p_granted: true })
+    const result = await rpc("record_consent", { p_granted: true, p_kind: "care" })
 
     expect(supabase.rpc).toHaveBeenCalledWith("record_consent", {
-      p_kind: "care",
       p_granted: true,
+      p_kind: "care",
     })
     expect(result.data).toBe("consent-1")
     expect(result.error).toBeNull()
@@ -167,14 +171,14 @@ describe("createSchemaRpc", () => {
   it("carries the same structured error as callRpc", async () => {
     const supabase = createMockSupabase({
       data: null,
-      error: { message: "permission denied for function", code: "42501" },
+      error: { code: "42501", message: "permission denied for function" },
     })
     const rpc = createSchemaRpc<DB>(supabase)
 
     const result = await rpc("current_day")
 
     expect(result.data).toBeNull()
-    expect((result.error as { code?: string })?.code).toBe("42501")
+    expect((result.error as { code?: string }).code).toBe("42501")
   })
 
   it("takes a no-argument function without inventing an empty object", async () => {

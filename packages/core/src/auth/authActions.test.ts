@@ -1,29 +1,34 @@
-import { describe, it, expect, vi } from "vitest"
+import { describe, expect, it, vi } from "vitest"
+
+import { AnchorError } from "../errors.js"
 import {
   getSession,
   getUser,
-  signUpWithPassword,
-  signInWithPassword,
-  updateUser,
   resendOtp,
+  signInWithPassword,
+  signUpWithPassword,
+  updateUser,
 } from "./authActions.js"
-import { AnchorError } from "../errors.js"
 
-const SESSION = { access_token: "tok", user: { id: "u1", email: "user@example.com" } }
+const SESSION = { access_token: "tok", user: { email: "user@example.com", id: "u1" } }
 
 function makeSupabase(authOverrides: Record<string, ReturnType<typeof vi.fn>> = {}) {
   return {
     auth: {
       getSession: vi.fn().mockResolvedValue({ data: { session: SESSION }, error: null }),
       getUser: vi.fn().mockResolvedValue({ data: { user: SESSION.user }, error: null }),
-      signUp: vi
-        .fn()
-        .mockResolvedValue({ data: { session: SESSION, user: SESSION.user }, error: null }),
+
+      resend: vi.fn().mockResolvedValue({ error: null }),
+
       signInWithPassword: vi
         .fn()
         .mockResolvedValue({ data: { session: SESSION, user: SESSION.user }, error: null }),
+
+      signUp: vi
+        .fn()
+        .mockResolvedValue({ data: { session: SESSION, user: SESSION.user }, error: null }),
+
       updateUser: vi.fn().mockResolvedValue({ data: { user: SESSION.user }, error: null }),
-      resend: vi.fn().mockResolvedValue({ error: null }),
       ...authOverrides,
     },
   } as any
@@ -32,7 +37,7 @@ function makeSupabase(authOverrides: Record<string, ReturnType<typeof vi.fn>> = 
 describe("getSession", () => {
   it("returns the stored session", async () => {
     const supabase = makeSupabase()
-    const { session, error } = await getSession(supabase)
+    const { error, session } = await getSession(supabase)
 
     expect(session).toEqual(SESSION)
     expect(error).toBeNull()
@@ -42,7 +47,7 @@ describe("getSession", () => {
     const supabase = makeSupabase({
       getSession: vi.fn().mockResolvedValue({ data: { session: null }, error: null }),
     })
-    const { session, error } = await getSession(supabase)
+    const { error, session } = await getSession(supabase)
 
     expect(session).toBeNull()
     expect(error).toBeNull()
@@ -52,20 +57,20 @@ describe("getSession", () => {
     const supabase = makeSupabase({
       getSession: vi
         .fn()
-        .mockResolvedValue({ data: null, error: { message: "bad jwt", code: "PGRST301" } }),
+        .mockResolvedValue({ data: null, error: { code: "PGRST301", message: "bad jwt" } }),
     })
-    const { session, error } = await getSession(supabase)
+    const { error, session } = await getSession(supabase)
 
     expect(session).toBeNull()
     expect(error).toBeInstanceOf(AnchorError)
-    expect((error as AnchorError).code).toBe("PGRST301")
+    expect((error!).code).toBe("PGRST301")
   })
 })
 
 describe("getUser", () => {
   it("returns the user the auth server confirms", async () => {
     const supabase = makeSupabase()
-    const { user, error } = await getUser(supabase)
+    const { error, user } = await getUser(supabase)
 
     expect(user).toEqual(SESSION.user)
     expect(error).toBeNull()
@@ -77,26 +82,27 @@ describe("getUser", () => {
         .fn()
         .mockResolvedValue({ data: null, error: { message: "Invalid claim", status: 401 } }),
     })
-    const { user, error } = await getUser(supabase)
+    const { error, user } = await getUser(supabase)
 
     expect(user).toBeNull()
-    expect((error as AnchorError).status).toBe(401)
+    expect((error!).status).toBe(401)
   })
 })
 
 describe("signUpWithPassword", () => {
   it("forwards the credentials and the options", async () => {
     const supabase = makeSupabase()
+
     await signUpWithPassword(supabase, {
       email: "user@example.com",
-      password: "hunter2",
       options: { emailRedirectTo: "https://app.example.com/auth-callback" },
+      password: "hunter2",
     })
 
     expect(supabase.auth.signUp).toHaveBeenCalledWith({
       email: "user@example.com",
-      password: "hunter2",
       options: { emailRedirectTo: "https://app.example.com/auth-callback" },
+      password: "hunter2",
     })
   })
 
@@ -108,7 +114,7 @@ describe("signUpWithPassword", () => {
         .fn()
         .mockResolvedValue({ data: { session: null, user: SESSION.user }, error: null }),
     })
-    const { session, user, error } = await signUpWithPassword(supabase, {
+    const { error, session, user } = await signUpWithPassword(supabase, {
       email: "user@example.com",
       password: "hunter2",
     })
@@ -125,24 +131,24 @@ describe("signUpWithPassword", () => {
     const supabase = makeSupabase({
       signUp: vi.fn().mockResolvedValue({
         data: { session: null, user: null },
-        error: { message: "User already registered", code: "user_already_exists" },
+        error: { code: "user_already_exists", message: "User already registered" },
       }),
     })
-    const { session, user, error } = await signUpWithPassword(supabase, {
+    const { error, session, user } = await signUpWithPassword(supabase, {
       email: "user@example.com",
       password: "hunter2",
     })
 
     expect(session).toBeNull()
     expect(user).toBeNull()
-    expect((error as AnchorError).code).toBe("user_already_exists")
+    expect((error!).code).toBe("user_already_exists")
   })
 })
 
 describe("signInWithPassword", () => {
   it("returns the session and the user", async () => {
     const supabase = makeSupabase()
-    const { session, user, error } = await signInWithPassword(supabase, {
+    const { error, session, user } = await signInWithPassword(supabase, {
       email: "user@example.com",
       password: "hunter2",
     })
@@ -160,23 +166,23 @@ describe("signInWithPassword", () => {
     const supabase = makeSupabase({
       signInWithPassword: vi.fn().mockResolvedValue({
         data: { session: null, user: null },
-        error: { message: "Invalid login credentials", code: "invalid_credentials" },
+        error: { code: "invalid_credentials", message: "Invalid login credentials" },
       }),
     })
-    const { session, error } = await signInWithPassword(supabase, {
+    const { error, session } = await signInWithPassword(supabase, {
       email: "user@example.com",
       password: "wrong",
     })
 
     expect(session).toBeNull()
-    expect((error as AnchorError).code).toBe("invalid_credentials")
+    expect((error!).code).toBe("invalid_credentials")
   })
 })
 
 describe("updateUser", () => {
   it("forwards the attributes untouched", async () => {
     const supabase = makeSupabase()
-    const { user, error } = await updateUser(supabase, { password: "new-password" })
+    const { error, user } = await updateUser(supabase, { password: "new-password" })
 
     expect(supabase.auth.updateUser).toHaveBeenCalledWith({ password: "new-password" })
     expect(user).toEqual(SESSION.user)
@@ -187,13 +193,13 @@ describe("updateUser", () => {
     const supabase = makeSupabase({
       updateUser: vi.fn().mockResolvedValue({
         data: { user: null },
-        error: { message: "Password should be at least 8 characters", code: "weak_password" },
+        error: { code: "weak_password", message: "Password should be at least 8 characters" },
       }),
     })
-    const { user, error } = await updateUser(supabase, { password: "short" })
+    const { error, user } = await updateUser(supabase, { password: "short" })
 
     expect(user).toBeNull()
-    expect((error as AnchorError).code).toBe("weak_password")
+    expect((error!).code).toBe("weak_password")
   })
 })
 
@@ -201,24 +207,25 @@ describe("resendOtp", () => {
   it("forwards a sign-up resend", async () => {
     const supabase = makeSupabase()
     const { error } = await resendOtp(supabase, {
-      type: "signup",
       email: "user@example.com",
+      type: "signup",
     })
 
     expect(supabase.auth.resend).toHaveBeenCalledWith({
-      type: "signup",
       email: "user@example.com",
+      type: "signup",
     })
     expect(error).toBeNull()
   })
 
   it("forwards a phone resend on the phone identifier", async () => {
     const supabase = makeSupabase()
-    await resendOtp(supabase, { type: "sms", phone: "+33600000000" })
+
+    await resendOtp(supabase, { phone: "+33600000000", type: "sms" })
 
     expect(supabase.auth.resend).toHaveBeenCalledWith({
-      type: "sms",
       phone: "+33600000000",
+      type: "sms",
     })
   })
 
@@ -228,9 +235,9 @@ describe("resendOtp", () => {
         error: { message: "For security purposes, you can only request this after 43 seconds", status: 429 },
       }),
     })
-    const { error } = await resendOtp(supabase, { type: "signup", email: "user@example.com" })
+    const { error } = await resendOtp(supabase, { email: "user@example.com", type: "signup" })
 
     expect(error).toBeInstanceOf(AnchorError)
-    expect((error as AnchorError).status).toBe(429)
+    expect((error!).status).toBe(429)
   })
 })

@@ -1,12 +1,12 @@
 import type { PersistenceAdapter } from "@drakkar.software/anchor/persistence"
 
-type AsyncStorageModule = {
-  getItem: (key: string) => Promise<string | null>
-  setItem: (key: string, value: string) => Promise<void>
-  removeItem: (key: string) => Promise<void>
+interface AsyncStorageModule {
   getAllKeys: () => Promise<readonly string[]>
-  multiSet: (pairs: [string, string][]) => Promise<void>
+  getItem: (key: string) => Promise<string | null>
   multiRemove: (keys: string[]) => Promise<void>
+  multiSet: (pairs: [string, string][]) => Promise<void>
+  removeItem: (key: string) => Promise<void>
+  setItem: (key: string, value: string) => Promise<void>
 }
 
 /**
@@ -21,7 +21,7 @@ type AsyncStorageModule = {
  * new AsyncStorageAdapter(AsyncStorage)
  */
 export class AsyncStorageAdapter implements PersistenceAdapter {
-  private storage: AsyncStorageModule
+  private readonly storage: AsyncStorageModule
 
   constructor(AsyncStorage: AsyncStorageModule) {
     this.storage = AsyncStorage
@@ -29,11 +29,14 @@ export class AsyncStorageAdapter implements PersistenceAdapter {
 
   async getItem<T>(key: string): Promise<T | null> {
     const raw = await this.storage.getItem(key)
-    if (!raw) return null
+
+    if (!raw) {return null}
+
     try {
       return JSON.parse(raw) as T
-    } catch (err) {
-      console.warn(`[anchor:asyncStorage] Failed to parse data for key "${key}":`, err)
+    } catch (error) {
+      console.warn(`[anchor:asyncStorage] Failed to parse data for key "${key}":`, error)
+
       return null
     }
   }
@@ -50,17 +53,21 @@ export class AsyncStorageAdapter implements PersistenceAdapter {
     const pairs = entries.map(
       ([key, value]) => [key, JSON.stringify(value)] as [string, string],
     )
+
     await this.storage.multiSet(pairs)
   }
 
   async keys(prefix?: string): Promise<string[]> {
     const allKeys = await this.storage.getAllKeys()
-    if (!prefix) return [...allKeys]
+
+    if (!prefix) {return Array.from(allKeys)}
+
     return allKeys.filter((k: string) => k.startsWith(prefix))
   }
 
   async clear(): Promise<void> {
     const zsKeys = await this.keys("anchor:")
+
     if (zsKeys.length > 0) {
       await this.storage.multiRemove(zsKeys)
     }

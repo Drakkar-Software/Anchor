@@ -1,13 +1,14 @@
-import { describe, it, expect, vi } from "vitest"
-import { createSupabaseStores } from "./createSupabaseStores.js"
+import { describe, expect,it } from "vitest"
+
 import { createMockSupabase } from "./__tests__/mockSupabase.js"
+import { createSupabaseStores } from "./createSupabaseStores.js"
 import { MemoryAdapter } from "./persistence/persistenceAdapter.js"
 
 describe("createSupabaseStores", () => {
   it("creates stores for all specified tables", () => {
     const supabase = createMockSupabase({
-      todos: [{ id: 1, title: "A" }],
       profiles: [{ id: "u1", username: "alice" }],
+      todos: [{ id: 1, title: "A" }],
     })
 
     const stores = createSupabaseStores<any>({
@@ -30,6 +31,7 @@ describe("createSupabaseStores", () => {
     })
 
     const authState = stores.auth.getState()
+
     expect(authState.session).toBeNull()
     expect(typeof authState.signIn).toBe("function")
   })
@@ -43,12 +45,13 @@ describe("createSupabaseStores", () => {
     })
 
     const stores = createSupabaseStores<any>({
+      fetchRemoteOnBoot: false,
       supabase,
       tables: ["todos"],
-      fetchRemoteOnBoot: false,
     })
 
     const result = await stores.todos.getState().fetch()
+
     expect(result).toHaveLength(2)
   })
 
@@ -69,17 +72,19 @@ describe("createSupabaseStores", () => {
     })
 
     const stores = createSupabaseStores<any>({
+      fetchRemoteOnBoot: false,
+      persistence: { adapter },
       supabase,
       tables: ["todos"],
-      persistence: { adapter },
-      fetchRemoteOnBoot: false,
     })
 
     await stores.todos.getState().fetch()
+
     // Wait for debounced persist (100ms debounce + async write)
     await new Promise((r) => setTimeout(r, 200))
 
     const persisted = await adapter.getItem<any[]>("anchor:public:todos")
+
     expect(persisted).toHaveLength(1)
   })
 
@@ -90,10 +95,10 @@ describe("createSupabaseStores", () => {
     })
 
     const stores = createSupabaseStores<any>({
+      fetchRemoteOnBoot: false,
+      persistence: { adapter, keyPrefix: "tenant-42:" },
       supabase,
       tables: ["todos"],
-      persistence: { adapter, keyPrefix: "tenant-42:" },
-      fetchRemoteOnBoot: false,
     })
 
     await stores.todos.getState().fetch()
@@ -102,7 +107,9 @@ describe("createSupabaseStores", () => {
     // The unprefixed default key must be untouched — this is a namespace, not
     // a rename of what createTableStore already computes.
     expect(await adapter.getItem<any[]>("anchor:public:todos")).toBeNull()
+
     const persisted = await adapter.getItem<any[]>("tenant-42:anchor:public:todos")
+
     expect(persisted).toHaveLength(1)
   })
 
@@ -113,17 +120,18 @@ describe("createSupabaseStores", () => {
     })
 
     const stores = createSupabaseStores<any>({
+      fetchRemoteOnBoot: false,
+      persistence: { adapter, keyPrefix: "tenant-42:" },
       supabase,
       tables: [],
       views: ["todo_summary"],
-      persistence: { adapter, keyPrefix: "tenant-42:" },
-      fetchRemoteOnBoot: false,
     })
 
     await stores.todo_summary.getState().fetch()
     await new Promise((r) => setTimeout(r, 200))
 
     const persisted = await adapter.getItem<any[]>("tenant-42:anchor:public:todo_summary")
+
     expect(persisted).toHaveLength(1)
   })
 
@@ -133,9 +141,9 @@ describe("createSupabaseStores", () => {
     })
 
     const stores = createSupabaseStores<any>({
+      fetchRemoteOnBoot: false,
       supabase,
       tables: ["todos"],
-      fetchRemoteOnBoot: false,
     })
 
     // Store should be empty since we didn't fetch on boot

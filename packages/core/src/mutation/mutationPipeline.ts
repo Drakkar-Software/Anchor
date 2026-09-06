@@ -1,13 +1,104 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 import type { StoreApi } from "zustand"
-import type {
-  TableStore,
-  QueuedMutation,
-} from "../types.js"
-import { isTempId } from "../types.js"
-import { fromTable } from "../query/queryExecutor.js"
+
 import { fromSupabaseError } from "../errors.js"
-import { encodeKey, applyPkFilters } from "../utils/compositeKey.js"
+import { fromTable } from "../query/queryExecutor.js"
+import {
+ isTempId,  type QueuedMutation,
+  type TableStore } from "../types.js"
+import { applyPkFilters,encodeKey } from "../utils/compositeKey.js"
+
+/**
+ * Creates a mutation executor function for a table store.
+ * Used by the OfflineQueue to replay mutations.
+ */
+export function createMutationExecutor(
+  supabase: SupabaseClient,
+  table: string,
+  primaryKey: string | string[],
+  store: StoreApi<TableStore<any, any, any>>,
+  select?: string,
+  schema?: string,
+) {
+  return async (
+    mutation: QueuedMutation,
+    tempIdMap: Map<string, unknown>,
+  ): Promise<{ serverId?: unknown }> => {
+    const { data, serverId } = await executeRemoteMutation(
+      supabase,
+      table,
+      primaryKey,
+      mutation,
+      tempIdMap,
+      select,
+      schema,
+    )
+
+    // Update store with server response
+    if (data && mutation.operation !== "DELETE") {
+      const id = encodeKey(data, primaryKey)
+
+      store.setState((prev: any) => {
+        const records = new Map(prev.records)
+        const order = Array.from(prev.order)
+
+        // Remove temp entry if ID changed
+        const oldPk = encodeKey(mutation.primaryKey, primaryKey)
+
+        if (oldPk !== id) {
+          records.delete(oldPk)
+
+          const idx = order.indexOf(oldPk)
+
+          if (idx !== -1) {order[idx] = id}
+        }
+
+        // Set confirmed server data (no _anchor_ metadata)
+        records.set(id, data)
+
+
+        // `order` and `records` have to stay in step. The branch above only
+        // touches `order` when the id changed, so a replayed UPDATE — same id
+        // throughout — used to leave a row in `records` that no projection can
+        // reach, since `selectAllRows`/`selectQueryRows` walk `order` alone.
+        if (!order.includes(id)) {order.push(id)}
+
+        return { ...prev, order, records }
+      })
+    } else if (
+      data === null &&
+      mutation.operation === "UPSERT" &&
+      mutation.upsertOptions?.ignoreDuplicates
+    ) {
+      // The only way an UPSERT reaches here with `data === null` and no thrown
+      // error is `ignoreDuplicates`'s `DO NOTHING` confirming a row that
+      // already exists. There is no server row to adopt, but the row this
+      // mutation was about is still marked pending under the id it was
+      // enqueued with, and nothing else on this path will ever clear that.
+      const pendingId = encodeKey(mutation.primaryKey, primaryKey)
+
+      store.setState((prev: any) => {
+        const records = new Map<string | number, Record<string, unknown>>(prev.records)
+        const current = records.get(pendingId)
+
+        if (!current?._anchor_pending) {return prev}
+
+        const {
+          _anchor_mutationId: _mutationId,
+          _anchor_optimistic: _optimistic,
+          _anchor_pending: _pending,
+          ...resolved
+        } = current
+
+        records.set(pendingId, resolved)
+
+        return { ...prev, records }
+      })
+    }
+
+    return { serverId }
+  }
+}
 
 /**
  * Execute a remote mutation against Supabase.
@@ -42,6 +133,7 @@ export async function executeRemoteMutation(
   }
 
   const pkValue = encodeKey(pk, primaryKey)
+
   // Temp-id stripping only ever applies to a single-column PK: a composite-key
   // insert/upsert requires every PK column supplied as a real value up front
   // (the store's `insert()`/`upsert()` enforce this — see `createTableStore.ts`),
@@ -49,10 +141,23 @@ export async function executeRemoteMutation(
   const singleColumnPk = typeof primaryKey === "string" ? primaryKey : undefined
 
   switch (mutation.operation) {
+    case "DELETE": {
+      const { error } = await applyPkFilters(
+        fromTable(supabase, table, schema).delete(),
+        primaryKey,
+        pkValue,
+      )
+
+      if (error) {throw fromSupabaseError(error)}
+
+      return { data: null }
+    }
+
     case "INSERT": {
       // For inserts, don't send temp IDs to the server
       const insertPayload = { ...payload }
-      const pkFieldValue = singleColumnPk ? insertPayload?.[singleColumnPk] : undefined
+      const pkFieldValue = singleColumnPk ? insertPayload[singleColumnPk] : undefined
+
       if (
         singleColumnPk &&
         typeof pkFieldValue === "string" &&
@@ -66,10 +171,11 @@ export async function executeRemoteMutation(
         .select(select ?? "*")
         .single()
 
-      if (error) throw fromSupabaseError(error)
+      if (error) {throw fromSupabaseError(error)}
 
       const d = data as unknown as Record<string, unknown>
       const serverId = encodeKey(d, primaryKey)
+
       return { data: d, serverId }
     }
 
@@ -82,7 +188,8 @@ export async function executeRemoteMutation(
         .select(select ?? "*")
         .single()
 
-      if (error) throw fromSupabaseError(error)
+      if (error) {throw fromSupabaseError(error)}
+
       return { data: data as unknown as Record<string, unknown> }
     }
 
@@ -97,6 +204,7 @@ export async function executeRemoteMutation(
       // `_temp:…` string reaching Postgres as a uuid fails the statement
       // outright instead of writing the row.
       const upsertPayload = { ...payload }
+
       if (singleColumnPk && isTempId(upsertPayload[singleColumnPk])) {
         delete upsertPayload[singleColumnPk]
       }
@@ -115,107 +223,18 @@ export async function executeRemoteMutation(
         ? await upsertQuery.maybeSingle()
         : await upsertQuery.single()
 
-      if (error) throw fromSupabaseError(error)
-      if (data === null) return { data: null }
+      if (error) {throw fromSupabaseError(error)}
+
+      if (data === null) {return { data: null }}
 
       const d = data as unknown as Record<string, unknown>
       const serverId = encodeKey(d, primaryKey)
+
       return { data: d, serverId }
     }
 
-    case "DELETE": {
-      const { error } = await applyPkFilters(
-        fromTable(supabase, table, schema).delete(),
-        primaryKey,
-        pkValue,
-      )
-
-      if (error) throw fromSupabaseError(error)
-      return { data: null }
-    }
-
-    default:
+    default: {
       throw new Error(`Unknown operation: ${mutation.operation}`)
-  }
-}
-
-/**
- * Creates a mutation executor function for a table store.
- * Used by the OfflineQueue to replay mutations.
- */
-export function createMutationExecutor(
-  supabase: SupabaseClient,
-  table: string,
-  primaryKey: string | string[],
-  store: StoreApi<TableStore<any, any, any>>,
-  select?: string,
-  schema?: string,
-) {
-  return async (
-    mutation: QueuedMutation,
-    tempIdMap: Map<string, unknown>,
-  ): Promise<{ serverId?: unknown }> => {
-    const { data, serverId } = await executeRemoteMutation(
-      supabase,
-      table,
-      primaryKey,
-      mutation,
-      tempIdMap,
-      select,
-      schema,
-    )
-
-    // Update store with server response
-    if (data && mutation.operation !== "DELETE") {
-      const id = encodeKey(data as Record<string, unknown>, primaryKey)
-
-      store.setState((prev: any) => {
-        const records = new Map(prev.records)
-        const order = [...prev.order]
-
-        // Remove temp entry if ID changed
-        const oldPk = encodeKey(mutation.primaryKey, primaryKey)
-        if (oldPk !== id) {
-          records.delete(oldPk)
-          const idx = order.indexOf(oldPk)
-          if (idx >= 0) order[idx] = id
-        }
-
-        // Set confirmed server data (no _anchor_ metadata)
-        records.set(id, data)
-        // `order` and `records` have to stay in step. The branch above only
-        // touches `order` when the id changed, so a replayed UPDATE — same id
-        // throughout — used to leave a row in `records` that no projection can
-        // reach, since `selectAllRows`/`selectQueryRows` walk `order` alone.
-        if (!order.includes(id)) order.push(id)
-        return { ...prev, records, order }
-      })
-    } else if (
-      data === null &&
-      mutation.operation === "UPSERT" &&
-      mutation.upsertOptions?.ignoreDuplicates
-    ) {
-      // The only way an UPSERT reaches here with `data === null` and no thrown
-      // error is `ignoreDuplicates`'s `DO NOTHING` confirming a row that
-      // already exists. There is no server row to adopt, but the row this
-      // mutation was about is still marked pending under the id it was
-      // enqueued with, and nothing else on this path will ever clear that.
-      const pendingId = encodeKey(mutation.primaryKey, primaryKey)
-      store.setState((prev: any) => {
-        const records = new Map<string | number, Record<string, unknown>>(prev.records)
-        const current = records.get(pendingId)
-        if (!current?._anchor_pending) return prev
-        const {
-          _anchor_pending: _pending,
-          _anchor_optimistic: _optimistic,
-          _anchor_mutationId: _mutationId,
-          ...resolved
-        } = current
-        records.set(pendingId, resolved)
-        return { ...prev, records }
-      })
     }
-
-    return { serverId }
   }
 }

@@ -1,22 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
-import type { FilterDescriptor, SortDescriptor, FetchOptions } from "../types.js"
-import { fromSupabaseError } from "../errors.js"
-import { applyPkFilters } from "../utils/compositeKey.js"
 
-/**
- * Returns a schema-aware query builder for a table.
- * Uses .schema(name) for non-public schemas (requires supabase-js >=2.39).
- */
-export function fromTable(
-  supabase: SupabaseClient,
-  table: string,
-  schema?: string,
-): any {
-  if (schema && schema !== "public") {
-    return (supabase as any).schema(schema).from(table)
-  }
-  return supabase.from(table)
-}
+import { fromSupabaseError } from "../errors.js"
+import type { FetchOptions,FilterDescriptor, SortDescriptor } from "../types.js"
+import { applyPkFilters } from "../utils/compositeKey.js"
 
 /**
  * Applies an array of FilterDescriptors to a Supabase query builder.
@@ -26,77 +12,119 @@ export function applyFilters(
   filters: FilterDescriptor[],
 ): any {
   let q = builder
+
   for (const f of filters) {
     switch (f.op) {
-      case "eq":
-        q = q.eq(f.column, f.value)
-        break
-      case "neq":
-        q = q.neq(f.column, f.value)
-        break
-      case "gt":
-        q = q.gt(f.column, f.value)
-        break
-      case "gte":
-        q = q.gte(f.column, f.value)
-        break
-      case "lt":
-        q = q.lt(f.column, f.value)
-        break
-      case "lte":
-        q = q.lte(f.column, f.value)
-        break
-      case "like":
-        q = q.like(f.column, f.value)
-        break
-      case "ilike":
-        q = q.ilike(f.column, f.value)
-        break
-      case "is":
-        q = q.is(f.column, f.value)
-        break
-      case "in":
-        q = q.in(f.column, f.value)
-        break
-      case "contains":
-        q = q.contains(f.column, f.value)
-        break
-      case "containedBy":
+      case "containedBy": {
         q = q.containedBy(f.column, f.value)
-        break
-      case "overlaps":
-        q = q.overlaps(f.column, f.value)
-        break
-      case "textSearch": {
-        const opts = f.value as {
-          query: string
-          type?: string
-          config?: string
-        }
-        q = q.textSearch(f.column, opts.query, {
-          type: opts.type,
-          config: opts.config,
-        })
+
         break
       }
-      case "match":
-        q = q.match(f.value as Record<string, unknown>)
-        break
-      case "not": {
-        const notOpts = f.value as { op: string; value: unknown }
-        q = q.not(f.column, notOpts.op ?? "eq", notOpts.value ?? f.value)
+      case "contains": {
+        q = q.contains(f.column, f.value)
+
         break
       }
-      case "or":
-        q = q.or(f.value as string)
+      case "eq": {
+        q = q.eq(f.column, f.value)
+
         break
+      }
       case "filter": {
         const filterOpts = f.value as { op: string; value: unknown }
+
         q = q.filter(f.column, filterOpts.op ?? "eq", filterOpts.value ?? f.value)
+
+        break
+      }
+      case "gt": {
+        q = q.gt(f.column, f.value)
+
+        break
+      }
+      case "gte": {
+        q = q.gte(f.column, f.value)
+
+        break
+      }
+      case "ilike": {
+        q = q.ilike(f.column, f.value)
+
+        break
+      }
+      case "in": {
+        q = q.in(f.column, f.value)
+
+        break
+      }
+      case "is": {
+        q = q.is(f.column, f.value)
+
+        break
+      }
+      case "like": {
+        q = q.like(f.column, f.value)
+
+        break
+      }
+      case "lt": {
+        q = q.lt(f.column, f.value)
+
+        break
+      }
+      case "lte": {
+        q = q.lte(f.column, f.value)
+
+        break
+      }
+      case "match": {
+        q = q.match(f.value as Record<string, unknown>)
+
+        break
+      }
+      case "neq": {
+        q = q.neq(f.column, f.value)
+
+        break
+      }
+      case "not": {
+        const notOpts = f.value as { op: string; value: unknown }
+
+        q = q.not(f.column, notOpts.op ?? "eq", notOpts.value ?? f.value)
+
+        break
+      }
+      case "or": {
+        q = q.or(f.value as string)
+
+        break
+      }
+      case "overlaps": {
+        q = q.overlaps(f.column, f.value)
+
+        break
+      }
+      case "textSearch": {
+        const opts = f.value as {
+          config?: string
+          query: string
+          type?: string
+        }
+
+        q = q.textSearch(f.column, opts.query, {
+          config: opts.config,
+          type: opts.type,
+        })
+
+        break
+      }
+
+      default: {
         break
       }
     }
   }
+
   return q
 }
 
@@ -108,6 +136,7 @@ export function applySort(
   sorts: SortDescriptor[],
 ): any {
   let q = builder
+
   for (const s of sorts) {
     // `nullsFirst` is passed through only when the caller named it.
     //
@@ -122,17 +151,8 @@ export function applySort(
       nullsFirst: s.nullsFirst,
     })
   }
-  return q
-}
 
-function applyPagination<Row>(builder: any, options: FetchOptions<Row>): any {
-  if (options.offset != null) {
-    // range() handles both offset and limit — don't also call .limit()
-    const limit = options.limit ?? 1000
-    return builder.range(options.offset, options.offset + limit - 1)
-  }
-  if (options.limit != null) return builder.limit(options.limit)
-  return builder
+  return q
 }
 
 /**
@@ -143,7 +163,7 @@ export async function executeQuery<Row>(
   table: string,
   schema: string,
   options: FetchOptions<Row> = {},
-): Promise<{ data: Row[]; count: number | null; error: Error | null }> {
+): Promise<{ count: number | null; data: Row[]; error: Error | null }> {
   let builder = fromTable(supabase, table, schema).select(options.select ?? "*", {
     count: options.count,
   })
@@ -161,36 +181,36 @@ export async function executeQuery<Row>(
   // through a referenced table is one of the gaps the escape hatch exists for.
   // Everything else pre-applies safely: a `queryFn` narrows what it is handed,
   // and its own `limit`/`range` wins.
-  if (!options.queryFn) {
-    if (options.sort?.length) {
+  if (!options.queryFn && options.sort?.length) {
       builder = applySort(builder, options.sort as SortDescriptor[])
     }
-  }
 
   builder = applyPagination(builder, options)
 
   if (options.queryFn) {
     try {
       const result = await options.queryFn(builder)
-      const r = result as { data: Row[] | null; count: number | null; error: any }
-      if (r.error) return { data: [], count: null, error: fromSupabaseError(r.error) }
-      return { data: r.data ?? [], count: r.count, error: null }
-    } catch (err) {
+      const r = result as { count: number | null; data: Row[] | null; error: any }
+
+      if (r.error) {return { count: null, data: [], error: fromSupabaseError(r.error) }}
+
+      return { count: r.count, data: r.data ?? [], error: null }
+    } catch (error_) {
       return {
-        data: [],
         count: null,
-        error: err instanceof Error ? err : new Error(String(err)),
+        data: [],
+        error: error_ instanceof Error ? error_ : new Error(String(error_)),
       }
     }
   }
 
-  const { data, error, count } = await builder
+  const { count, data, error } = await builder
 
   if (error) {
-    return { data: [], count: null, error: fromSupabaseError(error) }
+    return { count: null, data: [], error: fromSupabaseError(error) }
   }
 
-  return { data: (data ?? []) as Row[], count, error: null }
+  return { count, data: (data ?? []) as Row[], error: null }
 }
 
 /**
@@ -215,4 +235,33 @@ export async function executeQueryOne<Row>(
   }
 
   return { data: data as Row | null, error: null }
+}
+
+/**
+ * Returns a schema-aware query builder for a table.
+ * Uses .schema(name) for non-public schemas (requires supabase-js >=2.39).
+ */
+export function fromTable(
+  supabase: SupabaseClient,
+  table: string,
+  schema?: string,
+): any {
+  if (schema && schema !== "public") {
+    return (supabase as any).schema(schema).from(table)
+  }
+
+  return supabase.from(table)
+}
+
+function applyPagination<Row>(builder: any, options: FetchOptions<Row>): any {
+  if (options.offset != null) {
+    // range() handles both offset and limit — don't also call .limit()
+    const limit = options.limit ?? 1000
+
+    return builder.range(options.offset, options.offset + limit - 1)
+  }
+
+  if (options.limit != null) {return builder.limit(options.limit)}
+
+  return builder
 }

@@ -33,6 +33,7 @@ const SEP = "\u0001"
 export function queryKey(options?: FetchOptions<any>): string {
   const filters = (options?.filters ?? [])
     .map((f) => `${f.column}${SEP}${f.op}${SEP}${stableValue(f.value)}`)
+
     // Filters are ANDed, so their order does not change the result set. Sorting
     // makes two spellings of one predicate set produce one key.
     .sort()
@@ -74,15 +75,20 @@ export function isKeyable(options?: FetchOptions<any>): boolean {
  * exists to avoid, so objects go through sorted entries.
  */
 function stableValue(value: unknown): string {
-  if (value === null) return "null"
-  if (value === undefined) return "undefined"
-  if (Array.isArray(value)) return `[${value.map(stableValue).join(",")}]`
-  if (value instanceof Date) return `d${value.getTime()}`
+  if (value === null) {return "null"}
+
+  if (value === undefined) {return "undefined"}
+
+  if (Array.isArray(value)) {return `[${value.map(stableValue).join(",")}]`}
+
+  if (value instanceof Date) {return `d${value.getTime()}`}
+
   if (typeof value === "object") {
     return `{${Object.entries(value as Record<string, unknown>)
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
       .map(([k, v]) => `${k}:${stableValue(v)}`)
       .join(",")}}`
   }
+
   return String(value)
 }

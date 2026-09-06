@@ -1,8 +1,8 @@
 "use client"
 
 import { useEffect, useMemo } from "react"
-import { useStore } from "zustand"
-import type { StoreApi } from "zustand"
+import { type StoreApi , useStore } from "zustand"
+
 import type { AuthStore } from "../types.js"
 
 /**
@@ -14,12 +14,13 @@ export function useAuth(authStore: StoreApi<AuthStore>) {
   // Actions are stable references — get them once from store
   const actions = useMemo(() => {
     const s = authStore.getState()
+
     return {
-      signIn: s.signIn,
-      signUp: s.signUp,
-      signOut: s.signOut,
-      signInWithOAuth: s.signInWithOAuth,
       refreshSession: s.refreshSession,
+      signIn: s.signIn,
+      signInWithOAuth: s.signInWithOAuth,
+      signOut: s.signOut,
+      signUp: s.signUp,
     }
   }, [authStore])
 
@@ -38,16 +39,19 @@ export function useAuth(authStore: StoreApi<AuthStore>) {
     // and `initialize()` defers to it rather than overwriting a transition that
     // arrived meanwhile.
     const unsubscribe = authStore.getState().onAuthStateChange()
+
+
     // Error is captured in authStore.error state; prevent unhandled rejection
     authStore.getState().initialize().catch(() => {})
+
     return unsubscribe
   }, [authStore])
 
   return {
+    error,
+    isLoading,
     session,
     user,
-    isLoading,
-    error,
     ...actions,
   }
 }

@@ -73,11 +73,11 @@ export function createAnchorClient<DB = any, SchemaName extends string = "public
  * `AnchorError` and its `code` for that.
  */
 export type {
-  SupabaseClient,
-  SupabaseClientOptions,
-  Session,
-  User,
   AuthChangeEvent,
   AuthError,
   PostgrestError,
+  Session,
+  SupabaseClient,
+  SupabaseClientOptions,
+  User,
 } from "@supabase/supabase-js"

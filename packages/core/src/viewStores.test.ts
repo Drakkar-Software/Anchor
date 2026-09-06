@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+
+import { createMockSupabase } from "./__tests__/mockSupabase.js"
 import { createSupabaseStores } from "./createSupabaseStores.js"
 import { OfflineQueue } from "./mutation/offlineQueue.js"
-import { createMockSupabase } from "./__tests__/mockSupabase.js"
 
 /**
  * Views wired through the factory.
@@ -21,9 +22,9 @@ import { createMockSupabase } from "./__tests__/mockSupabase.js"
  */
 
 type JourneyOverview = {
+  current_day: number
   id: string
   patient_id: string
-  current_day: number
 }
 
 describe("views in createSupabaseStores", () => {
@@ -31,11 +32,12 @@ describe("views in createSupabaseStores", () => {
 
   beforeEach(() => {
     supabase = createMockSupabase({
-      patients: [{ id: "p1", short_name: "Camille" }],
       journey_overview: [
-        { id: "j1", patient_id: "p1", current_day: 8 },
-        { id: "j2", patient_id: "p2", current_day: 3 },
+        { current_day: 8, id: "j1", patient_id: "p1" },
+        { current_day: 3, id: "j2", patient_id: "p2" },
       ],
+
+      patients: [{ id: "p1", short_name: "Camille" }],
     })
   })
 
@@ -45,20 +47,22 @@ describe("views in createSupabaseStores", () => {
 
   function build(overrides: Record<string, unknown> = {}) {
     return createSupabaseStores<any>({
+      auth: false,
+      fetchRemoteOnBoot: false,
       supabase,
       tables: ["patients"],
       views: ["journey_overview"],
-      fetchRemoteOnBoot: false,
-      auth: false,
       ...overrides,
     } as any)
   }
 
   it("creates a store for a view alongside the tables", async () => {
     const stores = build() as any
+
     expect(stores.journey_overview).toBeDefined()
 
     const rows = await stores.journey_overview.getState().fetch()
+
     expect(rows.map((r: JourneyOverview) => r.id)).toEqual(["j1", "j2"])
   })
 
@@ -66,20 +70,23 @@ describe("views in createSupabaseStores", () => {
     const stores = build() as any
     const view = stores.journey_overview.getState()
 
-    await expect(view.insert({ id: "x" })).rejects.toThrow(/Cannot mutate view/)
-    await expect(view.update("j1", { current_day: 9 })).rejects.toThrow(/Cannot mutate view/)
-    await expect(view.upsert({ id: "j1" })).rejects.toThrow(/Cannot mutate view/)
-    await expect(view.remove("j1")).rejects.toThrow(/Cannot mutate view/)
+    await expect(view.insert({ id: "x" })).rejects.toThrow(/Cannot mutate view/v)
+    await expect(view.update("j1", { current_day: 9 })).rejects.toThrow(/Cannot mutate view/v)
+    await expect(view.upsert({ id: "j1" })).rejects.toThrow(/Cannot mutate view/v)
+    await expect(view.remove("j1")).rejects.toThrow(/Cannot mutate view/v)
   })
 
   it("subscribes realtime for the table and NOT for the view", () => {
     const channelSpy = vi.spyOn(supabase, "channel")
+
     build({ realtime: { enabled: true } })
 
     // Postgres publishes changes under the underlying TABLE's name, never the
     // view's, so a channel on the view would register and never fire.
     const subscribed = channelSpy.mock.calls.map((c) => String(c[0]))
+
     expect(subscribed.some((name) => name.includes("journey_overview"))).toBe(false)
+
     // …and the table still gets its channel. Without this half, a change that
     // stopped realtime working at all would pass as "the view is excluded".
     expect(subscribed.filter((name) => name.includes("patients"))).toHaveLength(1)
@@ -87,15 +94,19 @@ describe("views in createSupabaseStores", () => {
 
   it("registers an offline-queue executor for the table and NOT for the view", () => {
     const registerSpy = vi.spyOn(OfflineQueue.prototype, "registerExecutor")
+
     build()
 
     const registered = registerSpy.mock.calls.map((c) => String(c[0]))
+
     expect(registered).toContain("patients")
     expect(registered).not.toContain("journey_overview")
   })
 
   it("gives a view store the shared queue, so its queue methods are not lies", async () => {
     const stores = build() as any
+
+
     // `getQueueSize` and `flushQueue` are not behind the view guard and are on
     // the public type. Without `_queue` they would resolve to a hardcoded 0 and
     // to nothing at all, which is indistinguishable from a working queue with
@@ -107,9 +118,11 @@ describe("views in createSupabaseStores", () => {
 
   it("does not warn that options the factory itself passed need the factory", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+
     build({ network: { isOnline: () => true, subscribe: () => () => {} } })
 
     const messages = warn.mock.calls.map((c) => String(c[0]))
+
     expect(messages.filter((m) => m.includes("requires createSupabaseStores()"))).toEqual([])
   })
 
@@ -117,16 +130,18 @@ describe("views in createSupabaseStores", () => {
     const stores = build({
       viewOptions: {
         journey_overview: {
-          primaryKey: "id",
-          defaultSelect: "id, current_day",
           defaultFilters: [{ column: "patient_id", op: "eq", value: "p1" }],
+          defaultSelect: "id, current_day",
+          primaryKey: "id",
         },
       },
     }) as any
 
     const rows = await stores.journey_overview.getState().fetch()
+
     expect(rows).toHaveLength(1)
-    expect(rows[0]).toEqual({ id: "j1", current_day: 8 })
+    expect(rows[0]).toEqual({ current_day: 8, id: "j1" })
+
     // `defaultSelect` really narrowed the row, so a screen reading a column it
     // did not ask for gets undefined rather than silently working.
     expect(rows[0]).not.toHaveProperty("patient_id")
@@ -139,33 +154,38 @@ describe("views in createSupabaseStores", () => {
     // nullish value, all three rows would collapse onto one `records` entry and
     // every screen would render the last one three times over.
     supabase = createMockSupabase({
-      patients: [],
       journey_overview: [
-        { id: null, patient_id: "p1", current_day: 8 },
-        { id: null, patient_id: "p2", current_day: 3 },
+        { current_day: 8, id: null, patient_id: "p1" },
+        { current_day: 3, id: null, patient_id: "p2" },
       ],
+
+      patients: [],
     })
+
     const stores = build() as any
 
     await expect(stores.journey_overview.getState().fetch()).resolves.toEqual([])
+
     const state = stores.journey_overview.getState()
+
     expect(state.records.size).toBe(0)
-    expect(state.error?.message).toMatch(/journey_overview.*no "id"/)
+    expect(state.error?.message).toMatch(/journey_overview.*no "id"/v)
+
     // And it is the query's error, not only the store's, so the screen that
     // asked shows it.
-    expect([...state.queries.values()][0]?.error).toBe(state.error)
+    expect(Array.from(state.queries.values())[0]?.error).toBe(state.error)
   })
 
   it("refuses a name that is in both tables and views", () => {
     expect(() =>
       createSupabaseStores<any>({
+        auth: false,
+        fetchRemoteOnBoot: false,
         supabase,
         tables: ["patients"],
         views: ["patients"],
-        fetchRemoteOnBoot: false,
-        auth: false,
       } as any),
-    ).toThrow(/"patients" named in both/)
+    ).toThrow(/"patients" named in both/v)
   })
 
   it("gets per-query scoping like any other store", async () => {
@@ -180,6 +200,7 @@ describe("views in createSupabaseStores", () => {
 
   it("is cleared by the auth gate on sign-out, like a table store", async () => {
     const stores = build({ auth: true }) as any
+
     await stores.journey_overview.getState().fetch()
     await stores.patients.getState().fetch()
     expect(stores.journey_overview.getState().records.size).toBe(2)
@@ -197,17 +218,19 @@ describe("views in createSupabaseStores", () => {
 
   it("fetches views on boot when asked to", async () => {
     const stores = build({ fetchRemoteOnBoot: true }) as any
+
     await new Promise((r) => setTimeout(r, 10))
     expect(stores.journey_overview.getState().records.size).toBe(2)
   })
 
   it("still works with no views at all", () => {
     const stores = createSupabaseStores<any>({
+      auth: false,
+      fetchRemoteOnBoot: false,
       supabase,
       tables: ["patients"],
-      fetchRemoteOnBoot: false,
-      auth: false,
     } as any) as any
+
     expect(stores.patients).toBeDefined()
     expect(stores.journey_overview).toBeUndefined()
   })

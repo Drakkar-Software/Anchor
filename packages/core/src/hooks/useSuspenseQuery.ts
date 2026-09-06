@@ -1,11 +1,11 @@
 "use client"
 
-import { useStore } from "zustand"
+import { type StoreApi , useStore } from "zustand"
 import { useShallow } from "zustand/react/shallow"
-import type { StoreApi } from "zustand"
-import type { TableStore, TrackedRow, FetchOptions } from "../types.js"
-import { queryKey, isKeyable } from "../query/queryKey.js"
+
+import { isKeyable,queryKey } from "../query/queryKey.js"
 import { selectQueryRows } from "../query/selectRows.js"
+import type { FetchOptions,TableStore, TrackedRow } from "../types.js"
 
 /**
  * Keyed by store AND by query.
@@ -19,15 +19,6 @@ const suspenseCache = new WeakMap<StoreApi<any>, Map<string, Promise<unknown>>>(
 
 /** Slot for a `queryFn` read, which has no key of its own. */
 const UNKEYED = "\u0001unkeyed"
-
-function promisesFor(store: StoreApi<any>): Map<string, Promise<unknown>> {
-  let map = suspenseCache.get(store)
-  if (!map) {
-    map = new Map()
-    suspenseCache.set(store, map)
-  }
-  return map
-}
 
 /**
  * React Suspense-compatible query hook.
@@ -43,6 +34,7 @@ export function useSuspenseQuery<
   options?: FetchOptions<Row>,
 ): TrackedRow<Row>[] {
   const resolved = store.getState().resolveFetchOptions(options)
+
   // An opaque `queryFn` cannot be keyed, so it registers no entry. Reading the
   // table's own state for it is what every query did before per-query scoping;
   // looking up an entry that will never exist would suspend forever and refetch
@@ -76,45 +68,93 @@ export function useSuspenseQuery<
 
   // If THIS query hasn't been fetched yet (initial load or loading in progress)
   if (!settledAt) {
-    const promises = promisesFor(store)
-    // One shared slot for the unkeyable case, matching the pre-2.1.0 behaviour
-    // of a single promise per store.
-    const cacheKey = key ?? UNKEYED
-    let promise = promises.get(cacheKey)
-    if (!promise) {
-      const loading = key === null ? state.isLoading : entry?.isLoading
-      if (loading) {
-        // A fetch of this same query is in progress — wait for it.
-        promise = new Promise<void>((resolve) => {
-          const unsub = store.subscribe((s) => {
-            const next = s as TableStore<Row, InsertRow, UpdateRow>
-            const current = key === null ? undefined : next.queries.get(key)
-            const done =
-              key === null
-                ? !next.isLoading || next.lastFetchedAt
-                : !current?.isLoading || current?.lastFetchedAt
-            if (done) {
-              unsub()
-              resolve()
-            }
-          })
-        })
-      } else {
-        // No fetch in progress — trigger one
-        promise = store.getState().fetch(options)
-      }
-      promise.catch(() => {})
-      promises.set(cacheKey, promise)
-      // Clear cache so retries can trigger a new fetch.
-      // Also set a safety timeout in case the fetch hangs indefinitely.
-      const timeout = setTimeout(() => promises.delete(cacheKey), 30_000)
-      promise.finally(() => {
-        clearTimeout(timeout)
-        promises.delete(cacheKey)
-      })
-    }
-    throw promise
+    // Suspense protocol: throw a Promise so the nearest boundary can retry.
+    // eslint-disable-next-line @typescript-eslint/no-throw-literal, @typescript-eslint/only-throw-error -- Suspense
+    throw getOrCreateSuspensePromise(store, key, options)
   }
 
   return data
+}
+
+async function getOrCreateSuspensePromise<
+  Row extends Record<string, unknown>,
+  InsertRow extends Record<string, unknown>,
+  UpdateRow extends Record<string, unknown>,
+>(
+  store: StoreApi<TableStore<Row, InsertRow, UpdateRow>>,
+  key: string | null,
+  options: FetchOptions<Row> | undefined,
+): Promise<unknown> {
+  const promises = promisesFor(store)
+
+  // One shared slot for the unkeyable case, matching the pre-2.1.0 behaviour
+  // of a single promise per store.
+  const cacheKey = key ?? UNKEYED
+
+  let promise = promises.get(cacheKey)
+
+  if (promise) {return await promise}
+
+  const state = store.getState()
+  const entry = key === null ? undefined : state.queries.get(key)
+  const loading = key === null ? state.isLoading : entry?.isLoading
+
+  if (loading) {
+    // A fetch of this same query is in progress — wait for it.
+    promise = waitForInFlightFetch(store, key)
+  } else {
+    // No fetch in progress — trigger one
+    promise = store.getState().fetch(options)
+  }
+
+  promise.catch(() => {})
+  promises.set(cacheKey, promise)
+
+
+  // Clear cache so retries can trigger a new fetch.
+  // Also set a safety timeout in case the fetch hangs indefinitely.
+  const timeout = setTimeout(() => promises.delete(cacheKey), 30_000)
+
+  void promise.finally(() => {
+    clearTimeout(timeout)
+    promises.delete(cacheKey)
+  })
+
+  return await promise
+}
+
+function promisesFor(store: StoreApi<any>): Map<string, Promise<unknown>> {
+  let map = suspenseCache.get(store)
+
+  if (!map) {
+    map = new Map()
+    suspenseCache.set(store, map)
+  }
+
+  return map
+}
+
+async function waitForInFlightFetch<
+  Row extends Record<string, unknown>,
+  InsertRow extends Record<string, unknown>,
+  UpdateRow extends Record<string, unknown>,
+>(
+  store: StoreApi<TableStore<Row, InsertRow, UpdateRow>>,
+  key: string | null,
+): Promise<void> {
+  await new Promise<void>((resolve) => {
+    const unsub = store.subscribe((s) => {
+      const next = s
+      const current = key === null ? undefined : next.queries.get(key)
+      const done =
+        key === null
+          ? !next.isLoading || next.lastFetchedAt
+          : !current?.isLoading || current.lastFetchedAt
+
+      if (done) {
+        unsub()
+        resolve()
+      }
+    })
+  });
 }

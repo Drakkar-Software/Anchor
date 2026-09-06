@@ -1,12 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
-import type { FunctionNames, RpcArgs, RpcReturns } from "../types.js"
-import { withRetry, type RetryOptions } from "../utils/retry.js"
-import { fromSupabaseError } from "../errors.js"
 
-export type RpcResult<T> = {
-  data: T | null
-  error: Error | null
-}
+import { fromSupabaseError } from "../errors.js"
+import type { FunctionNames, RpcArgs, RpcReturns } from "../types.js"
+import { type RetryOptions,withRetry } from "../utils/retry.js"
 
 export type RpcCacheOptions = {
   /** Cache TTL in milliseconds */
@@ -14,10 +10,16 @@ export type RpcCacheOptions = {
 }
 
 export type RpcCallOptions = {
-  /** Retry configuration for transient failures */
-  retry?: RetryOptions
   /** Cache configuration — results are cached by function name + serialized args */
   cache?: RpcCacheOptions
+
+  /** Retry configuration for transient failures */
+  retry?: RetryOptions
+}
+
+export type RpcResult<T> = {
+  data: T | null
+  error: Error | null
 }
 
 type CacheEntry = {
@@ -29,30 +31,21 @@ type CacheEntry = {
 const rpcCache = new Map<string, CacheEntry>()
 const inflightRequests = new Map<string, Promise<RpcResult<unknown>>>()
 
-function buildCacheKey(functionName: string, args?: Record<string, unknown>): string {
-  return `${functionName}:${args ? JSON.stringify(args) : ""}`
-}
-
 /**
- * Clear the RPC result cache, optionally for a specific function name.
+ * The trailing parameters of a schema-typed RPC call.
+ *
+ * `args?` for every function would defeat the point: a function with required
+ * arguments would compile with none and fail at runtime with `PGRST202`, which
+ * reads like a missing grant. So the argument object is **required** unless the
+ * schema says it can be left out. Two shapes count as "can": `never`, which is
+ * what the generator emits for a zero-argument function, and an object all of
+ * whose properties are optional.
  */
-export function invalidateRpcCache(functionName?: string): void {
-  if (functionName) {
-    for (const key of rpcCache.keys()) {
-      if (key.startsWith(`${functionName}:`)) {
-        rpcCache.delete(key)
-      }
-    }
-    for (const key of inflightRequests.keys()) {
-      if (key.startsWith(`${functionName}:`)) {
-        inflightRequests.delete(key)
-      }
-    }
-  } else {
-    rpcCache.clear()
-    inflightRequests.clear()
-  }
-}
+type RpcCallParams<Args> = [Args] extends [never]
+  ? [args?: undefined, options?: RpcCallOptions]
+  : Record<string, never> extends Args
+    ? [args?: Args, options?: RpcCallOptions]
+    : [args: Args, options?: RpcCallOptions]
 
 /**
  * Call a Postgres function via Supabase RPC.
@@ -71,20 +64,24 @@ export async function callRpc<
   // Check cache
   if (options?.cache) {
     const cached = rpcCache.get(cacheKey)
+
     if (cached && Date.now() - cached.timestamp < options.cache.ttlMs) {
       return { data: cached.data as T, error: null }
     }
 
     // Deduplicate in-flight requests
     const inflight = inflightRequests.get(cacheKey)
+
     if (inflight) {
-      return inflight as Promise<RpcResult<T>>
+      return await (inflight as Promise<RpcResult<T>>)
     }
   }
 
   const execute = async (): Promise<RpcResult<T>> => {
     const { data, error } = await supabase.rpc(functionName, args as any)
-    if (error) return { data: null, error: fromSupabaseError(error) }
+
+    if (error) {return { data: null, error: fromSupabaseError(error) }}
+
     return { data: data as T, error: null }
   }
 
@@ -109,7 +106,7 @@ export async function callRpc<
     inflightRequests.set(cacheKey, request as Promise<RpcResult<unknown>>)
   }
 
-  return request
+  return await request
 }
 
 /**
@@ -125,25 +122,9 @@ export function createRpcAction<
   T = unknown,
   Args extends Record<string, unknown> = Record<string, unknown>,
 >(supabase: SupabaseClient, functionName: string, defaultOptions?: RpcCallOptions) {
-  return (args?: Args, options?: RpcCallOptions): Promise<RpcResult<T>> =>
-    callRpc<T, Args>(supabase, functionName, args, { ...defaultOptions, ...options })
+  return async (args?: Args, options?: RpcCallOptions): Promise<RpcResult<T>> =>
+    await callRpc<T, Args>(supabase, functionName, args, { ...defaultOptions, ...options })
 }
-
-/**
- * The trailing parameters of a schema-typed RPC call.
- *
- * `args?` for every function would defeat the point: a function with required
- * arguments would compile with none and fail at runtime with `PGRST202`, which
- * reads like a missing grant. So the argument object is **required** unless the
- * schema says it can be left out. Two shapes count as "can": `never`, which is
- * what the generator emits for a zero-argument function, and an object all of
- * whose properties are optional.
- */
-type RpcCallParams<Args> = [Args] extends [never]
-  ? [args?: undefined, options?: RpcCallOptions]
-  : Record<string, never> extends Args
-    ? [args?: Args, options?: RpcCallOptions]
-    : [args: Args, options?: RpcCallOptions]
 
 /**
  * `callRpc` with the function name, arguments and return type read from the
@@ -167,16 +148,43 @@ export function createSchemaRpc<
   DB,
   SchemaName extends string & keyof DB = "public" & keyof DB,
 >(supabase: SupabaseClient<DB>) {
-  return <FunctionName extends FunctionNames<DB, SchemaName>>(
+  return async <FunctionName extends FunctionNames<DB, SchemaName>>(
     functionName: FunctionName,
     ...rest: RpcCallParams<RpcArgs<DB, FunctionName, SchemaName>>
   ): Promise<RpcResult<RpcReturns<DB, FunctionName, SchemaName>>> => {
     const [args, options] = rest
-    return callRpc<RpcReturns<DB, FunctionName, SchemaName>, Record<string, unknown>>(
+
+    return await callRpc<RpcReturns<DB, FunctionName, SchemaName>>(
       supabase as SupabaseClient,
       functionName,
       args as Record<string, unknown> | undefined,
       options,
     )
   }
+}
+
+/**
+ * Clear the RPC result cache, optionally for a specific function name.
+ */
+export function invalidateRpcCache(functionName?: string): void {
+  if (functionName) {
+    for (const key of rpcCache.keys()) {
+      if (key.startsWith(`${functionName}:`)) {
+        rpcCache.delete(key)
+      }
+    }
+
+    for (const key of inflightRequests.keys()) {
+      if (key.startsWith(`${functionName}:`)) {
+        inflightRequests.delete(key)
+      }
+    }
+  } else {
+    rpcCache.clear()
+    inflightRequests.clear()
+  }
+}
+
+function buildCacheKey(functionName: string, args?: Record<string, unknown>): string {
+  return `${functionName}:${args ? JSON.stringify(args) : ""}`
 }

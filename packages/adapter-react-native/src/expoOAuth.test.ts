@@ -1,31 +1,37 @@
-import { describe, it, expect, beforeEach, vi } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+
 import { createExpoOAuthHandler } from "./expoOAuth.js"
 
 const mockLinking = {
   createURL: (path: string) => `myapp://${path}`,
+
   parse: (url: string) => {
-    const urlObj = new URL(url)
-    const queryParams: Record<string, string> = {}
-    urlObj.searchParams.forEach((value, key) => {
-      queryParams[key] = value
+    const urlObject = new URL(url)
+    const queryParameters: { [key: string]: string } = {}
+
+    urlObject.searchParams.forEach((value, key) => {
+      queryParameters[key] = value
     })
-    return { queryParams }
+
+    return { queryParams: queryParameters }
   },
 }
 
 function createMockSupabase() {
   return {
     auth: {
-      signInWithOAuth: vi.fn().mockResolvedValue({
-        data: { url: "https://accounts.google.com/o/oauth2/auth?..." },
-        error: null,
-      }),
       exchangeCodeForSession: vi.fn().mockResolvedValue({
         data: { session: {} },
         error: null,
       }),
+
       setSession: vi.fn().mockResolvedValue({
         data: { session: {} },
+        error: null,
+      }),
+
+      signInWithOAuth: vi.fn().mockResolvedValue({
+        data: { url: "https://accounts.google.com/o/oauth2/auth?..." },
         error: null,
       }),
     },
@@ -42,6 +48,7 @@ describe("createExpoOAuthHandler", () => {
   describe("getRedirectUrl", () => {
     it("uses expo-linking createURL by default", () => {
       const handler = createExpoOAuthHandler(supabase, mockLinking)
+
       expect(handler.getRedirectUrl()).toBe("myapp://auth/callback")
     })
 
@@ -49,6 +56,7 @@ describe("createExpoOAuthHandler", () => {
       const handler = createExpoOAuthHandler(supabase, mockLinking, {
         redirectScheme: "customapp",
       })
+
       expect(handler.getRedirectUrl()).toBe("customapp://auth/callback")
     })
 
@@ -56,6 +64,7 @@ describe("createExpoOAuthHandler", () => {
       const handler = createExpoOAuthHandler(supabase, mockLinking, {
         redirectPath: "oauth/redirect",
       })
+
       expect(handler.getRedirectUrl()).toBe("myapp://oauth/redirect")
     })
   })
@@ -66,8 +75,8 @@ describe("createExpoOAuthHandler", () => {
       const result = await handler.signInWithProvider("google")
 
       expect(supabase.auth.signInWithOAuth).toHaveBeenCalledWith({
-        provider: "google",
         options: { redirectTo: "myapp://auth/callback" },
+        provider: "google",
       })
       expect(result.url).toBe("https://accounts.google.com/o/oauth2/auth?...")
     })
@@ -79,6 +88,7 @@ describe("createExpoOAuthHandler", () => {
       })
 
       const handler = createExpoOAuthHandler(supabase, mockLinking)
+
       await expect(handler.signInWithProvider("google")).rejects.toThrow(
         "OAuth not configured",
       )
@@ -88,6 +98,7 @@ describe("createExpoOAuthHandler", () => {
   describe("handleRedirect", () => {
     it("exchanges code for session in PKCE flow", async () => {
       const handler = createExpoOAuthHandler(supabase, mockLinking)
+
       await handler.handleRedirect("myapp://auth/callback?code=abc123")
 
       expect(supabase.auth.exchangeCodeForSession).toHaveBeenCalledWith(
@@ -98,6 +109,7 @@ describe("createExpoOAuthHandler", () => {
 
     it("forwards sb_flow_id to exchangeCodeForSession when present", async () => {
       const handler = createExpoOAuthHandler(supabase, mockLinking)
+
       await handler.handleRedirect(
         "myapp://auth/callback?code=abc123&sb_flow_id=flow_xyz",
       )
@@ -110,6 +122,7 @@ describe("createExpoOAuthHandler", () => {
 
     it("sets session for implicit flow", async () => {
       const handler = createExpoOAuthHandler(supabase, mockLinking)
+
       await handler.handleRedirect(
         "myapp://auth/callback?access_token=at123&refresh_token=rt456",
       )
@@ -122,6 +135,7 @@ describe("createExpoOAuthHandler", () => {
 
     it("throws on error response", async () => {
       const handler = createExpoOAuthHandler(supabase, mockLinking)
+
       await expect(
         handler.handleRedirect(
           "myapp://auth/callback?error=access_denied&error_description=User+denied",
@@ -136,6 +150,7 @@ describe("createExpoOAuthHandler", () => {
       })
 
       const handler = createExpoOAuthHandler(supabase, mockLinking)
+
       await expect(
         handler.handleRedirect("myapp://auth/callback?code=bad"),
       ).rejects.toThrow("Invalid code")

@@ -1,17 +1,19 @@
-import { describe, it, expect } from "vitest"
-import { query, QueryBuilder } from "./queryBuilder.js"
+import { describe, expect,it } from "vitest"
+
+import { query } from "./queryBuilder.js"
 
 type Todo = {
-  id: number
-  title: string
   completed: boolean
-  priority: number
   created_at: string
+  id: number
+  priority: number
+  title: string
 }
 
 describe("QueryBuilder", () => {
   it("builds empty options by default", () => {
     const opts = query<Todo>().build()
+
     expect(opts.filters).toBeUndefined()
     expect(opts.sort).toBeUndefined()
     expect(opts.limit).toBeUndefined()
@@ -19,6 +21,7 @@ describe("QueryBuilder", () => {
 
   it("builds eq filter via where().eq()", () => {
     const opts = query<Todo>().where("completed").eq(false).build()
+
     expect(opts.filters).toEqual([{ column: "completed", op: "eq", value: false }])
   })
 
@@ -27,6 +30,7 @@ describe("QueryBuilder", () => {
       .where("completed").eq(false)
       .where("priority").gte(3)
       .build()
+
     expect(opts.filters).toHaveLength(2)
     expect(opts.filters![0]).toEqual({ column: "completed", op: "eq", value: false })
     expect(opts.filters![1]).toEqual({ column: "priority", op: "gte", value: 3 })
@@ -34,6 +38,7 @@ describe("QueryBuilder", () => {
 
   it("supports all filter operators", () => {
     const b = query<Todo>()
+
     b.where("title").neq("x")
     b.where("priority").gt(1)
     b.where("priority").lt(10)
@@ -42,7 +47,9 @@ describe("QueryBuilder", () => {
     b.where("title").ilike("%MILK%")
     b.where("completed").is(null)
     b.where("priority").in([1, 2, 3])
+
     const opts = b.build()
+
     expect(opts.filters).toHaveLength(8)
   })
 
@@ -51,20 +58,23 @@ describe("QueryBuilder", () => {
       .orderBy("created_at", "desc")
       .orderBy("priority", "asc")
       .build()
+
     expect(opts.sort).toEqual([
-      { column: "created_at", ascending: false },
-      { column: "priority", ascending: true },
+      { ascending: false, column: "created_at" },
+      { ascending: true, column: "priority" },
     ])
   })
 
   it("builds limit and offset", () => {
     const opts = query<Todo>().limit(20).offset(40).build()
+
     expect(opts.limit).toBe(20)
     expect(opts.offset).toBe(40)
   })
 
   it("builds select and count", () => {
     const opts = query<Todo>().select("id, title").count("exact").build()
+
     expect(opts.select).toBe("id, title")
     expect(opts.count).toBe("exact")
   })

@@ -1,28 +1,28 @@
 "use client"
 
-import { useEffect, useCallback, useRef } from "react"
-import { useStore } from "zustand"
+import { useCallback, useEffect, useRef } from "react"
+import { type StoreApi , useStore } from "zustand"
 import { useShallow } from "zustand/react/shallow"
-import type { StoreApi } from "zustand"
-import type { TableStore, TrackedRow, FetchOptions } from "../types.js"
-import { queryKey, isKeyable } from "../query/queryKey.js"
-import { selectQueryRows } from "../query/selectRows.js"
 
-type UseQueryResult<Row> = {
-  data: TrackedRow<Row>[]
-  isLoading: boolean
-  error: Error | null
-  /** Total rows matching this query, when `count` was requested. */
-  count: number | null
-  refetch: () => Promise<TrackedRow<Row>[]>
-  isHydrated: boolean
-}
+import { isKeyable,queryKey } from "../query/queryKey.js"
+import { selectQueryRows } from "../query/selectRows.js"
+import type { FetchOptions,TableStore, TrackedRow } from "../types.js"
 
 type UseQueryOptions<Row> = FetchOptions<Row> & {
   deps?: unknown[]
   enabled?: boolean
   refetchInterval?: number
   staleTime?: number
+}
+
+type UseQueryResult<Row> = {
+  /** Total rows matching this query, when `count` was requested. */
+  count: number | null
+  data: TrackedRow<Row>[]
+  error: Error | null
+  isHydrated: boolean
+  isLoading: boolean
+  refetch: () => Promise<TrackedRow<Row>[]>
 }
 
 /**
@@ -54,7 +54,10 @@ export function useQuery<
   const refetchInterval = options?.refetchInterval
   const staleTime = options?.staleTime ?? 5000
   const optionsRef = useRef(options)
-  optionsRef.current = options
+
+  useEffect(() => {
+    optionsRef.current = options
+  }, [options])
 
   // Resolved against the store's own defaults, because that is what `fetch`
   // files the entry under. Keying on the caller's raw options would look up an
@@ -76,18 +79,19 @@ export function useQuery<
     ),
   )
 
-  const fetch = useCallback(async () => {
-    return store.getState().fetch(stripHookOptions(optionsRef.current))
-  }, [store])
+  const fetch = useCallback(async () => await store.getState().fetch(stripHookOptions(optionsRef.current)), [store])
 
   // Tell the store this query is on screen, so `refetch()` — which the app
   // lifecycle fires on every foreground — replays what is mounted rather than
   // every filter combination the store has ever been handed. Refcounted, so
   // React 18's double-invoked effects cancel out.
   useEffect(() => {
-    if (!enabled || key === null) return
+    if (!enabled || key === null) {return}
+
     const opts = stripHookOptions(optionsRef.current)
+
     store.getState().retainQuery(opts)
+
     return () => { store.getState().releaseQuery(opts) }
   }, [store, enabled, key])
 
@@ -95,11 +99,15 @@ export function useQuery<
   // filters, sort, select, limit and offset — the last three of which used to
   // change nothing, because the dependency list held only the first two.
   useEffect(() => {
-    if (!enabled) return
+    if (!enabled) {return}
+
     if (key !== null) {
       const lastFetchedAt = store.getState().queries.get(key)?.lastFetchedAt
-      if (staleTime > 0 && lastFetchedAt && Date.now() - lastFetchedAt < staleTime) return
+
+      if (staleTime > 0 && lastFetchedAt && Date.now() - lastFetchedAt < staleTime) {return}
     }
+
+
     // Error is captured in the query's entry; prevent an unhandled rejection.
     fetch().catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -107,20 +115,23 @@ export function useQuery<
 
   // Refetch interval
   useEffect(() => {
-    if (!enabled || !refetchInterval) return
+    if (!enabled || !refetchInterval) {return}
+
     const interval = setInterval(() => { fetch().catch(() => {}) }, refetchInterval)
-    return () => clearInterval(interval)
+
+    return () => { clearInterval(interval); }
   }, [enabled, refetchInterval, fetch])
 
   return {
+    count: entry?.count ?? null,
     data,
+    error: entry ? entry.error : storeError,
+    isHydrated,
+
     // Before this query has an entry — and always, for an unkeyable `queryFn` —
     // there is nothing query-scoped to report, so the table's flags stand in.
     isLoading: entry ? entry.isLoading : storeIsLoading,
-    error: entry ? entry.error : storeError,
-    count: entry?.count ?? null,
     refetch: fetch,
-    isHydrated,
   }
 }
 
@@ -133,5 +144,6 @@ function stripHookOptions<Row>(options?: UseQueryOptions<Row>): FetchOptions<Row
     staleTime: _staleTime,
     ...fetchOptions
   } = options ?? {}
+
   return fetchOptions
 }

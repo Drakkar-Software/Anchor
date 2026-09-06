@@ -1,5 +1,6 @@
-import { describe, it, expect, vi } from "vitest"
-import { invokeEdgeFunction, createEdgeFunctionAction } from "./edgeFunctions.js"
+import { describe, expect, it, vi } from "vitest"
+
+import { createEdgeFunctionAction,invokeEdgeFunction } from "./edgeFunctions.js"
 
 function mockSupabase(result: { data: any; error: any }) {
   return {
@@ -15,6 +16,7 @@ describe("invokeEdgeFunction", () => {
     const result = await invokeEdgeFunction<{ sent: boolean }>(
       supabase, "send-email", { body: { to: "a@b.com" } },
     )
+
     expect(result.data).toEqual({ sent: true })
     expect(result.error).toBeNull()
     expect(supabase.functions.invoke).toHaveBeenCalledWith("send-email", {
@@ -27,6 +29,7 @@ describe("invokeEdgeFunction", () => {
   it("returns error on failure", async () => {
     const supabase = mockSupabase({ data: null, error: { message: "Not found" } })
     const result = await invokeEdgeFunction(supabase, "missing-fn")
+
     expect(result.data).toBeNull()
     expect(result.error!.message).toBe("Not found")
   })
@@ -36,6 +39,7 @@ describe("invokeEdgeFunction", () => {
       functions: { invoke: vi.fn().mockRejectedValue(new Error("Network error")) },
     } as any
     const result = await invokeEdgeFunction(supabase, "fn")
+
     expect(result.error!.message).toBe("Network error")
   })
 })
@@ -46,7 +50,8 @@ describe("createEdgeFunctionAction", () => {
     const action = createEdgeFunctionAction<string>(supabase, "ping")
 
     const r1 = await action()
-    const r2 = await action({ body: { test: true } })
+
+    await action({ body: { test: true } })
 
     expect(r1.data).toBe("ok")
     expect(supabase.functions.invoke).toHaveBeenCalledTimes(2)
@@ -63,10 +68,11 @@ describe("invokeEdgeFunction error fidelity", () => {
   it("keeps the status and the function's own body from FunctionsHttpError", async () => {
     const supabase = mockSupabase({
       data: null,
+
       error: {
-        name: "FunctionsHttpError",
-        message: "Edge Function returned a non-2xx status code",
         context: new Response(JSON.stringify({ reason: "quota exceeded" }), { status: 429 }),
+        message: "Edge Function returned a non-2xx status code",
+        name: "FunctionsHttpError",
       },
     })
 
@@ -80,16 +86,16 @@ describe("invokeEdgeFunction error fidelity", () => {
     const http = await invokeEdgeFunction(
       mockSupabase({
         data: null,
-        error: { name: "FunctionsHttpError", message: "non-2xx", context: new Response("", { status: 500 }) },
+        error: { context: new Response("", { status: 500 }), message: "non-2xx", name: "FunctionsHttpError" },
       }),
       "fn",
     )
     const fetchFailed = await invokeEdgeFunction(
-      mockSupabase({ data: null, error: { name: "FunctionsFetchError", message: "Failed to send a request" } }),
+      mockSupabase({ data: null, error: { message: "Failed to send a request", name: "FunctionsFetchError" } }),
       "fn",
     )
     const relay = await invokeEdgeFunction(
-      mockSupabase({ data: null, error: { name: "FunctionsRelayError", message: "Relay error" } }),
+      mockSupabase({ data: null, error: { message: "Relay error", name: "FunctionsRelayError" } }),
       "fn",
     )
 
@@ -97,6 +103,7 @@ describe("invokeEdgeFunction error fidelity", () => {
     expect((http.error as { code?: string }).code).toBe("FunctionsHttpError")
     expect((fetchFailed.error as { code?: string }).code).toBe("FunctionsFetchError")
     expect((relay.error as { code?: string }).code).toBe("FunctionsRelayError")
+
     // Only the one that reached the function has a status.
     expect((http.error as { status?: number }).status).toBe(500)
     expect((fetchFailed.error as { status?: number }).status).toBeUndefined()
@@ -106,7 +113,7 @@ describe("invokeEdgeFunction error fidelity", () => {
     const context = new Response("boom", { status: 400 })
     const supabase = mockSupabase({
       data: null,
-      error: { name: "FunctionsHttpError", message: "non-2xx", context },
+      error: { context, message: "non-2xx", name: "FunctionsHttpError" },
     })
 
     await invokeEdgeFunction(supabase, "fn")
@@ -117,10 +124,10 @@ describe("invokeEdgeFunction error fidelity", () => {
   })
 
   it("survives a body that cannot be read, keeping the status", async () => {
-    const context = { status: 503, clone: () => { throw new Error("unreadable") } }
+    const context = { clone: () => { throw new Error("unreadable") }, status: 503 }
     const supabase = mockSupabase({
       data: null,
-      error: { name: "FunctionsHttpError", message: "non-2xx", context },
+      error: { context, message: "non-2xx", name: "FunctionsHttpError" },
     })
 
     const { error } = await invokeEdgeFunction(supabase, "fn")
@@ -132,6 +139,7 @@ describe("invokeEdgeFunction error fidelity", () => {
   it("still reports the message, so existing callers reading it are unaffected", async () => {
     const supabase = mockSupabase({ data: null, error: { message: "Not found" } })
     const { error } = await invokeEdgeFunction(supabase, "missing-fn")
+
     expect(error!.message).toBe("Not found")
   })
 })

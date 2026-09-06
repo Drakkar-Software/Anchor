@@ -1,8 +1,9 @@
-import { describe, it, expect, vi } from "vitest"
-import { executeRemoteMutation, createMutationExecutor } from "./mutationPipeline.js"
-import { createTableStore } from "../createTableStore.js"
+import { describe, expect, it, vi } from "vitest"
+
 import { createMockSupabase } from "../__tests__/mockSupabase.js"
+import { createTableStore } from "../createTableStore.js"
 import type { QueuedMutation } from "../types.js"
+import { createMutationExecutor,executeRemoteMutation } from "./mutationPipeline.js"
 
 /**
  * `upsert`'s conflict target.
@@ -19,20 +20,31 @@ import type { QueuedMutation } from "../types.js"
  */
 
 type CheckIn = {
+  date: string
   id: string
   journey_id: string
-  date: string
   pain: number
+}
+
+/** `order` and `records` agreeing is the invariant the whole store rests on. */
+function expectOrderIntegrity(store: ReturnType<typeof makeStore>["store"]) {
+  const { order, records } = store.getState()
+
+  expect(new Set(order).size).toBe(order.length)
+  expect(order.length).toBe(records.size)
+
+  for (const id of order) {expect(records.has(id)).toBe(true)}
 }
 
 function makeStore(rows: CheckIn[]) {
   const supabase = createMockSupabase({ daily_check_ins: rows })
   const store = createTableStore<any, CheckIn, any, any>({
-    supabase: supabase as any,
-    table: "daily_check_ins",
     primaryKey: "id",
+    supabase,
+    table: "daily_check_ins",
   })
-  return { supabase, store }
+
+  return { store, supabase }
 }
 
 /**
@@ -46,54 +58,51 @@ function makeStore(rows: CheckIn[]) {
  */
 async function seededStore(rows: CheckIn[]) {
   const made = makeStore(rows)
-  await made.store.getState().fetch()
-  return made
-}
 
-/** `order` and `records` agreeing is the invariant the whole store rests on. */
-function expectOrderIntegrity(store: ReturnType<typeof makeStore>["store"]) {
-  const { order, records } = store.getState()
-  expect(new Set(order).size).toBe(order.length)
-  expect(order.length).toBe(records.size)
-  for (const id of order) expect(records.has(id)).toBe(true)
+  await made.store.getState().fetch()
+
+  return made
 }
 
 describe("upsert with onConflict", () => {
   it("replaces the row matching the named constraint, not the primary key", async () => {
     const { store } = makeStore([
-      { id: "c1", journey_id: "j1", date: "2026-08-12", pain: 3 },
+      { date: "2026-08-12", id: "c1", journey_id: "j1", pain: 3 },
     ])
 
     await store.getState().upsert(
-      { journey_id: "j1", date: "2026-08-12", pain: 7 } as any,
+      { date: "2026-08-12", journey_id: "j1", pain: 7 } as any,
       { onConflict: "journey_id,date" },
     )
 
-    const rows = [...store.getState().records.values()]
+    const rows = Array.from(store.getState().records.values())
+
     expect(rows).toHaveLength(1)
     expect(rows[0]!.id).toBe("c1")
     expect(rows[0]!.pain).toBe(7)
   })
 
   it("inserts when nothing matches the constraint", async () => {
-    const { supabase, store } = makeStore([
-      { id: "c1", journey_id: "j1", date: "2026-08-11", pain: 3 },
+    const { store, supabase } = makeStore([
+      { date: "2026-08-11", id: "c1", journey_id: "j1", pain: 3 },
     ])
 
     await store.getState().upsert(
-      { journey_id: "j1", date: "2026-08-12", pain: 5 } as any,
+      { date: "2026-08-12", journey_id: "j1", pain: 5 } as any,
       { onConflict: "journey_id,date" },
     )
 
-    const stored = (supabase as any)._tables.daily_check_ins as CheckIn[]
+    const stored = (supabase)._tables.daily_check_ins as CheckIn[]
+
     expect(stored.map((r) => r.date).sort()).toEqual(["2026-08-11", "2026-08-12"])
+
     // The store holds only the row it wrote — it never fetched the other one.
-    expect([...store.getState().records.values()]).toHaveLength(1)
+    expect(Array.from(store.getState().records.values())).toHaveLength(1)
   })
 
   it("duplicates without the option, which is the bug it exists to fix", async () => {
-    const { supabase, store } = makeStore([
-      { id: "c1", journey_id: "j1", date: "2026-08-12", pain: 3 },
+    const { store, supabase } = makeStore([
+      { date: "2026-08-12", id: "c1", journey_id: "j1", pain: 3 },
     ])
 
     // No onConflict: the conflict target is `id`, the payload carries none, so
@@ -103,13 +112,13 @@ describe("upsert with onConflict", () => {
     // Asserted on the table, not on `records` — the store never fetched, so it
     // holds only what this call wrote either way, which would make the
     // assertion pass for both behaviours.
-    await store.getState().upsert({ journey_id: "j1", date: "2026-08-12", pain: 7 } as any)
+    await store.getState().upsert({ date: "2026-08-12", journey_id: "j1", pain: 7 } as any)
 
-    expect((supabase as any)._tables.daily_check_ins).toHaveLength(2)
+    expect((supabase)._tables.daily_check_ins).toHaveLength(2)
   })
 
   it("forwards the option to the builder as its second argument", async () => {
-    const { supabase, store } = makeStore([])
+    const { store, supabase } = makeStore([])
     const seen: unknown[] = []
 
     // Wrap the real builder rather than replacing it, so the write still lands
@@ -117,18 +126,22 @@ describe("upsert with onConflict", () => {
     // assertion that the builder merely exists passes against a version that
     // forwards nothing, which is the whole failure mode being guarded.
     const realFrom = supabase.from.bind(supabase)
+
     vi.spyOn(supabase, "from").mockImplementation((name: string) => {
       const builder = realFrom(name)
       const realUpsert = builder.upsert.bind(builder)
+
       builder.upsert = (row: unknown, options?: unknown) => {
         seen.push(options)
+
         return realUpsert(row as any, options as any)
       }
+
       return builder
     })
 
     await store.getState().upsert(
-      { journey_id: "j1", date: "2026-08-12", pain: 1 } as any,
+      { date: "2026-08-12", journey_id: "j1", pain: 1 } as any,
       { onConflict: "journey_id,date" },
     )
 
@@ -140,21 +153,25 @@ describe("upsert with onConflict", () => {
     // The positive assertion's counterpart: an implementation that always sent
     // an options object would satisfy the test above and change the conflict
     // target of every plain upsert in the package.
-    const { supabase, store } = makeStore([])
+    const { store, supabase } = makeStore([])
     const seen: unknown[] = []
 
     const realFrom = supabase.from.bind(supabase)
+
     vi.spyOn(supabase, "from").mockImplementation((name: string) => {
       const builder = realFrom(name)
       const realUpsert = builder.upsert.bind(builder)
+
       builder.upsert = (row: unknown, options?: unknown) => {
         seen.push(options)
+
         return realUpsert(row as any, options as any)
       }
+
       return builder
     })
 
-    await store.getState().upsert({ journey_id: "j1", date: "2026-08-12", pain: 1 } as any)
+    await store.getState().upsert({ date: "2026-08-12", journey_id: "j1", pain: 1 } as any)
 
     expect(seen).toEqual([undefined])
     vi.restoreAllMocks()
@@ -164,16 +181,16 @@ describe("upsert with onConflict", () => {
     // NULLS DISTINCT is the default, so two nulls never conflict. A mock that
     // matched them would let this assert "replaces" and pass, while the real
     // database inserted a second row.
-    const { supabase, store } = await seededStore([
-      { id: "c1", journey_id: "j1", date: null as any, pain: 3 },
+    const { store, supabase } = await seededStore([
+      { date: null as any, id: "c1", journey_id: "j1", pain: 3 },
     ])
 
     await store.getState().upsert(
-      { journey_id: "j1", date: null, pain: 9 } as any,
+      { date: null, journey_id: "j1", pain: 9 } as any,
       { onConflict: "journey_id,date" },
     )
 
-    expect((supabase as any)._tables.daily_check_ins).toHaveLength(2)
+    expect((supabase)._tables.daily_check_ins).toHaveLength(2)
     expectOrderIntegrity(store)
   })
 })
@@ -181,11 +198,11 @@ describe("upsert with onConflict", () => {
 describe("a store that has already read its table", () => {
   it("updates the row the constraint targets instead of adding a second", async () => {
     const { store } = await seededStore([
-      { id: "c1", journey_id: "j1", date: "2026-08-12", pain: 3 },
+      { date: "2026-08-12", id: "c1", journey_id: "j1", pain: 3 },
     ])
 
     await store.getState().upsert(
-      { journey_id: "j1", date: "2026-08-12", pain: 7 } as any,
+      { date: "2026-08-12", journey_id: "j1", pain: 7 } as any,
       { onConflict: "journey_id,date" },
     )
 
@@ -193,24 +210,25 @@ describe("a store that has already read its table", () => {
     // temp id alongside `c1`, and the confirmation aliased the slot so `order`
     // ended up `["c1", "c1"]` — every list rendering the same check-in twice,
     // with duplicate React keys, until the next full fetch.
-    expect([...store.getState().records.values()]).toHaveLength(1)
+    expect(Array.from(store.getState().records.values())).toHaveLength(1)
     expect(store.getState().order).toEqual(["c1"])
     expectOrderIntegrity(store)
   })
 
   it("shows one row, not two, while the write is in flight", async () => {
     const { store } = await seededStore([
-      { id: "c1", journey_id: "j1", date: "2026-08-12", pain: 3 },
+      { date: "2026-08-12", id: "c1", journey_id: "j1", pain: 3 },
     ])
 
     const promise = store.getState().upsert(
-      { journey_id: "j1", date: "2026-08-12", pain: 7 } as any,
+      { date: "2026-08-12", journey_id: "j1", pain: 7 } as any,
       { onConflict: "journey_id,date" },
     )
 
     // The transient state is the one a user on a slow connection actually
     // reads, and it used to list today's check-in twice with two pain values.
-    const inFlight = [...store.getState().records.values()]
+    const inFlight = Array.from(store.getState().records.values())
+
     expect(inFlight).toHaveLength(1)
     expect(inFlight[0]!.pain).toBe(7)
     expect((inFlight[0] as any)._anchor_pending).toBe("update")
@@ -225,40 +243,43 @@ describe("a store that has already read its table", () => {
     // it for the stored row would blank everything else until the server
     // answered — a check-in briefly losing its oedema and mobility readings.
     const { store } = await seededStore([
-      { id: "c1", journey_id: "j1", date: "2026-08-12", pain: 3, oedema: 2 } as any,
+      { date: "2026-08-12", id: "c1", journey_id: "j1", oedema: 2, pain: 3 } as any,
     ])
 
     const promise = store
       .getState()
-      .upsert({ journey_id: "j1", date: "2026-08-12", pain: 7 } as any, {
+      .upsert({ date: "2026-08-12", journey_id: "j1", pain: 7 } as any, {
         onConflict: "journey_id,date",
       })
 
-    expect(([...store.getState().records.values()][0] as any).oedema).toBe(2)
+    expect((Array.from(store.getState().records.values())[0] as any).oedema).toBe(2)
     await promise
   })
 
   it("restores the row it overwrote when the write is refused", async () => {
-    const { supabase, store } = await seededStore([
-      { id: "c1", journey_id: "j1", date: "2026-08-12", pain: 3 },
+    const { store, supabase } = await seededStore([
+      { date: "2026-08-12", id: "c1", journey_id: "j1", pain: 3 },
     ])
 
     const realFrom = supabase.from.bind(supabase)
+
     vi.spyOn(supabase, "from").mockImplementation((name: string) => {
       const builder = realFrom(name)
+
       builder.upsert = () => ({
         select: () => ({
           single: async () => ({
             data: null,
-            error: { message: "denied", code: "42501" },
+            error: { code: "42501", message: "denied" },
           }),
         }),
       })
+
       return builder
     })
 
     await expect(
-      store.getState().upsert({ journey_id: "j1", date: "2026-08-12", pain: 7 } as any, {
+      store.getState().upsert({ date: "2026-08-12", journey_id: "j1", pain: 7 } as any, {
         onConflict: "journey_id,date",
       }),
     ).rejects.toThrow()
@@ -266,7 +287,8 @@ describe("a store that has already read its table", () => {
     // CAS rollback puts the snapshot back rather than deleting the row, which
     // is the difference between "your edit did not save" and "your check-in
     // disappeared".
-    const rows = [...store.getState().records.values()]
+    const rows = Array.from(store.getState().records.values())
+
     expect(rows).toHaveLength(1)
     expect(rows[0]!.pain).toBe(3)
     expect((rows[0] as any)._anchor_pending).toBeUndefined()
@@ -281,36 +303,40 @@ describe("upsert optimistic apply without a primary key", () => {
 
     const promise = store
       .getState()
-      .upsert({ journey_id: "j1", date: "2026-08-12", pain: 4 } as any, {
+      .upsert({ date: "2026-08-12", journey_id: "j1", pain: 4 } as any, {
         onConflict: "journey_id,date",
       })
 
     // Before the server answers, the screen already has a row. This is the
     // whole point of an optimistic write, and it used to be skipped entirely
     // whenever the payload carried no id.
-    const pendingRows = [...store.getState().records.values()]
+    const pendingRows = Array.from(store.getState().records.values())
+
     expect(pendingRows).toHaveLength(1)
     expect((pendingRows[0] as any)._anchor_pending).toBe("update")
 
     await promise
 
-    const settled = [...store.getState().records.values()]
+    const settled = Array.from(store.getState().records.values())
+
     expect(settled).toHaveLength(1)
     expect((settled[0] as any)._anchor_pending).toBeUndefined()
+
     // The temp id is gone — `order` and `records` agree on the server's.
     expect(store.getState().order).toEqual([settled[0]!.id])
   })
 
   it("never sends the temp id to the server", async () => {
-    const { supabase, store } = makeStore([])
+    const { store, supabase } = makeStore([])
 
     await store.getState().upsert(
-      { journey_id: "j1", date: "2026-08-12", pain: 4 } as any,
+      { date: "2026-08-12", journey_id: "j1", pain: 4 } as any,
       { onConflict: "journey_id,date" },
     )
 
     // A temp id reaching the database is a malformed uuid, not a row.
-    const stored = (supabase as any)._tables.daily_check_ins as CheckIn[]
+    const stored = (supabase)._tables.daily_check_ins as CheckIn[]
+
     expect(stored).toHaveLength(1)
     expect(String(stored[0]!.id)).not.toContain("_temp:")
   })
@@ -319,29 +345,31 @@ describe("upsert optimistic apply without a primary key", () => {
 describe("upsert with ignoreDuplicates", () => {
   it("resolves the row rather than throwing PGRST116 when the conflict already exists", async () => {
     const { store } = await seededStore([
-      { id: "c1", journey_id: "j1", date: "2026-08-12", pain: 3 },
+      { date: "2026-08-12", id: "c1", journey_id: "j1", pain: 3 },
     ])
 
     const resolved = await store.getState().upsert(
-      { journey_id: "j1", date: "2026-08-12", pain: 9 } as any,
-      { onConflict: "journey_id,date", ignoreDuplicates: true },
+      { date: "2026-08-12", journey_id: "j1", pain: 9 } as any,
+      { ignoreDuplicates: true, onConflict: "journey_id,date" },
     )
 
     expect(resolved).toBeTruthy()
   })
 
   it("writes DO NOTHING — the existing row's columns are untouched, not overwritten", async () => {
-    const { supabase, store } = await seededStore([
-      { id: "c1", journey_id: "j1", date: "2026-08-12", pain: 3 },
+    const { store, supabase } = await seededStore([
+      { date: "2026-08-12", id: "c1", journey_id: "j1", pain: 3 },
     ])
 
     await store.getState().upsert(
-      { journey_id: "j1", date: "2026-08-12", pain: 9 } as any,
-      { onConflict: "journey_id,date", ignoreDuplicates: true },
+      { date: "2026-08-12", journey_id: "j1", pain: 9 } as any,
+      { ignoreDuplicates: true, onConflict: "journey_id,date" },
     )
 
-    const stored = (supabase as any)._tables.daily_check_ins as CheckIn[]
+    const stored = (supabase)._tables.daily_check_ins as CheckIn[]
+
     expect(stored).toHaveLength(1)
+
     // A real DO NOTHING never applied `pain: 9` — proves this isn't secretly
     // still doing DO UPDATE under a different name.
     expect(stored[0]!.pain).toBe(3)
@@ -349,12 +377,12 @@ describe("upsert with ignoreDuplicates", () => {
 
   it("clears the row's pending flag once the server confirms the no-op", async () => {
     const { store } = await seededStore([
-      { id: "c1", journey_id: "j1", date: "2026-08-12", pain: 3 },
+      { date: "2026-08-12", id: "c1", journey_id: "j1", pain: 3 },
     ])
 
     const resolved = await store.getState().upsert(
-      { journey_id: "j1", date: "2026-08-12", pain: 9 } as any,
-      { onConflict: "journey_id,date", ignoreDuplicates: true },
+      { date: "2026-08-12", journey_id: "j1", pain: 9 } as any,
+      { ignoreDuplicates: true, onConflict: "journey_id,date" },
     )
 
     expect((resolved as any)._anchor_pending).toBeUndefined()
@@ -364,40 +392,43 @@ describe("upsert with ignoreDuplicates", () => {
   })
 
   it("still inserts normally when nothing conflicts", async () => {
-    const { supabase, store } = await seededStore([
-      { id: "c1", journey_id: "j1", date: "2026-08-11", pain: 3 },
+    const { store, supabase } = await seededStore([
+      { date: "2026-08-11", id: "c1", journey_id: "j1", pain: 3 },
     ])
 
     await store.getState().upsert(
-      { journey_id: "j1", date: "2026-08-12", pain: 5 } as any,
-      { onConflict: "journey_id,date", ignoreDuplicates: true },
+      { date: "2026-08-12", journey_id: "j1", pain: 5 } as any,
+      { ignoreDuplicates: true, onConflict: "journey_id,date" },
     )
 
-    const stored = (supabase as any)._tables.daily_check_ins as CheckIn[]
+    const stored = (supabase)._tables.daily_check_ins as CheckIn[]
+
     expect(stored.map((r) => r.date).sort()).toEqual(["2026-08-11", "2026-08-12"])
     expectOrderIntegrity(store)
   })
 
   it("still rolls back on a real error — ignoreDuplicates only changes the no-conflict case", async () => {
-    const { supabase, store } = await seededStore([
-      { id: "c1", journey_id: "j1", date: "2026-08-12", pain: 3 },
+    const { store, supabase } = await seededStore([
+      { date: "2026-08-12", id: "c1", journey_id: "j1", pain: 3 },
     ])
-    ;(supabase as any)._setError(
+
+    ;(supabase)._setError(
       "daily_check_ins",
       "upsert",
-      { message: "insufficient privilege", code: "42501" },
+      { code: "42501", message: "insufficient privilege" },
       { status: 403 },
     )
 
     await expect(
       store.getState().upsert(
-        { journey_id: "j1", date: "2026-08-13", pain: 5 } as any,
-        { onConflict: "journey_id,date", ignoreDuplicates: true },
+        { date: "2026-08-13", journey_id: "j1", pain: 5 } as any,
+        { ignoreDuplicates: true, onConflict: "journey_id,date" },
       ),
     ).rejects.toThrow()
 
     // Only the seeded row remains — the optimistic insert rolled back.
-    const rows = [...store.getState().records.values()]
+    const rows = Array.from(store.getState().records.values())
+
     expect(rows).toHaveLength(1)
     expect(rows[0]!.id).toBe("c1")
     expectOrderIntegrity(store)
@@ -407,22 +438,22 @@ describe("upsert with ignoreDuplicates", () => {
 describe("the queued replay", () => {
   function queuedUpsert(overrides: Partial<QueuedMutation> = {}): QueuedMutation {
     return {
-      id: "m1",
-      table: "daily_check_ins",
-      operation: "UPSERT",
-      payload: { journey_id: "j1", date: "2026-08-12", pain: 7 },
-      primaryKey: { id: "_temp:abc" },
       createdAt: 0,
-      status: "in_flight",
+      id: "m1",
+      operation: "UPSERT",
+      payload: { date: "2026-08-12", journey_id: "j1", pain: 7 },
+      primaryKey: { id: "_temp:abc" },
       retryCount: 0,
       rollbackSnapshot: null,
+      status: "in_flight",
+      table: "daily_check_ins",
       ...overrides,
     }
   }
 
   it("replays with the conflict target the live call used", async () => {
     const supabase = createMockSupabase({
-      daily_check_ins: [{ id: "c1", journey_id: "j1", date: "2026-08-12", pain: 3 }],
+      daily_check_ins: [{ date: "2026-08-12", id: "c1", journey_id: "j1", pain: 3 }],
     })
 
     await executeRemoteMutation(
@@ -433,7 +464,8 @@ describe("the queued replay", () => {
       new Map(),
     )
 
-    const stored = (supabase as any)._tables.daily_check_ins as CheckIn[]
+    const stored = (supabase)._tables.daily_check_ins as CheckIn[]
+
     expect(stored).toHaveLength(1)
     expect(stored[0]!.pain).toBe(7)
   })
@@ -442,7 +474,7 @@ describe("the queued replay", () => {
     // The failure this whole field exists to prevent: correct while online,
     // wrong only after a reconnect, where nobody is watching.
     const supabase = createMockSupabase({
-      daily_check_ins: [{ id: "c1", journey_id: "j1", date: "2026-08-12", pain: 3 }],
+      daily_check_ins: [{ date: "2026-08-12", id: "c1", journey_id: "j1", pain: 3 }],
     })
 
     await executeRemoteMutation(
@@ -453,7 +485,7 @@ describe("the queued replay", () => {
       new Map(),
     )
 
-    expect((supabase as any)._tables.daily_check_ins).toHaveLength(2)
+    expect((supabase)._tables.daily_check_ins).toHaveLength(2)
   })
 
   it("does not throw when a carried ignoreDuplicates conflicts on the drain", async () => {
@@ -462,7 +494,7 @@ describe("the queued replay", () => {
     // would stall every OTHER pending mutation behind it, on every table, for
     // a write the server had already confirmed.
     const supabase = createMockSupabase({
-      daily_check_ins: [{ id: "c1", journey_id: "j1", date: "2026-08-12", pain: 3 }],
+      daily_check_ins: [{ date: "2026-08-12", id: "c1", journey_id: "j1", pain: 3 }],
     })
 
     const result = await executeRemoteMutation(
@@ -470,58 +502,67 @@ describe("the queued replay", () => {
       "daily_check_ins",
       "id",
       queuedUpsert({
-        upsertOptions: { onConflict: "journey_id,date", ignoreDuplicates: true },
+        upsertOptions: { ignoreDuplicates: true, onConflict: "journey_id,date" },
       }),
       new Map(),
     )
 
     expect(result.data).toBeNull()
+
+
     // DO NOTHING really did nothing — the existing row is untouched.
-    const stored = (supabase as any)._tables.daily_check_ins as CheckIn[]
+    const stored = (supabase)._tables.daily_check_ins as CheckIn[]
+
     expect(stored).toHaveLength(1)
     expect(stored[0]!.pain).toBe(3)
   })
 
   it("clears the store's pending flag via the executor when the drain confirms a no-op", async () => {
     const supabase = createMockSupabase({
-      daily_check_ins: [{ id: "c1", journey_id: "j1", date: "2026-08-12", pain: 3 }],
+      daily_check_ins: [{ date: "2026-08-12", id: "c1", journey_id: "j1", pain: 3 }],
     })
     const store = createTableStore<any, CheckIn, any, any>({
-      supabase: supabase as any,
-      table: "daily_check_ins",
       primaryKey: "id",
+      supabase,
+      table: "daily_check_ins",
     })
+
+
     // A row already marked pending under the id this mutation is about — the
     // state left behind by the live `upsert()` call that got queued.
     store.setState((prev: any) => {
       const records = new Map(prev.records)
+
       records.set("c1", {
+        _anchor_mutationId: "mut-1",
+        _anchor_optimistic: true,
+        _anchor_pending: "update",
+        date: "2026-08-12",
         id: "c1",
         journey_id: "j1",
-        date: "2026-08-12",
         pain: 9,
-        _anchor_pending: "update",
-        _anchor_optimistic: true,
-        _anchor_mutationId: "mut-1",
       })
-      return { ...prev, records, order: ["c1"] }
+
+      return { ...prev, order: ["c1"], records }
     })
 
     const executor = createMutationExecutor(
-      supabase as any,
+      supabase,
       "daily_check_ins",
       "id",
       store,
     )
+
     await executor(
       queuedUpsert({
         primaryKey: { id: "c1" },
-        upsertOptions: { onConflict: "journey_id,date", ignoreDuplicates: true },
+        upsertOptions: { ignoreDuplicates: true, onConflict: "journey_id,date" },
       }),
       new Map(),
     )
 
     const row = store.getState().records.get("c1") as any
+
     expect(row?._anchor_pending).toBeUndefined()
     expect(row?._anchor_optimistic).toBeUndefined()
   })

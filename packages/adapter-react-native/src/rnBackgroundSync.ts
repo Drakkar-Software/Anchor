@@ -1,14 +1,14 @@
 import type { BackgroundTaskAdapter } from "@drakkar.software/anchor"
 
-type TaskManagerModule = {
-  defineTask: (name: string, handler: () => Promise<any>) => void
-  isTaskRegisteredAsync: (name: string) => Promise<boolean>
-}
-
-type BackgroundFetchModule = {
+interface BackgroundFetchModule {
+  BackgroundFetchResult: { Failed: unknown; NewData: unknown; }
   registerTaskAsync: (name: string, options: object) => Promise<void>
   unregisterTaskAsync: (name: string) => Promise<void>
-  BackgroundFetchResult: { NewData: unknown; Failed: unknown }
+}
+
+interface TaskManagerModule {
+  defineTask: (name: string, handler: () => Promise<any>) => void
+  isTaskRegisteredAsync: (name: string) => Promise<boolean>
 }
 
 /**
@@ -24,8 +24,9 @@ type BackgroundFetchModule = {
  * new RNBackgroundSync(TaskManager, BackgroundFetch)
  */
 export class RNBackgroundSync implements BackgroundTaskAdapter {
-  private TaskManager: TaskManagerModule
-  private BackgroundFetch: BackgroundFetchModule
+  private readonly TaskManager: TaskManagerModule
+
+  private readonly BackgroundFetch: BackgroundFetchModule
 
   constructor(TaskManager: TaskManagerModule, BackgroundFetch: BackgroundFetchModule) {
     this.TaskManager = TaskManager
@@ -36,28 +37,31 @@ export class RNBackgroundSync implements BackgroundTaskAdapter {
     this.TaskManager.defineTask(taskName, async () => {
       try {
         await handler()
+
         return this.BackgroundFetch.BackgroundFetchResult.NewData
-      } catch (err) {
-        console.error(`[anchor:background-sync] Task "${taskName}" failed:`, err)
+      } catch (error) {
+        console.error(`[anchor:background-sync] Task "${taskName}" failed:`, error)
+
         return this.BackgroundFetch.BackgroundFetchResult.Failed
       }
     })
 
     await this.BackgroundFetch.registerTaskAsync(taskName, {
       minimumInterval: 15 * 60, // 15 minutes minimum (iOS constraint)
-      stopOnTerminate: false,
       startOnBoot: true,
+      stopOnTerminate: false,
     })
   }
 
   async unregister(taskName: string): Promise<void> {
     const isRegistered = await this.TaskManager.isTaskRegisteredAsync(taskName)
+
     if (isRegistered) {
       await this.BackgroundFetch.unregisterTaskAsync(taskName)
     }
   }
 
   async isRegistered(taskName: string): Promise<boolean> {
-    return this.TaskManager.isTaskRegisteredAsync(taskName)
+    return await this.TaskManager.isTaskRegisteredAsync(taskName)
   }
 }

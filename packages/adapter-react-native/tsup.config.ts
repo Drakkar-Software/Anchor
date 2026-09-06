@@ -1,12 +1,10 @@
 import { defineConfig } from "tsup"
 
 export default defineConfig({
-  entry: ["src/index.ts"],
-  format: ["esm", "cjs"],
-  dts: true,
-  splitting: false,
-  sourcemap: true,
   clean: true,
+  dts: true,
+  entry: ["src/index.ts"],
+
   external: [
     "@drakkar.software/anchor",
     "expo-sqlite",
@@ -18,4 +16,8 @@ export default defineConfig({
     "expo-linking",
     "@supabase/supabase-js",
   ],
+
+  format: ["esm", "cjs"],
+  sourcemap: true,
+  splitting: false,
 })

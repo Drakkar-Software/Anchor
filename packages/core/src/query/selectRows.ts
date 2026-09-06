@@ -17,10 +17,13 @@ export function selectAllRows<Row>(
   state: Pick<TableStoreState<Row>, "records" | "order">,
 ): TrackedRow<Row>[] {
   const result: TrackedRow<Row>[] = []
+
   for (const id of state.order) {
     const record = state.records.get(id)
-    if (record) result.push(record)
+
+    if (record) {result.push(record)}
   }
+
   return result
 }
 
@@ -49,12 +52,17 @@ export function selectQueryRows<Row>(
   sort?: SortDescriptor<any>[],
 ): TrackedRow<Row>[] {
   const rows: TrackedRow<Row>[] = []
+
   for (const id of state.order) {
     const record = state.records.get(id)
-    if (!record) continue
-    if (filters?.length && !matchRow(record as Record<string, unknown>, filters)) continue
+
+    if (!record) {continue}
+
+    if (filters?.length && !matchRow(record as Record<string, unknown>, filters)) {continue}
+
     rows.push(record)
   }
+
   return sort?.length ? sortRows(rows, sort) : rows
 }
 
@@ -74,7 +82,7 @@ export function sortRows<Row>(
   rows: TrackedRow<Row>[],
   sort: SortDescriptor<any>[],
 ): TrackedRow<Row>[] {
-  return [...rows].sort((a, b) => {
+  return Array.from(rows).sort((a, b) => {
     for (const rule of sort) {
       const av = (a as Record<string, unknown>)[rule.column]
       const bv = (b as Record<string, unknown>)[rule.column]
@@ -84,21 +92,27 @@ export function sortRows<Row>(
       // Null placement is absolute: `nullsFirst` decides it outright and
       // `ascending` does not flip it, so this returns before the sign flip.
       if (aNull || bNull) {
-        if (aNull && bNull) continue
+        if (aNull && bNull) {continue}
+
         const nullsFirst = rule.nullsFirst ?? false
+
         return aNull === nullsFirst ? -1 : 1
       }
 
       const result = compareValues(av, bv)
-      if (result !== 0) return rule.ascending === false ? -result : result
+
+      if (result !== 0) {return rule.ascending === false ? -result : result}
     }
+
     return 0
   })
 }
 
 function compareValues(a: unknown, b: unknown): number {
-  if (typeof a === "number" && typeof b === "number") return a - b
+  if (typeof a === "number" && typeof b === "number") {return a - b}
+
   const as = String(a)
   const bs = String(b)
+
   return as < bs ? -1 : as > bs ? 1 : 0
 }

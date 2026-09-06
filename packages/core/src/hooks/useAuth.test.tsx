@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 
-import { describe, it, expect, vi } from "vitest"
 import { render, screen, waitFor } from "@testing-library/react"
-import { createAuthStore } from "../auth/authStore.js"
+import { describe, expect, it, vi } from "vitest"
+
 import { createMockSupabase } from "../__tests__/mockSupabase.js"
+import { createAuthStore } from "../auth/authStore.js"
 import { useAuth } from "./useAuth.js"
 
 /**
@@ -14,7 +15,8 @@ import { useAuth } from "./useAuth.js"
  */
 describe("useAuth", () => {
   function Panel({ store }: { store: any }) {
-    const { session, user, isLoading, error } = useAuth(store)
+    const { error, isLoading, session, user } = useAuth(store)
+
     return (
       <div>
         <span data-testid="loading">{String(isLoading)}</span>
@@ -27,7 +29,8 @@ describe("useAuth", () => {
 
   it("settles to the signed-in session", async () => {
     const supabase = createMockSupabase()
-    supabase._setSession({ access_token: "tok", user: { id: "user-1", email: "a@b.com" } })
+
+    supabase._setSession({ access_token: "tok", user: { email: "a@b.com", id: "user-1" } })
 
     render(<Panel store={createAuthStore({ supabase })} />)
 
@@ -56,20 +59,25 @@ describe("useAuth", () => {
 
   it("does not let a slow getSession overwrite a sign-out that arrived meanwhile", async () => {
     const supabase = createMockSupabase()
-    supabase._setSession({ access_token: "stale", user: { id: "user-1", email: "a@b.com" } })
+
+    supabase._setSession({ access_token: "stale", user: { email: "a@b.com", id: "user-1" } })
 
     // The round-trip resolves with the pre-sign-out session, after the listener
     // has already reported SIGNED_OUT. This is the ordinary end of a long
     // offline session: supabase-js emits SIGNED_OUT by itself once a refresh
     // token fails to renew.
     let releaseGetSession: () => void = () => {}
+
     const gate = new Promise<void>((resolve) => { releaseGetSession = resolve })
+
     supabase.auth.getSession = vi.fn().mockImplementation(async () => {
       await gate
-      return { data: { session: { access_token: "stale", user: { id: "user-1", email: "a@b.com" } } }, error: null }
+
+      return { data: { session: { access_token: "stale", user: { email: "a@b.com", id: "user-1" } } }, error: null }
     })
 
     const store = createAuthStore({ supabase })
+
     render(<Panel store={store} />)
 
     await supabase.auth.signOut()
@@ -87,7 +95,9 @@ describe("useAuth", () => {
     // The paired positive: deferring unconditionally would also satisfy the
     // assertion above, and would leave a store that never loads a session.
     const supabase = createMockSupabase()
-    supabase._setSession({ access_token: "tok", user: { id: "user-1", email: "a@b.com" } })
+
+    supabase._setSession({ access_token: "tok", user: { email: "a@b.com", id: "user-1" } })
+
     const store = createAuthStore({ supabase })
 
     await store.getState().initialize()
@@ -99,6 +109,7 @@ describe("useAuth", () => {
   it("unsubscribes the listener on unmount", async () => {
     const supabase = createMockSupabase()
     const { unmount } = render(<Panel store={createAuthStore({ supabase })} />)
+
     await waitFor(() => expect(screen.getByTestId("loading").textContent).toBe("false"))
 
     unmount()

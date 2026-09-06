@@ -1,9 +1,9 @@
 "use client"
 
 import { useEffect } from "react"
-import { useStore } from "zustand"
-import type { StoreApi } from "zustand"
-import type { TableStore, RealtimeStatus, FilterDescriptor } from "../types.js"
+import { type StoreApi , useStore } from "zustand"
+
+import type { FilterDescriptor,RealtimeStatus, TableStore } from "../types.js"
 
 type UseRealtimeResult = {
   status: RealtimeStatus
@@ -20,8 +20,8 @@ export function useRealtime<
 >(
   store: StoreApi<TableStore<Row, InsertRow, UpdateRow>>,
   options?: {
-    filter?: FilterDescriptor<Row>[]
     enabled?: boolean
+    filter?: FilterDescriptor<Row>[]
   },
 ): UseRealtimeResult {
   const enabled = options?.enabled ?? true
@@ -29,10 +29,9 @@ export function useRealtime<
   const filterKey = JSON.stringify(options?.filter ?? null)
 
   useEffect(() => {
-    if (!enabled) return
+    if (!enabled) {return}
 
-    const unsubscribe = store.getState().subscribe(options?.filter)
-    return unsubscribe
+    return store.getState().subscribe(options?.filter)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, store, filterKey])
 

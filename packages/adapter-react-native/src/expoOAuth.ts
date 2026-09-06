@@ -1,24 +1,27 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 
-export type ExpoOAuthOptions = {
-  /** Custom URL scheme for deep links (e.g., "myapp") */
-  redirectScheme?: string
+export interface ExpoOAuthHandler {
+  /** Get the configured redirect URL */
+  getRedirectUrl: () => string
+
+  /** Handle the redirect URL after OAuth callback */
+  handleRedirect: (url: string) => Promise<void>
+
+  /** Initiate OAuth sign-in with the given provider */
+  signInWithProvider: (provider: string) => Promise<{ url: string | null }>
+}
+
+export interface ExpoOAuthOptions {
   /** Path for the auth callback (default: "auth/callback") */
   redirectPath?: string
+
+  /** Custom URL scheme for deep links (e.g., "myapp") */
+  redirectScheme?: string
 }
 
-export type ExpoOAuthHandler = {
-  /** Initiate OAuth sign-in with the given provider */
-  signInWithProvider(provider: string): Promise<{ url: string | null }>
-  /** Handle the redirect URL after OAuth callback */
-  handleRedirect(url: string): Promise<void>
-  /** Get the configured redirect URL */
-  getRedirectUrl(): string
-}
-
-type LinkingModule = {
+interface LinkingModule {
   createURL: (path: string) => string
-  parse: (url: string) => { queryParams?: Record<string, string | undefined> }
+  parse: (url: string) => { queryParams?: { [key: string]: string | undefined } }
 }
 
 /**
@@ -43,49 +46,47 @@ export function createExpoOAuthHandler(
     : Linking.createURL(redirectPath)
 
   return {
-    async signInWithProvider(provider: string) {
-      const { data, error } = await supabase.auth.signInWithOAuth({
-        provider: provider as any,
-        options: { redirectTo: redirectUrl },
-      })
-
-      if (error) throw error
-      return { url: data?.url ?? null }
+    getRedirectUrl() {
+      return redirectUrl
     },
 
     async handleRedirect(url: string) {
       // Parse the URL to extract auth parameters
       const parsed = Linking.parse(url)
-      const params = parsed.queryParams ?? {}
+      const parameters = parsed.queryParams ?? {}
 
       // Handle PKCE flow (code exchange). `sb_flow_id` (present only when the
       // client set `appendPkceFlowIdToRedirects: true`) is forwarded so
       // overlapping flows don't fight over the same verifier slot -- this is
       // the one place that matters most, since `window.location` doesn't
       // exist here for supabase-js to read it automatically.
-      if (params.code) {
+      if (parameters.code) {
         const { error } = await supabase.auth.exchangeCodeForSession(
-          params.code as string,
-          params.sb_flow_id ? { flowId: params.sb_flow_id as string } : undefined,
+          parameters.code,
+          parameters.sb_flow_id ? { flowId: parameters.sb_flow_id } : undefined,
         )
-        if (error) throw error
+
+        if (error) {throw error}
+
         return
       }
 
       // Handle implicit flow (access_token in hash/fragment)
-      if (params.access_token && params.refresh_token) {
+      if (parameters.access_token && parameters.refresh_token) {
         const { error } = await supabase.auth.setSession({
-          access_token: params.access_token as string,
-          refresh_token: params.refresh_token as string,
+          access_token: parameters.access_token,
+          refresh_token: parameters.refresh_token,
         })
-        if (error) throw error
+
+        if (error) {throw error}
+
         return
       }
 
       // Handle error response
-      if (params.error) {
+      if (parameters.error) {
         throw new Error(
-          `OAuth error: ${params.error_description ?? params.error}`,
+          `OAuth error: ${parameters.error_description ?? parameters.error}`,
         )
       }
 
@@ -94,8 +95,15 @@ export function createExpoOAuthHandler(
       )
     },
 
-    getRedirectUrl() {
-      return redirectUrl
+    async signInWithProvider(provider: string) {
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        options: { redirectTo: redirectUrl },
+        provider: provider as any,
+      })
+
+      if (error) {throw error}
+
+      return { url: data.url ?? null }
     },
   }
 }

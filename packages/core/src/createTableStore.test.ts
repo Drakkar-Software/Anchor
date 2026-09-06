@@ -1,13 +1,14 @@
-import { describe, it, expect, beforeEach, vi } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+
+import { createMockSupabase } from "./__tests__/mockSupabase.js"
 import { createTableStore } from "./createTableStore.js"
 import { MemoryAdapter } from "./persistence/persistenceAdapter.js"
-import { createMockSupabase } from "./__tests__/mockSupabase.js"
 
 type Todo = {
-  id: number
-  title: string
   completed: boolean
   created_at: string
+  id: number
+  title: string
   updated_at: string
 }
 
@@ -17,9 +18,9 @@ describe("createTableStore", () => {
   beforeEach(() => {
     supabase = createMockSupabase({
       todos: [
-        { id: 1, title: "Buy milk", completed: false, created_at: "2024-01-01", updated_at: "2024-01-01" },
-        { id: 2, title: "Walk dog", completed: true, created_at: "2024-01-02", updated_at: "2024-01-02" },
-        { id: 3, title: "Read book", completed: false, created_at: "2024-01-03", updated_at: "2024-01-03" },
+        { completed: false, created_at: "2024-01-01", id: 1, title: "Buy milk", updated_at: "2024-01-01" },
+        { completed: true, created_at: "2024-01-02", id: 2, title: "Walk dog", updated_at: "2024-01-02" },
+        { completed: false, created_at: "2024-01-03", id: 3, title: "Read book", updated_at: "2024-01-03" },
       ],
     })
   })
@@ -61,6 +62,8 @@ describe("createTableStore", () => {
     it("sets isLoading during fetch", async () => {
       const store = createStore()
       const fetchPromise = store.getState().fetch()
+
+
       // isLoading may or may not be true depending on microtask timing
       await fetchPromise
       expect(store.getState().isLoading).toBe(false)
@@ -71,12 +74,12 @@ describe("createTableStore", () => {
 
       // Simulate a pending record
       store.getState().setRecord(999, {
-        id: 999,
-        title: "Pending item",
+        _anchor_pending: "insert",
         completed: false,
         created_at: "",
+        id: 999,
+        title: "Pending item",
         updated_at: "",
-        _anchor_pending: "insert",
       } as any)
 
       await store.getState().fetch()
@@ -109,21 +112,24 @@ describe("createTableStore", () => {
     it("inserts a row optimistically and confirms with server", async () => {
       const store = createStore()
       const result = await store.getState().insert({
-        title: "New todo",
         completed: false,
+        title: "New todo",
       })
 
       expect(result).toBeDefined()
       expect((result as any).title).toBe("New todo")
+
+
       // Should be in the store
-      const records = [...store.getState().records.values()]
+      const records = Array.from(store.getState().records.values())
+
       expect(records.some((r) => (r as any).title === "New todo")).toBe(true)
     })
 
     it("rolls back on server error", async () => {
       // Create a supabase that fails on insert
       const failingSupabase = {
-        from(table: string) {
+        from(_table: string) {
           return {
             insert() {
               return {
@@ -147,7 +153,7 @@ describe("createTableStore", () => {
       const store = createStore({ supabase: failingSupabase })
 
       await expect(
-        store.getState().insert({ title: "Will fail", completed: false }),
+        store.getState().insert({ completed: false, title: "Will fail" }),
       ).rejects.toThrow("Insert failed")
 
       // Store should be empty (rolled back)
@@ -158,6 +164,7 @@ describe("createTableStore", () => {
   describe("update", () => {
     it("updates a row optimistically and confirms", async () => {
       const store = createStore()
+
       await store.getState().fetch()
 
       const result = await store.getState().update(1, { completed: true })
@@ -168,6 +175,7 @@ describe("createTableStore", () => {
 
     it("applies optimistic update immediately", async () => {
       const store = createStore()
+
       await store.getState().fetch()
 
       // Start update but don't await
@@ -184,6 +192,7 @@ describe("createTableStore", () => {
   describe("remove", () => {
     it("removes a row optimistically and confirms", async () => {
       const store = createStore()
+
       await store.getState().fetch()
 
       expect(store.getState().records.has(1)).toBe(true)
@@ -198,11 +207,12 @@ describe("createTableStore", () => {
   describe("local operations", () => {
     it("setRecord adds a record locally", () => {
       const store = createStore()
+
       store.getState().setRecord(42, {
-        id: 42,
-        title: "Local only",
         completed: false,
         created_at: "",
+        id: 42,
+        title: "Local only",
         updated_at: "",
       })
 
@@ -212,11 +222,12 @@ describe("createTableStore", () => {
 
     it("removeRecord removes a record locally", () => {
       const store = createStore()
+
       store.getState().setRecord(42, {
-        id: 42,
-        title: "Local only",
         completed: false,
         created_at: "",
+        id: 42,
+        title: "Local only",
         updated_at: "",
       })
 
@@ -228,8 +239,9 @@ describe("createTableStore", () => {
 
     it("clearAll removes all records", () => {
       const store = createStore()
-      store.getState().setRecord(1, { id: 1, title: "A", completed: false, created_at: "", updated_at: "" })
-      store.getState().setRecord(2, { id: 2, title: "B", completed: false, created_at: "", updated_at: "" })
+
+      store.getState().setRecord(1, { completed: false, created_at: "", id: 1, title: "A", updated_at: "" })
+      store.getState().setRecord(2, { completed: false, created_at: "", id: 2, title: "B", updated_at: "" })
 
       store.getState().clearAll()
 
@@ -242,22 +254,23 @@ describe("createTableStore", () => {
 
       // Add a pending record
       store.getState().setRecord(1, {
-        id: 1,
-        title: "Pending update",
+        _anchor_pending: "update",
         completed: false,
         created_at: "",
+        id: 1,
+        title: "Pending update",
         updated_at: "",
-        _anchor_pending: "update",
       } as any)
 
       // Merge remote data that includes the same id
       store.getState().mergeRecords([
-        { id: 1, title: "Remote version", completed: true, created_at: "", updated_at: "" },
-        { id: 2, title: "New remote", completed: false, created_at: "", updated_at: "" },
+        { completed: true, created_at: "", id: 1, title: "Remote version", updated_at: "" },
+        { completed: false, created_at: "", id: 2, title: "New remote", updated_at: "" },
       ])
 
       // Pending record should NOT be overwritten
       expect(store.getState().records.get(1)?.title).toBe("Pending update")
+
       // New record should be added
       expect(store.getState().records.get(2)?.title).toBe("New remote")
     })
@@ -266,8 +279,9 @@ describe("createTableStore", () => {
   describe("persistence", () => {
     it("auto-hydrates from persistence adapter on creation", async () => {
       const adapter = new MemoryAdapter()
+
       await adapter.setItem("anchor:public:todos", [
-        { id: 10, title: "Cached todo", completed: false, created_at: "", updated_at: "" },
+        { completed: false, created_at: "", id: 10, title: "Cached todo", updated_at: "" },
       ])
 
       const store = createStore({ persistence: { adapter } })
@@ -289,6 +303,7 @@ describe("createTableStore", () => {
       await new Promise((resolve) => setTimeout(resolve, 200))
 
       const persisted = await adapter.getItem<any[]>("anchor:public:todos")
+
       expect(persisted).toHaveLength(3)
     })
   })
@@ -329,9 +344,9 @@ describe("createTableStore", () => {
       const store = createStore({ persistence: { adapter } })
 
       // Perform multiple rapid mutations
-      store.getState().setRecord(1, { id: 1, title: "A", completed: false, created_at: "", updated_at: "" })
-      store.getState().setRecord(2, { id: 2, title: "B", completed: false, created_at: "", updated_at: "" })
-      store.getState().setRecord(3, { id: 3, title: "C", completed: false, created_at: "", updated_at: "" })
+      store.getState().setRecord(1, { completed: false, created_at: "", id: 1, title: "A", updated_at: "" })
+      store.getState().setRecord(2, { completed: false, created_at: "", id: 2, title: "B", updated_at: "" })
+      store.getState().setRecord(3, { completed: false, created_at: "", id: 3, title: "C", updated_at: "" })
 
       // Should NOT have called setItem yet (debounced)
       expect(setItemSpy).not.toHaveBeenCalled()
@@ -374,7 +389,9 @@ describe("createTableStore", () => {
         const store = createStore({ cacheStrategy: "merge" })
 
         await store.getState().fetch()
+
         const oldRecord = store.getState().records.get(1)
+
         expect(oldRecord?.title).toBe("Buy milk")
 
         // Mutate server data
@@ -390,12 +407,12 @@ describe("createTableStore", () => {
 
         // Simulate a pending record with id=1
         store.getState().setRecord(1, {
-          id: 1,
-          title: "Pending version",
+          _anchor_pending: "update",
           completed: false,
           created_at: "",
+          id: 1,
+          title: "Pending version",
           updated_at: "",
-          _anchor_pending: "update",
         } as any)
 
         await store.getState().fetch()
@@ -403,6 +420,7 @@ describe("createTableStore", () => {
         // Pending record should keep its local version
         expect(store.getState().records.get(1)?.title).toBe("Pending version")
         expect(store.getState().records.get(1)?._anchor_pending).toBe("update")
+
         // But it should appear in order since it's in the fetch results
         expect(store.getState().order).toContain(1)
       })
@@ -412,12 +430,12 @@ describe("createTableStore", () => {
 
         // Set a pending record with id=999 (not in server data)
         store.getState().setRecord(999, {
-          id: 999,
-          title: "New pending",
+          _anchor_pending: "insert",
           completed: false,
           created_at: "",
+          id: 999,
+          title: "New pending",
           updated_at: "",
-          _anchor_pending: "insert",
         } as any)
 
         await store.getState().fetch()
@@ -437,8 +455,8 @@ describe("createTableStore", () => {
 
         // Fetch completed only with merge override
         await store.getState().fetch({
-          filters: [{ column: "completed", op: "eq", value: true }],
           cacheStrategy: "merge",
+          filters: [{ column: "completed", op: "eq", value: true }],
         })
 
         // Records accumulated (merge); the latest query leads and the rest
@@ -455,8 +473,8 @@ describe("createTableStore", () => {
 
         // Fetch completed only with replace override
         await store.getState().fetch({
-          filters: [{ column: "completed", op: "eq", value: true }],
           cacheStrategy: "replace",
+          filters: [{ column: "completed", op: "eq", value: true }],
         })
 
         // Only completed record remains (replace mode)
@@ -496,6 +514,7 @@ describe("createTableStore", () => {
 
         // Fire two fetches concurrently — only the last should apply
         const fetch1 = store.getState().fetch({ filters: [{ column: "completed", op: "eq", value: true }] })
+
         // Due to in-flight dedup, the second call returns the same promise
         const fetch2 = store.getState().fetch({ filters: [{ column: "completed", op: "eq", value: false }] })
 
@@ -529,18 +548,17 @@ describe("createTableStore", () => {
   describe("extend", () => {
     it("allows extending the store with custom actions", () => {
       const store = createTableStore<any, Todo, Partial<Todo>, Partial<Todo>, { completedCount: () => number }>({
+        extend: (_set, get) => ({
+          completedCount: () => Array.from(get().records.values()).filter((t) => t.completed).length,
+        }),
+
         supabase,
         table: "todos",
-        extend: (_set, get) => ({
-          completedCount: () => {
-            return [...get().records.values()].filter((t) => t.completed).length
-          },
-        }),
       })
 
-      store.getState().setRecord(1, { id: 1, title: "A", completed: true, created_at: "", updated_at: "" })
-      store.getState().setRecord(2, { id: 2, title: "B", completed: false, created_at: "", updated_at: "" })
-      store.getState().setRecord(3, { id: 3, title: "C", completed: true, created_at: "", updated_at: "" })
+      store.getState().setRecord(1, { completed: true, created_at: "", id: 1, title: "A", updated_at: "" })
+      store.getState().setRecord(2, { completed: false, created_at: "", id: 2, title: "B", updated_at: "" })
+      store.getState().setRecord(3, { completed: true, created_at: "", id: 3, title: "C", updated_at: "" })
 
       expect(store.getState().completedCount()).toBe(2)
     })

@@ -1,0 +1,46 @@
+{
+  "root": true,
+  "extends": [
+    "hardcore",
+    "hardcore/ts",
+    "hardcore/react",
+    "hardcore/react-performance",
+    "hardcore/react-testing-library",
+    "../../eslint-hardcore-shared.cjs"
+  ],
+  "parserOptions": {
+    "project": "./tsconfig.eslint.json"
+  },
+  "env": {
+    "browser": true,
+    "es2022": true
+  },
+  "ignorePatterns": [
+    "dist/",
+    "coverage/",
+    "node_modules/"
+  ],
+  "overrides": [
+    {
+      "files": ["tsup.config.ts", "vitest.config.ts"],
+      "extends": ["hardcore/node"],
+      "env": {
+        "browser": false,
+        "node": true
+      },
+      "rules": {
+        "n/no-missing-import": "off",
+        "n/no-unpublished-import": "off",
+        "import/no-unresolved": "off",
+        "import/no-extraneous-dependencies": "off",
+        "strict": "off"
+      }
+    },
+    {
+      "files": ["**/*.{test,spec}.{ts,tsx}", "**/__tests__/**/*"],
+      "env": {
+        "jest": true
+      }
+    }
+  ]
+}

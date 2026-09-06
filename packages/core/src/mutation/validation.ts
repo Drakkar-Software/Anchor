@@ -1,3 +1,11 @@
+export type ValidationConfig<InsertRow = unknown, UpdateRow = unknown> = {
+  /** Validator for insert operations */
+  insert?: Validator<InsertRow>
+
+  /** Validator for update operations */
+  update?: Validator<UpdateRow>
+}
+
 /**
  * Validator function type — accepts data, returns true or array of error strings.
  * Compatible with Zod, Ajv, or any custom validator.
@@ -16,13 +24,6 @@ export class ValidationError extends Error {
   }
 }
 
-export type ValidationConfig<InsertRow = unknown, UpdateRow = unknown> = {
-  /** Validator for insert operations */
-  insert?: Validator<InsertRow>
-  /** Validator for update operations */
-  update?: Validator<UpdateRow>
-}
-
 /**
  * Run a validator and throw ValidationError on failure.
  */
@@ -31,8 +32,10 @@ export function runValidation<T>(
   data: T,
   _operation: string,
 ): void {
-  if (!validator) return
+  if (!validator) {return}
+
   const result = validator(data)
+
   if (result !== true) {
     throw new ValidationError(result)
   }
@@ -49,11 +52,13 @@ export function runValidation<T>(
  * ```
  */
 export function zodValidator<T>(schema: {
-  safeParse: (data: unknown) => { success: boolean; error?: { issues: Array<{ message: string }> } }
+  safeParse: (data: unknown) => { error?: { issues: { message: string }[] }; success: boolean; }
 }): Validator<T> {
   return (data: T) => {
     const result = schema.safeParse(data)
-    if (result.success) return true
+
+    if (result.success) {return true}
+
     return result.error?.issues.map((i) => i.message) ?? ["Validation failed"]
   }
 }

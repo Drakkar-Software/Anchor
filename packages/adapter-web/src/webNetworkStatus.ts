@@ -5,21 +5,21 @@ import type { NetworkStatusAdapter } from "@drakkar.software/anchor"
  */
 export class WebNetworkStatus implements NetworkStatusAdapter {
   isOnline(): boolean {
-    return typeof navigator !== "undefined" ? navigator.onLine : true
+    return typeof navigator === "undefined" ? true : navigator.onLine
   }
 
   subscribe(callback: (online: boolean) => void): () => void {
-    if (typeof window === "undefined") return () => {}
+    if (typeof globalThis === "undefined") {return () => {}}
 
-    const onOnline = () => callback(true)
-    const onOffline = () => callback(false)
+    const onOnline = () => { callback(true); }
+    const onOffline = () => { callback(false); }
 
-    window.addEventListener("online", onOnline)
-    window.addEventListener("offline", onOffline)
+    globalThis.addEventListener("online", onOnline)
+    globalThis.addEventListener("offline", onOffline)
 
     return () => {
-      window.removeEventListener("online", onOnline)
-      window.removeEventListener("offline", onOffline)
+      globalThis.removeEventListener("online", onOnline)
+      globalThis.removeEventListener("offline", onOffline)
     }
   }
 }

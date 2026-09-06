@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 
-import { describe, it, expect, beforeEach } from "vitest"
-import { render, screen, waitFor, act } from "@testing-library/react"
-import { createTableStore } from "../createTableStore.js"
+import { act,render, screen, waitFor } from "@testing-library/react"
+import { beforeEach,describe, expect, it } from "vitest"
+
 import { createMockSupabase } from "../__tests__/mockSupabase.js"
-import { useQuery } from "./useQuery.js"
+import { createTableStore } from "../createTableStore.js"
 import { eq } from "../query/filters.js"
+import { useQuery } from "./useQuery.js"
 
 /**
  * The first test in this package that renders a hook.
@@ -22,9 +23,9 @@ import { eq } from "../query/filters.js"
  */
 
 type Todo = {
+  completed: boolean
   id: number
   title: string
-  completed: boolean
 }
 
 describe("useQuery", () => {
@@ -33,9 +34,9 @@ describe("useQuery", () => {
   beforeEach(() => {
     supabase = createMockSupabase({
       todos: [
-        { id: 1, title: "Buy milk", completed: false },
-        { id: 2, title: "Walk dog", completed: true },
-        { id: 3, title: "Read book", completed: false },
+        { completed: false, id: 1, title: "Buy milk" },
+        { completed: true, id: 2, title: "Walk dog" },
+        { completed: false, id: 3, title: "Read book" },
       ],
     })
   })
@@ -48,8 +49,9 @@ describe("useQuery", () => {
     })
   }
 
-  function Rows({ store, options }: { store: any; options?: any }) {
-    const { data, isLoading, error, count } = useQuery<Todo, any, any>(store, options)
+  function Rows({ options, store }: { options?: any; store: any; }) {
+    const { count, data, error, isLoading } = useQuery<Todo, any, any>(store, options)
+
     return (
       <div>
         <span data-testid="loading">{String(isLoading)}</span>
@@ -65,7 +67,7 @@ describe("useQuery", () => {
   }
 
   const titles = () =>
-    Array.from(screen.getByTestId("rows").children).map((li) => li.textContent)
+    Array.from(screen.getByTestId("rows").children, (li) => li.textContent)
 
   it("fetches on mount and renders the rows", async () => {
     render(<Rows store={createStore()} />)
@@ -76,14 +78,14 @@ describe("useQuery", () => {
   })
 
   it("renders only the rows its own filters match", async () => {
-    render(<Rows store={createStore()} options={{ filters: [eq<Todo, "completed">("completed", false)] }} />)
+    render(<Rows options={{ filters: [eq<Todo, "completed">("completed", false)] }} store={createStore()} />)
 
     await waitFor(() => expect(titles()).toHaveLength(2))
     expect(titles()).toEqual(["Buy milk", "Read book"])
   })
 
   it("reports the error for this query, not a bare null", async () => {
-    supabase._setError("todos", "select", { message: "permission denied", code: "42501" })
+    supabase._setError("todos", "select", { code: "42501", message: "permission denied" })
 
     render(<Rows store={createStore()} />)
 
@@ -94,48 +96,54 @@ describe("useQuery", () => {
   })
 
   it("surfaces the count when the query asks for one", async () => {
-    render(<Rows store={createStore()} options={{ count: "exact", limit: 2 }} />)
+    render(<Rows options={{ count: "exact", limit: 2 }} store={createStore()} />)
 
     await waitFor(() => expect(screen.getByTestId("count").textContent).toBe("3"))
+
     // `count` is the total matched; `data` is the page.
     expect(titles()).toHaveLength(2)
   })
 
   it("does not fetch when disabled, and does once enabled", async () => {
     const store = createStore()
-    const { rerender } = render(<Rows store={store} options={{ enabled: false }} />)
+    const { rerender } = render(<Rows options={{ enabled: false }} store={store} />)
 
     // Nothing was requested, so nothing landed.
     await waitFor(() => expect(store.getState().queries.size).toBe(0))
     expect(titles()).toEqual([])
 
-    rerender(<Rows store={store} options={{ enabled: true }} />)
+    rerender(<Rows options={{ enabled: true }} store={store} />)
     await waitFor(() => expect(titles()).toHaveLength(3))
   })
 
   it("suppresses a refetch inside staleTime and allows one outside it", async () => {
     const store = createStore()
+
     let fetches = 0
+
     const realFetch = store.getState().fetch
+
     store.setState({
-      fetch: (opts?: any) => {
+      fetch: async (opts?: any) => {
         fetches++
-        return realFetch(opts)
+
+        return await realFetch(opts)
       },
     } as any)
 
-    const { unmount } = render(<Rows store={store} options={{ staleTime: 60_000 }} />)
+    const { unmount } = render(<Rows options={{ staleTime: 60_000 }} store={store} />)
+
     await waitFor(() => expect(fetches).toBe(1))
     unmount()
 
     // Remounting inside the window reuses the entry's lastFetchedAt.
-    render(<Rows store={store} options={{ staleTime: 60_000 }} />)
+    render(<Rows options={{ staleTime: 60_000 }} store={store} />)
     await waitFor(() => expect(titles()).toHaveLength(3))
     expect(fetches).toBe(1)
 
     // staleTime: 0 always refetches — the paired positive case, without which
     // "it did not fetch" would also pass against a hook that never fetches.
-    render(<Rows store={store} options={{ staleTime: 0 }} />)
+    render(<Rows options={{ staleTime: 0 }} store={store} />)
     await waitFor(() => expect(fetches).toBe(2))
   })
 
@@ -148,10 +156,10 @@ describe("useQuery", () => {
     render(
       <>
         <div data-testid="a">
-          <Rows store={store} options={{ filters: [eq<Todo, "completed">("completed", false)] }} />
+          <Rows options={{ filters: [eq<Todo, "completed">("completed", false)] }} store={store} />
         </div>
         <div data-testid="b">
-          <Rows store={store} options={{ filters: [eq<Todo, "completed">("completed", true)] }} />
+          <Rows options={{ filters: [eq<Todo, "completed">("completed", true)] }} store={store} />
         </div>
       </>,
     )
@@ -160,25 +168,30 @@ describe("useQuery", () => {
     // the fetch starts, so the size reaches 2 while both are still loading.
     await waitFor(() => {
       const lists = screen.getAllByTestId("rows")
+
       expect(lists[0]!.children).toHaveLength(2)
       expect(lists[1]!.children).toHaveLength(1)
     })
 
     expect(store.getState().queries.size).toBe(2)
+
     const lists = screen.getAllByTestId("rows")
-    expect(Array.from(lists[0]!.children).map((li) => li.textContent)).toEqual([
+
+    expect(Array.from(lists[0]!.children, (li) => li.textContent)).toEqual([
       "Buy milk",
       "Read book",
     ])
-    expect(Array.from(lists[1]!.children).map((li) => li.textContent)).toEqual(["Walk dog"])
+    expect(Array.from(lists[1]!.children, (li) => li.textContent)).toEqual(["Walk dog"])
   })
 
   it("releases the query on unmount, so refetch() does not replay it", async () => {
     const store = createStore()
     const { unmount } = render(<Rows store={store} />)
+
     await waitFor(() => expect(titles()).toHaveLength(3))
 
     const retainedWhileMounted = store.getState().queries.size
+
     expect(retainedWhileMounted).toBe(1)
 
     unmount()

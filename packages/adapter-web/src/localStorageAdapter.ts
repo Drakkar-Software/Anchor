@@ -7,9 +7,11 @@ export class LocalStorageAdapter implements PersistenceAdapter {
   async getItem<T>(key: string): Promise<T | null> {
     try {
       const raw = localStorage.getItem(key)
+
       return raw ? (JSON.parse(raw) as T) : null
-    } catch (err) {
-      console.warn(`[anchor:localStorage] Failed to parse data for key "${key}":`, err)
+    } catch (error) {
+      console.warn(`[anchor:localStorage] Failed to parse data for key "${key}":`, error)
+
       return null
     }
   }
@@ -17,9 +19,9 @@ export class LocalStorageAdapter implements PersistenceAdapter {
   async setItem<T>(key: string, value: T): Promise<void> {
     try {
       localStorage.setItem(key, JSON.stringify(value))
-    } catch (err) {
+    } catch (error) {
       throw new Error(
-        `Failed to persist data for key "${key}": ${err instanceof Error ? err.message : String(err)}. Consider using IndexedDBAdapter for larger datasets.`,
+        `Failed to persist data for key "${key}": ${error instanceof Error ? error.message : String(error)}. Consider using IndexedDBAdapter for larger datasets.`,
       )
     }
   }
@@ -32,9 +34,9 @@ export class LocalStorageAdapter implements PersistenceAdapter {
     for (const [key, value] of entries) {
       try {
         localStorage.setItem(key, JSON.stringify(value))
-      } catch (err) {
+      } catch (error) {
         throw new Error(
-          `Failed to persist data for key "${key}" during multiSet: ${err instanceof Error ? err.message : String(err)}. Consider using IndexedDBAdapter for larger datasets.`,
+          `Failed to persist data for key "${key}" during multiSet: ${error instanceof Error ? error.message : String(error)}. Consider using IndexedDBAdapter for larger datasets.`,
         )
       }
     }
@@ -42,16 +44,21 @@ export class LocalStorageAdapter implements PersistenceAdapter {
 
   async keys(prefix?: string): Promise<string[]> {
     const allKeys: string[] = []
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i)
-      if (key) allKeys.push(key)
+
+    for (let index = 0; index < localStorage.length; index++) {
+      const key = localStorage.key(index)
+
+      if (key) {allKeys.push(key)}
     }
-    if (!prefix) return allKeys
+
+    if (!prefix) {return allKeys}
+
     return allKeys.filter((k) => k.startsWith(prefix))
   }
 
   async clear(): Promise<void> {
     const zsKeys = await this.keys("anchor:")
+
     for (const key of zsKeys) {
       localStorage.removeItem(key)
     }

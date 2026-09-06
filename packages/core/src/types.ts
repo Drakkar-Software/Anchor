@@ -1,7 +1,24 @@
-import type { SupabaseClient } from "@supabase/supabase-js"
+import type { Session, SupabaseClient, User } from "@supabase/supabase-js"
 import type { StoreApi } from "zustand"
 
 // ─── Supabase Database Schema Extraction ─────────────────────────────
+
+// Controls how fetch() handles existing records.
+//  - "replace": Each fetch replaces all records (store is a window into the latest query)
+//  - "merge": Each fetch merges new records into existing ones (records accumulate,
+//    order reflects only the latest query) 
+export type CacheStrategy = "replace" | "merge"
+
+/** Extract Enum type */
+export type DatabaseEnum<
+  DB,
+  EnumName extends string,
+  SchemaName extends string & keyof DB = "public" & keyof DB,
+> = ExtractSchema<DB, SchemaName> extends { Enums: Record<string, unknown> }
+  ? ExtractSchema<DB, SchemaName>["Enums"] extends Record<EnumName, infer E>
+    ? E
+    : never
+  : never
 
 /** Extract the schema from a Database type */
 export type ExtractSchema<
@@ -13,38 +30,58 @@ export type ExtractSchema<
   ? DB[SchemaName]
   : never
 
-/** Extract table names from a schema */
-export type TableNames<
-  DB,
-  SchemaName extends string & keyof DB = "public" & keyof DB,
-> = string & keyof ExtractSchema<DB, SchemaName>["Tables"]
+export type FetchOptions<Row = Record<string, unknown>> = {
+  /** Override the store's default cache strategy for this fetch */
+  cacheStrategy?: CacheStrategy
+  count?: "exact" | "planned" | "estimated"
+  filters?: FilterDescriptor<Row>[]
+  limit?: number
+  offset?: number
 
-/**
- * Extract view names from a schema.
- *
- * A generated Supabase `Database` type keeps views in their own `Views` block,
- * so they are not reachable through `TableNames` at all. Resolves to `never`
- * for a schema with no views, which is what the generator emits as `Views: {}`.
- */
-export type ViewNames<
-  DB,
-  SchemaName extends string & keyof DB = "public" & keyof DB,
-> = ExtractSchema<DB, SchemaName> extends { Views: infer V }
-  ? string & keyof V
-  : never
+  /**
+   * Escape hatch: direct access to the PostgREST query builder. It arrives with
+   * `select`, the filters and the pagination already applied — but **not the
+   * sort**, which is the callback's own to set: `order` is the one PostgREST
+   * parameter that accumulates rather than overwrites, so pre-applying it would
+   * demote a `queryFn`'s `.order()` to a tiebreaker behind `defaultSort`.
+   *
+   * A `queryFn` passed here makes the fetch unkeyable — an opaque function
+   * cannot go in a value-based key — so the query reads the table's own loading
+   * and error flags instead of its own. Configure it once as the store's
+   * `defaultQueryFn` if it is a property of the source rather than of the query;
+   * that keeps per-query scoping, because the function is then the same for
+   * every query on the store and the rest of the options still identify them.
+   */
+  queryFn?: (builder: unknown) => unknown
+  select?: string
+  sort?: SortDescriptor<Row>[]
+}
 
-/** Extract the Row type for a specific view */
-export type ViewRow<
-  DB,
-  ViewName extends ViewNames<DB, SchemaName>,
-  SchemaName extends string & keyof DB = "public" & keyof DB,
-> = ExtractSchema<DB, SchemaName> extends { Views: infer V }
-  ? ViewName extends keyof V
-    ? V[ViewName] extends { Row: infer R }
-      ? R
-      : never
-    : never
-  : never
+export type FilterDescriptor<Row = Record<string, unknown>> = {
+  column: string & keyof Row
+  op: FilterOperator
+  value: unknown
+}
+
+export type FilterOperator =
+  | "eq"
+  | "neq"
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte"
+  | "like"
+  | "ilike"
+  | "is"
+  | "in"
+  | "contains"
+  | "containedBy"
+  | "overlaps"
+  | "textSearch"
+  | "match"
+  | "not"
+  | "or"
+  | "filter"
 
 /**
  * Extract Postgres function names from a schema.
@@ -61,6 +98,108 @@ export type FunctionNames<
 > = ExtractSchema<DB, SchemaName> extends { Functions: infer F }
   ? string & keyof F
   : never
+
+export type MutationId = string
+
+export type MutationOperation = "INSERT" | "UPDATE" | "UPSERT" | "DELETE"
+
+export type MutationStatus =
+  | "pending"
+  | "in_flight"
+  | "succeeded"
+  | "failed"
+  | "rolled_back"
+
+/**
+ * A row's identity, as a caller may pass it to `update`/`remove`/`fetchOne`/
+ * `setRecord`/`removeRecord`.
+ *
+ * `string | number` is the pre-encoded key every store keys `records` by
+ * (`encodeKey`'s own return type) — the only shape a single-column-PK table
+ * ever needs, and unchanged from before composite keys existed. A composite-PK
+ * table additionally accepts the plain `{ column: value, ... }` object a
+ * caller already has on hand (the row itself, or its primary-key columns
+ * picked off it) rather than making every call site import `encodeKey` to
+ * build the Map key by hand; each mutator normalizes it via `encodeKey`
+ * at the boundary, once.
+ */
+export type PrimaryKeyValue = string | number | Record<string, unknown>
+
+// ─── Record Metadata (optimistic tracking) ───────────────────────────
+
+/**
+ * What one query knows about itself.
+ *
+ * Metadata only — deliberately no row ids. A row that matches a query's filters
+ * locally cannot know which *page* of that query it belongs to, so an id list
+ * would be wrong as soon as `limit`/`offset` is involved; it would also need a
+ * client-side comparator to place optimistic rows, and would go stale on the
+ * offline queue's temp-id → server-id remap. Rows are read from `order`
+ * filtered by `matchRow` instead, and `order` is the one structure every writer
+ * in this package already maintains positionally.
+ */
+export type QueryEntry = {
+  /** Total matching rows, when the fetch asked for a count. */
+  count: number | null
+
+  /** The error THIS query got, if any. */
+  error: Error | null
+
+  /** Whether THIS query is fetching — not whether the table is. */
+  isLoading: boolean
+
+  /** When this query last succeeded, which is what `staleTime` gates on. */
+  lastFetchedAt: number | null
+}
+
+export type QueuedMutation = {
+  createdAt: number
+  dependsOn?: MutationId
+  id: MutationId
+  lastError?: string
+  operation: MutationOperation
+  payload: Record<string, unknown> | null
+  primaryKey: Record<string, unknown>
+  retryCount: number
+  rollbackSnapshot: Record<string, unknown> | null
+  status: MutationStatus
+  table: string
+
+  /**
+   * Carried for `UPSERT` only, so the replay writes the row the live call would
+   * have written. Dropping it here would reproduce the missing-`onConflict` bug
+   * **exclusively on the offline drain** — the one path with no user watching
+   * and no test unless it is written on purpose.
+   *
+   * Optional, so a queue persisted before this field existed rehydrates
+   * unchanged and replays with PostgREST's primary-key default, which is what
+   * it was enqueued under.
+   */
+  upsertOptions?: UpsertOptions
+
+  /** User who enqueued this mutation (for multi-user isolation) */
+  userId?: string
+}
+
+// ─── Realtime Event Types ────────────────────────────────────────────
+
+export type RealtimeEvent = "INSERT" | "UPDATE" | "DELETE" | "*"
+
+// ─── Cache Strategy ─────────────────────────────────────────────────
+
+export type RealtimeStatus =
+  | "disconnected"
+  | "connecting"
+  | "connected"
+  | "error"
+
+// ─── Filter & Query Types ────────────────────────────────────────────
+
+export type RecordMeta = {
+  _anchor_mutationId?: string
+  _anchor_optimistic?: boolean
+  _anchor_pending?: "insert" | "update" | "delete"
+}
 
 /** The argument object a Postgres function takes, from the generated types. */
 export type RpcArgs<
@@ -84,16 +223,11 @@ export type RpcReturns<
     : never
   : never
 
-/** Extract Row type for a specific table */
-export type TableRow<
-  DB,
-  TableName extends TableNames<DB, SchemaName>,
-  SchemaName extends string & keyof DB = "public" & keyof DB,
-> = ExtractSchema<DB, SchemaName>["Tables"][TableName] extends {
-  Row: infer R
+export type SortDescriptor<Row = Record<string, unknown>> = {
+  ascending?: boolean
+  column: string & keyof Row
+  nullsFirst?: boolean
 }
-  ? R
-  : never
 
 /** Extract Insert type for a specific table */
 export type TableInsert<
@@ -106,6 +240,131 @@ export type TableInsert<
   ? I
   : never
 
+// ─── Table Store State ───────────────────────────────────────────────
+
+/** Extract table names from a schema */
+export type TableNames<
+  DB,
+  SchemaName extends string & keyof DB = "public" & keyof DB,
+> = string & keyof ExtractSchema<DB, SchemaName>["Tables"]
+
+/** Extract Row type for a specific table */
+export type TableRow<
+  DB,
+  TableName extends TableNames<DB, SchemaName>,
+  SchemaName extends string & keyof DB = "public" & keyof DB,
+> = ExtractSchema<DB, SchemaName>["Tables"][TableName] extends {
+  Row: infer R
+}
+  ? R
+  : never
+
+/** Full store type = state + actions */
+export type TableStore<
+  Row,
+  InsertRow,
+  UpdateRow,
+> = TableStoreState<Row> & TableStoreActions<Row, InsertRow, UpdateRow>
+
+// ─── Table Store Actions ─────────────────────────────────────────────
+
+export type TableStoreActions<
+  Row,
+  InsertRow,
+  UpdateRow,
+> = {
+  clearAll: () => void
+  clearAndFetch: (options?: FetchOptions<Row>) => Promise<TrackedRow<Row>[]>
+
+  // Query
+  fetch: (options?: FetchOptions<Row>) => Promise<TrackedRow<Row>[]>
+  fetchOne: (id: PrimaryKeyValue) => Promise<TrackedRow<Row> | null>
+
+  // Queue
+  flushQueue: () => Promise<void>
+  getQueueSize: () => number
+
+  // Persistence
+  hydrate: () => Promise<void>
+
+  // Mutations
+  insert: (row: InsertRow) => Promise<TrackedRow<Row>>
+  insertMany: (rows: InsertRow[]) => Promise<TrackedRow<Row>[]>
+  mergeRecords: (rows: Row[]) => void
+  persist: () => Promise<void>
+
+  /** Replays every live query, not only the one that fetched last. */
+  refetch: () => Promise<TrackedRow<Row>[]>
+
+  releaseQuery: (options?: FetchOptions<Row>) => void
+  remove: (id: PrimaryKeyValue) => Promise<void>
+  removeRecord: (id: PrimaryKeyValue) => void
+  removeWhere: (filters: FilterDescriptor<Row>[]) => Promise<void>
+
+  /**
+   * The options `fetch` would actually use, with this store's `defaultFilters`,
+   * `defaultSort` and `defaultSelect` merged in.
+   *
+   * Public because a caller that wants to read one query's state has to key on
+   * the same thing `fetch` filed it under, and the store's defaults are closure
+   * variables it cannot see. `useQuery` uses it for exactly that.
+   */
+  resolveFetchOptions: (options?: FetchOptions<Row>) => FetchOptions<Row>
+
+  /**
+   * Declare that a caller is watching this query, and return its key.
+   *
+   * Only retained queries are replayed by `refetch()`. Without this the store
+   * cannot tell a screen that is on display from a filter combination someone
+   * typed once, and a foreground refresh fans out to all of them.
+   * `useQuery` retains on mount and releases on unmount; the two are
+   * refcounted, so React 18's double-invoked effects are harmless.
+   */
+  retainQuery: (options?: FetchOptions<Row>) => string
+
+  // Local-only (no remote call)
+  setRecord: (id: PrimaryKeyValue, row: TrackedRow<Row>) => void
+
+  // Realtime
+  subscribe: (filter?: FilterDescriptor<Row>[]) => () => void
+  unsubscribe: () => void
+
+  update: (
+    id: PrimaryKeyValue,
+    changes: UpdateRow,
+  ) => Promise<TrackedRow<Row>>
+  upsert: (row: InsertRow, options?: UpsertOptions) => Promise<TrackedRow<Row>>
+}
+
+export type TableStoreState<Row> = {
+  /** Error from the last operation on any query */
+  error: Error | null
+
+  /** Whether initial data has been hydrated from persistence */
+  isHydrated: boolean
+
+  /** Loading state for the table as a whole — whichever query fetched last */
+  isLoading: boolean
+
+  /** Whether the store is currently restoring from persistence (feedback loop prevention) */
+  isRestoring: boolean
+
+  /** Timestamp of last successful fetch */
+  lastFetchedAt: number | null
+
+  /** Ordered array of primary key values (preserves query ordering) */
+  order: (string | number)[]
+
+  /** Per-query state, keyed by `queryKey(options)`. See `QueryEntry`. */
+  queries: Map<string, QueryEntry>
+
+  /** Active realtime subscription status */
+  realtimeStatus: RealtimeStatus
+
+  /** Normalized record map keyed by primary key value */
+  records: Map<string | number, TrackedRow<Row>>
+}
+
 /** Extract Update type for a specific table */
 export type TableUpdate<
   DB,
@@ -117,73 +376,10 @@ export type TableUpdate<
   ? U
   : never
 
-/** Extract Enum type */
-export type DatabaseEnum<
-  DB,
-  EnumName extends string,
-  SchemaName extends string & keyof DB = "public" & keyof DB,
-> = ExtractSchema<DB, SchemaName> extends { Enums: Record<string, unknown> }
-  ? ExtractSchema<DB, SchemaName>["Enums"] extends Record<EnumName, infer E>
-    ? E
-    : never
-  : never
-
-// ─── Record Metadata (optimistic tracking) ───────────────────────────
-
-export type RecordMeta = {
-  _anchor_pending?: "insert" | "update" | "delete"
-  _anchor_optimistic?: boolean
-  _anchor_mutationId?: string
-}
+// ─── Mutation Queue Types ────────────────────────────────────────────
 
 /** A row with optional tracking metadata */
 export type TrackedRow<Row> = Row & Partial<RecordMeta>
-
-// ─── Realtime Event Types ────────────────────────────────────────────
-
-export type RealtimeEvent = "INSERT" | "UPDATE" | "DELETE" | "*"
-
-// ─── Cache Strategy ─────────────────────────────────────────────────
-
-/** Controls how fetch() handles existing records.
- *  - "replace": Each fetch replaces all records (store is a window into the latest query)
- *  - "merge": Each fetch merges new records into existing ones (records accumulate,
- *    order reflects only the latest query) */
-export type CacheStrategy = "replace" | "merge"
-
-// ─── Filter & Query Types ────────────────────────────────────────────
-
-export type FilterOperator =
-  | "eq"
-  | "neq"
-  | "gt"
-  | "gte"
-  | "lt"
-  | "lte"
-  | "like"
-  | "ilike"
-  | "is"
-  | "in"
-  | "contains"
-  | "containedBy"
-  | "overlaps"
-  | "textSearch"
-  | "match"
-  | "not"
-  | "or"
-  | "filter"
-
-export type FilterDescriptor<Row = Record<string, unknown>> = {
-  column: string & keyof Row
-  op: FilterOperator
-  value: unknown
-}
-
-export type SortDescriptor<Row = Record<string, unknown>> = {
-  column: string & keyof Row
-  ascending?: boolean
-  nullsFirst?: boolean
-}
 
 /**
  * Which row an `upsert` writes.
@@ -212,218 +408,43 @@ export type SortDescriptor<Row = Record<string, unknown>> = {
  * success, not a failure to roll back.
  */
 export type UpsertOptions = {
-  /** Comma-separated columns of the unique constraint to conflict on. */
-  onConflict?: string
   /**
    * `ON CONFLICT DO NOTHING` instead of `DO UPDATE`. See this type's own
    * docblock for why this is the one option a no-`update`-grant join table
    * needs, and what a resolved conflict returns when set.
    */
   ignoreDuplicates?: boolean
-}
 
-export type FetchOptions<Row = Record<string, unknown>> = {
-  filters?: FilterDescriptor<Row>[]
-  sort?: SortDescriptor<Row>[]
-  limit?: number
-  offset?: number
-  select?: string
-  count?: "exact" | "planned" | "estimated"
-  /**
-   * Escape hatch: direct access to the PostgREST query builder. It arrives with
-   * `select`, the filters and the pagination already applied — but **not the
-   * sort**, which is the callback's own to set: `order` is the one PostgREST
-   * parameter that accumulates rather than overwrites, so pre-applying it would
-   * demote a `queryFn`'s `.order()` to a tiebreaker behind `defaultSort`.
-   *
-   * A `queryFn` passed here makes the fetch unkeyable — an opaque function
-   * cannot go in a value-based key — so the query reads the table's own loading
-   * and error flags instead of its own. Configure it once as the store's
-   * `defaultQueryFn` if it is a property of the source rather than of the query;
-   * that keeps per-query scoping, because the function is then the same for
-   * every query on the store and the rest of the options still identify them.
-   */
-  queryFn?: (builder: unknown) => unknown
-  /** Override the store's default cache strategy for this fetch */
-  cacheStrategy?: CacheStrategy
+  /** Comma-separated columns of the unique constraint to conflict on. */
+  onConflict?: string
 }
-
-// ─── Table Store State ───────────────────────────────────────────────
 
 /**
- * What one query knows about itself.
+ * Extract view names from a schema.
  *
- * Metadata only — deliberately no row ids. A row that matches a query's filters
- * locally cannot know which *page* of that query it belongs to, so an id list
- * would be wrong as soon as `limit`/`offset` is involved; it would also need a
- * client-side comparator to place optimistic rows, and would go stale on the
- * offline queue's temp-id → server-id remap. Rows are read from `order`
- * filtered by `matchRow` instead, and `order` is the one structure every writer
- * in this package already maintains positionally.
+ * A generated Supabase `Database` type keeps views in their own `Views` block,
+ * so they are not reachable through `TableNames` at all. Resolves to `never`
+ * for a schema with no views, which is what the generator emits as `Views: {}`.
  */
-export type QueryEntry = {
-  /** Total matching rows, when the fetch asked for a count. */
-  count: number | null
-  /** Whether THIS query is fetching — not whether the table is. */
-  isLoading: boolean
-  /** The error THIS query got, if any. */
-  error: Error | null
-  /** When this query last succeeded, which is what `staleTime` gates on. */
-  lastFetchedAt: number | null
-}
+export type ViewNames<
+  DB,
+  SchemaName extends string & keyof DB = "public" & keyof DB,
+> = ExtractSchema<DB, SchemaName> extends { Views: infer V }
+  ? string & keyof V
+  : never
 
-export type TableStoreState<Row> = {
-  /** Normalized record map keyed by primary key value */
-  records: Map<string | number, TrackedRow<Row>>
-  /** Ordered array of primary key values (preserves query ordering) */
-  order: (string | number)[]
-  /** Per-query state, keyed by `queryKey(options)`. See `QueryEntry`. */
-  queries: Map<string, QueryEntry>
-  /** Loading state for the table as a whole — whichever query fetched last */
-  isLoading: boolean
-  /** Error from the last operation on any query */
-  error: Error | null
-  /** Whether initial data has been hydrated from persistence */
-  isHydrated: boolean
-  /** Whether the store is currently restoring from persistence (feedback loop prevention) */
-  isRestoring: boolean
-  /** Timestamp of last successful fetch */
-  lastFetchedAt: number | null
-  /** Active realtime subscription status */
-  realtimeStatus: RealtimeStatus
-}
-
-export type RealtimeStatus =
-  | "disconnected"
-  | "connecting"
-  | "connected"
-  | "error"
-
-// ─── Table Store Actions ─────────────────────────────────────────────
-
-/**
- * A row's identity, as a caller may pass it to `update`/`remove`/`fetchOne`/
- * `setRecord`/`removeRecord`.
- *
- * `string | number` is the pre-encoded key every store keys `records` by
- * (`encodeKey`'s own return type) — the only shape a single-column-PK table
- * ever needs, and unchanged from before composite keys existed. A composite-PK
- * table additionally accepts the plain `{ column: value, ... }` object a
- * caller already has on hand (the row itself, or its primary-key columns
- * picked off it) rather than making every call site import `encodeKey` to
- * build the Map key by hand; each mutator normalizes it via `encodeKey`
- * at the boundary, once.
- */
-export type PrimaryKeyValue = string | number | Record<string, unknown>
-
-export type TableStoreActions<
-  Row,
-  InsertRow,
-  UpdateRow,
-> = {
-  // Query
-  fetch: (options?: FetchOptions<Row>) => Promise<TrackedRow<Row>[]>
-  fetchOne: (id: PrimaryKeyValue) => Promise<TrackedRow<Row> | null>
-  /** Replays every live query, not only the one that fetched last. */
-  refetch: () => Promise<TrackedRow<Row>[]>
-  /**
-   * The options `fetch` would actually use, with this store's `defaultFilters`,
-   * `defaultSort` and `defaultSelect` merged in.
-   *
-   * Public because a caller that wants to read one query's state has to key on
-   * the same thing `fetch` filed it under, and the store's defaults are closure
-   * variables it cannot see. `useQuery` uses it for exactly that.
-   */
-  resolveFetchOptions: (options?: FetchOptions<Row>) => FetchOptions<Row>
-  /**
-   * Declare that a caller is watching this query, and return its key.
-   *
-   * Only retained queries are replayed by `refetch()`. Without this the store
-   * cannot tell a screen that is on display from a filter combination someone
-   * typed once, and a foreground refresh fans out to all of them.
-   * `useQuery` retains on mount and releases on unmount; the two are
-   * refcounted, so React 18's double-invoked effects are harmless.
-   */
-  retainQuery: (options?: FetchOptions<Row>) => string
-  releaseQuery: (options?: FetchOptions<Row>) => void
-
-  // Mutations
-  insert: (row: InsertRow) => Promise<TrackedRow<Row>>
-  insertMany: (rows: InsertRow[]) => Promise<TrackedRow<Row>[]>
-  update: (
-    id: PrimaryKeyValue,
-    changes: UpdateRow,
-  ) => Promise<TrackedRow<Row>>
-  upsert: (row: InsertRow, options?: UpsertOptions) => Promise<TrackedRow<Row>>
-  remove: (id: PrimaryKeyValue) => Promise<void>
-  removeWhere: (filters: FilterDescriptor<Row>[]) => Promise<void>
-
-  // Local-only (no remote call)
-  setRecord: (id: PrimaryKeyValue, row: TrackedRow<Row>) => void
-  removeRecord: (id: PrimaryKeyValue) => void
-  clearAll: () => void
-  mergeRecords: (rows: Row[]) => void
-  clearAndFetch: (options?: FetchOptions<Row>) => Promise<TrackedRow<Row>[]>
-
-  // Realtime
-  subscribe: (filter?: FilterDescriptor<Row>[]) => () => void
-  unsubscribe: () => void
-
-  // Persistence
-  hydrate: () => Promise<void>
-  persist: () => Promise<void>
-
-  // Queue
-  flushQueue: () => Promise<void>
-  getQueueSize: () => number
-}
-
-/** Full store type = state + actions */
-export type TableStore<
-  Row,
-  InsertRow,
-  UpdateRow,
-> = TableStoreState<Row> & TableStoreActions<Row, InsertRow, UpdateRow>
-
-// ─── Mutation Queue Types ────────────────────────────────────────────
-
-export type MutationId = string
-
-export type MutationOperation = "INSERT" | "UPDATE" | "UPSERT" | "DELETE"
-
-export type MutationStatus =
-  | "pending"
-  | "in_flight"
-  | "succeeded"
-  | "failed"
-  | "rolled_back"
-
-export type QueuedMutation = {
-  id: MutationId
-  table: string
-  operation: MutationOperation
-  payload: Record<string, unknown> | null
-  primaryKey: Record<string, unknown>
-  dependsOn?: MutationId
-  createdAt: number
-  status: MutationStatus
-  retryCount: number
-  lastError?: string
-  rollbackSnapshot: Record<string, unknown> | null
-  /** User who enqueued this mutation (for multi-user isolation) */
-  userId?: string
-  /**
-   * Carried for `UPSERT` only, so the replay writes the row the live call would
-   * have written. Dropping it here would reproduce the missing-`onConflict` bug
-   * **exclusively on the offline drain** — the one path with no user watching
-   * and no test unless it is written on purpose.
-   *
-   * Optional, so a queue persisted before this field existed rehydrates
-   * unchanged and replays with PostgREST's primary-key default, which is what
-   * it was enqueued under.
-   */
-  upsertOptions?: UpsertOptions
-}
+/** Extract the Row type for a specific view */
+export type ViewRow<
+  DB,
+  ViewName extends ViewNames<DB, SchemaName>,
+  SchemaName extends string & keyof DB = "public" & keyof DB,
+> = ExtractSchema<DB, SchemaName> extends { Views: infer V }
+  ? ViewName extends keyof V
+    ? V[ViewName] extends { Row: infer R }
+      ? R
+      : never
+    : never
+  : never
 
 // ─── Identifiers ─────────────────────────────────────────────────────
 
@@ -450,128 +471,23 @@ export function randomId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID()
   }
+
   const hex = () => Math.floor(Math.random() * 16).toString(16)
   const s = (n: number) => Array.from({ length: n }, hex).join("")
+
   return `${s(8)}-${s(4)}-4${s(3)}-${s(4)}-${s(12)}`
 }
 
 // ─── Temp ID Management ──────────────────────────────────────────────
 
-export const TEMP_ID_PREFIX = "_temp:" as const
-
-export function createTempId(): string {
-  return `${TEMP_ID_PREFIX}${randomId()}`
-}
-
-export function isTempId(id: unknown): boolean {
-  return typeof id === "string" && id.startsWith(TEMP_ID_PREFIX)
-}
-
-// ─── Row Status Helpers ─────────────────────────────────────────────
-
-/** Returns true if the row has a pending optimistic mutation. */
-export function isPending<Row extends Partial<RecordMeta>>(row: Row): boolean {
-  return row._anchor_pending != null
-}
-
-/** Returns the pending mutation type, or null if the row is confirmed. */
-export function getPendingStatus<Row extends Partial<RecordMeta>>(
-  row: Row,
-): "insert" | "update" | "delete" | null {
-  return row._anchor_pending ?? null
-}
-
-// ─── Persistence Adapter ─────────────────────────────────────────────
-
-export interface PersistenceAdapter {
-  getItem<T>(key: string): Promise<T | null>
-  setItem<T>(key: string, value: T): Promise<void>
-  removeItem(key: string): Promise<void>
-  multiSet?(entries: [string, unknown][]): Promise<void>
-  keys?(prefix?: string): Promise<string[]>
-  clear?(): Promise<void>
-}
-
-// ─── Network Status Adapter ──────────────────────────────────────────
-
-export interface NetworkStatusAdapter {
-  isOnline(): boolean
-  subscribe(callback: (online: boolean) => void): () => void
-}
-
-// ─── App Lifecycle Adapter ──────────────────────────────────────────
+export const TEMP_ID_PREFIX = "_temp:"
 
 export interface AppLifecycleAdapter {
-  onForeground(cb: () => void): () => void
-  onBackground(cb: () => void): () => void
-}
-
-// ─── Background Task Adapter ────────────────────────────────────────
-
-export interface BackgroundTaskAdapter {
-  register(taskName: string, handler: () => Promise<void>): Promise<void>
-  unregister(taskName: string): Promise<void>
-  isRegistered(taskName: string): Promise<boolean>
-}
-
-// ─── Conflict Resolution ─────────────────────────────────────────────
-
-export type ConflictStrategy =
-  | "server-wins"
-  | "client-wins"
-  | "last-write-wins"
-  | "field-merge"
-  | "custom"
-
-export type ConflictResolver<Row = Record<string, unknown>> = (
-  local: TrackedRow<Row>,
-  remote: Row,
-  context: ConflictContext,
-) => Row | null
-
-export type ConflictContext = {
-  table: string
-  primaryKey: Record<string, unknown>
-  hasPendingMutations: boolean
-  pendingMutations: QueuedMutation[]
-}
-
-export type ConflictConfig<Row = Record<string, unknown>> = {
-  strategy?: ConflictStrategy
-  resolver?: ConflictResolver<Row>
-  timestampColumn?: string
-  serverOwnedFields?: string[]
-  clientOwnedFields?: string[]
-}
-
-// ─── Auth Store Types ────────────────────────────────────────────────
-
-export type AuthState = {
-  session: import("@supabase/supabase-js").Session | null
-  user: import("@supabase/supabase-js").User | null
-  isLoading: boolean
-  error: Error | null
-  /** Parsed custom claims from the JWT access token */
-  claims: Record<string, unknown>
+  onBackground: (cb: () => void) => () => void
+  onForeground: (cb: () => void) => () => void
 }
 
 export type AuthActions = {
-  initialize: () => Promise<void>
-  signIn: (credentials: {
-    email: string
-    password: string
-  }) => Promise<void>
-  signUp: (credentials: {
-    email: string
-    password: string
-  }) => Promise<void>
-  signOut: () => Promise<void>
-  signInWithOAuth: (options: {
-    provider: string
-    redirectTo?: string
-  }) => Promise<void>
-  refreshSession: () => Promise<void>
-  onAuthStateChange: () => () => void
   /**
    * Read a claim from the locally decoded access token. **Unverified** — the
    * payload is base64-decoded, not signature-checked. Fine for deciding what to
@@ -580,6 +496,7 @@ export type AuthActions = {
    * has to be enforced.
    */
   getClaim: (key: string) => unknown
+
   /**
    * Claims verified against the project's JWKS, via `supabase.auth.getClaims()`.
    *
@@ -590,11 +507,80 @@ export type AuthActions = {
     claims: Record<string, unknown> | null
     error: Error | null
   }>
+  initialize: () => Promise<void>
+  onAuthStateChange: () => () => void
+  refreshSession: () => Promise<void>
+  signIn: (credentials: {
+    email: string
+    password: string
+  }) => Promise<void>
+  signInWithOAuth: (options: {
+    provider: string
+    redirectTo?: string
+  }) => Promise<void>
+  signOut: () => Promise<void>
+  signUp: (credentials: {
+    email: string
+    password: string
+  }) => Promise<void>
+}
+
+// ─── Row Status Helpers ─────────────────────────────────────────────
+
+export type AuthState = {
+  /** Parsed custom claims from the JWT access token */
+  claims: Record<string, unknown>
+  error: Error | null
+  isLoading: boolean
+  session: Session | null
+  user: User | null
 }
 
 export type AuthStore = AuthState & AuthActions
 
-// ─── Hydration Types ─────────────────────────────────────────────────
+// ─── Persistence Adapter ─────────────────────────────────────────────
+
+export interface BackgroundTaskAdapter {
+  isRegistered: (taskName: string) => Promise<boolean>
+  register: (taskName: string, handler: () => Promise<void>) => Promise<void>
+  unregister: (taskName: string) => Promise<void>
+}
+
+// ─── Network Status Adapter ──────────────────────────────────────────
+
+export type ConflictConfig<Row = Record<string, unknown>> = {
+  clientOwnedFields?: string[]
+  resolver?: ConflictResolver<Row>
+  serverOwnedFields?: string[]
+  strategy?: ConflictStrategy
+  timestampColumn?: string
+}
+
+// ─── App Lifecycle Adapter ──────────────────────────────────────────
+
+export type ConflictContext = {
+  hasPendingMutations: boolean
+  pendingMutations: QueuedMutation[]
+  primaryKey: Record<string, unknown>
+  table: string
+}
+
+// ─── Background Task Adapter ────────────────────────────────────────
+
+export type ConflictResolver<Row = Record<string, unknown>> = (
+  local: TrackedRow<Row>,
+  remote: Row,
+  context: ConflictContext,
+) => Row | null
+
+// ─── Conflict Resolution ─────────────────────────────────────────────
+
+export type ConflictStrategy =
+  | "server-wins"
+  | "client-wins"
+  | "last-write-wins"
+  | "field-merge"
+  | "custom"
 
 export type HydrationPhase =
   | "idle"
@@ -606,15 +592,29 @@ export type HydrationPhase =
   | "ready"
   | "error"
 
-// ─── Sync Logger ─────────────────────────────────────────────────────
+export interface NetworkStatusAdapter {
+  isOnline: () => boolean
+  subscribe: (callback: (online: boolean) => void) => () => void
+}
+
+export interface PersistenceAdapter {
+  clear?: () => Promise<void>
+  getItem: <T>(key: string) => Promise<T | null>
+  keys?: (prefix?: string) => Promise<string[]>
+  multiSet?: (entries: [string, unknown][]) => Promise<void>
+  removeItem: (key: string) => Promise<void>
+  setItem: <T>(key: string, value: T) => Promise<void>
+}
+
+// ─── Auth Store Types ────────────────────────────────────────────────
 
 export interface SyncLogger {
-  fetchStart(table: string): void
-  fetchSuccess(table: string, count: number, durationMs: number): void
-  fetchError(table: string, error: string): void
-  mutationStart(table: string, operation: MutationOperation): void
-  mutationSuccess(table: string, operation: MutationOperation, durationMs: number): void
-  mutationError(table: string, operation: MutationOperation, error: string): void
+  conflict: (table: string, id: string | number) => void
+  fetchError: (table: string, error: string) => void
+  fetchStart: (table: string) => void
+  fetchSuccess: (table: string, count: number, durationMs: number) => void
+  mutationError: (table: string, operation: MutationOperation, error: string) => void
+
   /**
    * A write that could not reach the server and was queued instead.
    *
@@ -622,11 +622,13 @@ export interface SyncLogger {
    * Without it a queued write logs `mutationStart` and then nothing at all —
    * indistinguishable in a log from one that hung.
    */
-  mutationQueued?(table: string, operation: MutationOperation): void
-  queueFlushStart(count: number): void
-  queueFlushSuccess(succeeded: number, failed: number): void
-  conflict(table: string, id: string | number): void
-  realtimeEvent(table: string, event: string): void
+  mutationQueued?: (table: string, operation: MutationOperation) => void
+
+  mutationStart: (table: string, operation: MutationOperation) => void
+  mutationSuccess: (table: string, operation: MutationOperation, durationMs: number) => void
+  queueFlushStart: (count: number) => void
+  queueFlushSuccess: (succeeded: number, failed: number) => void
+
   /**
    * A channel that failed, timed out or closed.
    *
@@ -635,218 +637,130 @@ export interface SyncLogger {
    * with no way to find out why. Optional, so every logger written against this
    * interface keeps compiling.
    */
-  realtimeError?(table: string, status: string, error?: Error): void
+  realtimeError?: (table: string, status: string, error?: Error) => void
+
+  realtimeEvent: (table: string, event: string) => void
+}
+
+export function createTempId(): string {
+  return `${TEMP_ID_PREFIX}${randomId()}`
+}
+
+/** Returns the pending mutation type, or null if the row is confirmed. */
+export function getPendingStatus<Row extends Partial<RecordMeta>>(
+  row: Row,
+): "insert" | "update" | "delete" | null {
+  return row._anchor_pending ?? null
+}
+
+// ─── Hydration Types ─────────────────────────────────────────────────
+
+/** Returns true if the row has a pending optimistic mutation. */
+export function isPending<Row extends Partial<RecordMeta>>(row: Row): boolean {
+  return row._anchor_pending != null
+}
+
+// ─── Sync Logger ─────────────────────────────────────────────────────
+
+export function isTempId(id: unknown): boolean {
+  return typeof id === "string" && id.startsWith(TEMP_ID_PREFIX)
 }
 
 export const noopLogger: SyncLogger = {
+  conflict() {},
+  fetchError() {},
   fetchStart() {},
   fetchSuccess() {},
-  fetchError() {},
-  mutationStart() {},
-  mutationSuccess() {},
   mutationError() {},
   mutationQueued() {},
+  mutationStart() {},
+  mutationSuccess() {},
   queueFlushStart() {},
   queueFlushSuccess() {},
-  conflict() {},
-  realtimeEvent() {},
   realtimeError() {},
+  realtimeEvent() {},
 }
 
 export const consoleLogger: SyncLogger = {
-  fetchStart(table) {
-    console.log(`[anchor:${table}] fetch start`)
+  conflict(table, id) {
+    console.warn(`[anchor:${table}] conflict on row ${id}`)
   },
-  fetchSuccess(table, count, ms) {
-    console.log(`[anchor:${table}] fetch success: ${count} rows in ${ms}ms`)
-  },
+
   fetchError(table, error) {
     console.error(`[anchor:${table}] fetch error: ${error}`)
   },
-  mutationStart(table, op) {
-    console.log(`[anchor:${table}] ${op} start`)
+
+  fetchStart(table) {
+    console.log(`[anchor:${table}] fetch start`)
   },
-  mutationSuccess(table, op, ms) {
-    console.log(`[anchor:${table}] ${op} success in ${ms}ms`)
+
+  fetchSuccess(table, count, ms) {
+    console.log(`[anchor:${table}] fetch success: ${count} rows in ${ms}ms`)
   },
+
   mutationError(table, op, error) {
     console.error(`[anchor:${table}] ${op} error: ${error}`)
   },
+
   mutationQueued(table, op) {
     console.log(`[anchor:${table}] ${op} queued — server unreachable`)
   },
+
+  mutationStart(table, op) {
+    console.log(`[anchor:${table}] ${op} start`)
+  },
+
+  mutationSuccess(table, op, ms) {
+    console.log(`[anchor:${table}] ${op} success in ${ms}ms`)
+  },
+
   queueFlushStart(count) {
     console.log(`[anchor:queue] flush start: ${count} mutations`)
   },
+
   queueFlushSuccess(succeeded, failed) {
     console.log(
       `[anchor:queue] flush done: ${succeeded} succeeded, ${failed} failed`,
     )
   },
-  conflict(table, id) {
-    console.warn(`[anchor:${table}] conflict on row ${id}`)
-  },
-  realtimeEvent(table, event) {
-    console.log(`[anchor:${table}] realtime ${event}`)
-  },
+
   realtimeError(table, status, error) {
     console.error(`[anchor:${table}] realtime ${status}`, error ?? "")
+  },
+
+  realtimeEvent(table, event) {
+    console.log(`[anchor:${table}] realtime ${event}`)
   },
 }
 
 // ─── Store Factory Options ───────────────────────────────────────────
 
-export type CreateTableStoreOptions<
-  DB,
-  Row,
-  InsertRow,
-  UpdateRow,
-  Extensions extends Record<string, unknown> = Record<string, never>,
-> = {
-  supabase: SupabaseClient<DB>
-  table: string
-  schema?: string
-  primaryKey?: string | string[]
-
-  // Query defaults
-  defaultFilters?: FilterDescriptor<Row>[]
-  defaultSort?: SortDescriptor<Row>[]
-  defaultSelect?: string
-  /**
-   * Applied to every fetch that does not pass its own `queryFn`, for a source
-   * that always needs the escape hatch: a PostgREST modifier the filter DSL has
-   * no word for. Unlike a per-call `queryFn`, this one does not make queries
-   * unkeyable — it is the same function for all of them, so
-   * `filters`/`sort`/`select`/`limit`/`offset` still tell them apart and each
-   * keeps its own loading state, error and count.
-   *
-   * **It must not change the shape of a row.** Only `fetch` goes through it:
-   * `fetchOne` reads by primary key through its own builder, and each of the six
-   * mutations reads its row back with `defaultSelect`, and all of them write into
-   * the same `records` map every query then projects. A function that widens the
-   * row — an embed, an extra column — therefore holds two shapes in one store,
-   * and the narrow one is whatever the user just created or opened by id. Row
-   * shape belongs to `defaultSelect`, which every one of those paths honours.
-   */
-  defaultQueryFn?: (builder: unknown) => unknown
-
-  // Cache strategy
-  cacheStrategy?: CacheStrategy
-
-  // Persistence
-  persistence?: {
-    adapter: PersistenceAdapter
-    key?: string
-  }
-
-  // Offline queue
-  offlineQueue?: {
-    enabled?: boolean
-    maxRetries?: number
-    flushDebounceMs?: number
-    /** See `CreateSupabaseStoresOptions.offlineQueue.queueWrites`. */
-    queueWrites?: boolean
-  }
-
-  // Network
-  network?: NetworkStatusAdapter
-
-  // Realtime
-  realtime?: {
-    enabled?: boolean
-    events?: RealtimeEvent[]
-    filter?: string | FilterDescriptor<Row>[]
-    /** Restrict the postgres_changes payload to these columns. Must include the table's primary key. */
-    select?: string[]
-  }
-
-  // Conflict
-  conflict?: ConflictConfig<Row>
-
-  // Middleware
-  /** Pass the `immer` middleware from `zustand/middleware/immer` to enable draft-based mutations */
-  immer?: (config: any) => any
-  devtools?: boolean | { name?: string }
-
-  // Validation
-  validate?: {
-    insert?: (data: InsertRow) => true | string[]
-    update?: (data: UpdateRow) => true | string[]
-  }
-
-  // Logger
-  logger?: SyncLogger
-
-  // View mode (disables mutations)
-  isView?: boolean
-
-  // Cross-tab sync
-  crossTab?: { enabled?: boolean; name?: string; sessionId?: string }
-
-  /** @internal Used by createSupabaseStores to inject shared queue */
-  _queue?: unknown
-
-  /**
-   * @internal Used by createSupabaseStores to inject the shared RealtimeManager.
-   *
-   * Without it `store.subscribe()` has nothing to subscribe *with*: one channel
-   * per table is the manager's job, and a store opening its own would duplicate
-   * the ones `createSupabaseStores` already opened.
-   */
-  _realtimeManager?: unknown
-
-  // Extension
-  extend?: (
-    set: StoreApi<TableStore<Row, InsertRow, UpdateRow>>["setState"],
-    get: StoreApi<TableStore<Row, InsertRow, UpdateRow>>["getState"],
-    store: StoreApi<TableStore<Row, InsertRow, UpdateRow>>,
-    supabase: SupabaseClient<DB>,
-  ) => Extensions
-}
-
-// ─── Bulk Factory Options ────────────────────────────────────────────
-
 export type CreateSupabaseStoresOptions<
   DB,
   SchemaName extends string & keyof DB = "public" & keyof DB,
 > = {
-  supabase: SupabaseClient<DB>
-  schema?: SchemaName
-  tables: TableNames<DB, SchemaName>[]
-  /**
-   * Views to back with a read-only store.
-   *
-   * A view is the route to a join here: `records` is keyed on a primary key and
-   * realtime writes the flat `postgres_changes` payload into it, so an embedded
-   * child collection is dropped by the first event after a fetch. A view is
-   * flat, so it survives.
-   *
-   * They get the same store, persistence and auth-gate wiring as a table, minus
-   * the two things that cannot apply: no offline-queue executor (a view is not
-   * writable) and no realtime subscription (Postgres publishes changes under
-   * the underlying TABLE's name, never the view's — subscribing to the view
-   * would register a channel that never fires). A view whose freshness matters
-   * needs a refetch trigger of its own.
-   */
-  views?: ViewNames<DB, SchemaName>[]
+  // Auth
+  auth?: boolean
 
-  // Global defaults
-  persistence?: {
-    adapter: PersistenceAdapter
-    /**
-     * Prepended to every table/view's own persistence key
-     * (`anchor:${schema}:${table}` by default, from `createTableStore`).
-     *
-     * Without this, `createSupabaseStores` had no way to namespace a shared
-     * `adapter` at all — `createTableStore`'s own `persistence.key` exists
-     * one level down, but the bulk factory never exposed an equivalent, so a
-     * caller wanting one (key rotation, multi-tenant namespacing on a shared
-     * `localStorage`/`AsyncStorage`) had to reach below `createSupabaseStores`
-     * entirely and hand-wrap the adapter itself.
-     */
-    keyPrefix?: string
+  /** Options forwarded to the internal auth gate (only used when auth is true) */
+  authGate?: {
+    /** Clear all table stores on sign-out (defaults to true) */
+    clearOnSignOut?: boolean
+
+    /** Refetch all table stores on sign-in (defaults to true) */
+    refetchOnSignIn?: boolean
   }
+  cacheStrategy?: CacheStrategy
+  conflict?: ConflictConfig
+
+  devtools?: boolean
+  fetchRemoteOnBoot?: boolean
+
+  /** Pass the `immer` middleware from `zustand/middleware/immer` */
+  immer?: (config: any) => any
+  logger?: SyncLogger
   network?: NetworkStatusAdapter
+
   /**
    * The shared mutation queue.
    *
@@ -899,40 +813,60 @@ export type CreateSupabaseStoresOptions<
    * a read, not a reason to roll anything back.
    */
   offlineQueue?: {
-    queueWrites?: boolean
-    maxRetries?: number
     flushDebounceMs?: number
+    maxRetries?: number
+    queueWrites?: boolean
+  }
+
+  // Global defaults
+  persistence?: {
+    adapter: PersistenceAdapter
+
+    /**
+     * Prepended to every table/view's own persistence key
+     * (`anchor:${schema}:${table}` by default, from `createTableStore`).
+     *
+     * Without this, `createSupabaseStores` had no way to namespace a shared
+     * `adapter` at all — `createTableStore`'s own `persistence.key` exists
+     * one level down, but the bulk factory never exposed an equivalent, so a
+     * caller wanting one (key rotation, multi-tenant namespacing on a shared
+     * `localStorage`/`AsyncStorage`) had to reach below `createSupabaseStores`
+     * entirely and hand-wrap the adapter itself.
+     */
+    keyPrefix?: string
   }
   realtime?: { enabled?: boolean }
-  conflict?: ConflictConfig
-  cacheStrategy?: CacheStrategy
-  /** Pass the `immer` middleware from `zustand/middleware/immer` */
-  immer?: (config: any) => any
-  devtools?: boolean
-  logger?: SyncLogger
+  schema?: SchemaName
+
+  supabase: SupabaseClient<DB>
 
   // Per-table overrides
   tableOptions?: Partial<
     Record<
       TableNames<DB, SchemaName>,
       {
-        primaryKey?: string | string[]
+        cacheStrategy?: CacheStrategy
+        conflict?: ConflictConfig
         defaultFilters?: FilterDescriptor[]
-        defaultSort?: SortDescriptor[]
-        defaultSelect?: string
         defaultQueryFn?: (builder: unknown) => unknown
+        defaultSelect?: string
+        defaultSort?: SortDescriptor[]
+        primaryKey?: string | string[]
         realtime?: {
           enabled?: boolean
           events?: RealtimeEvent[]
           filter?: string | FilterDescriptor[]
+
           /** Restrict the postgres_changes payload to these columns. Must include the table's primary key. */
           select?: string[]
         }
-        conflict?: ConflictConfig
-        cacheStrategy?: CacheStrategy
       }
     >
   >
+
+  // Hydration
+  tableOrder?: TableNames<DB, SchemaName>[]
+  tables: TableNames<DB, SchemaName>[]
 
   /**
    * Per-view overrides. The five keys that mean anything for a read-only
@@ -953,28 +887,149 @@ export type CreateSupabaseStoresOptions<
     Record<
       ViewNames<DB, SchemaName>,
       {
-        primaryKey?: string
-        defaultFilters?: FilterDescriptor[]
-        defaultSort?: SortDescriptor[]
-        defaultSelect?: string
-        defaultQueryFn?: (builder: unknown) => unknown
         cacheStrategy?: CacheStrategy
+        defaultFilters?: FilterDescriptor[]
+        defaultQueryFn?: (builder: unknown) => unknown
+        defaultSelect?: string
+        defaultSort?: SortDescriptor[]
+        primaryKey?: string
       }
     >
   >
 
-  // Hydration
-  tableOrder?: TableNames<DB, SchemaName>[]
-  fetchRemoteOnBoot?: boolean
+  /**
+   * Views to back with a read-only store.
+   *
+   * A view is the route to a join here: `records` is keyed on a primary key and
+   * realtime writes the flat `postgres_changes` payload into it, so an embedded
+   * child collection is dropped by the first event after a fetch. A view is
+   * flat, so it survives.
+   *
+   * They get the same store, persistence and auth-gate wiring as a table, minus
+   * the two things that cannot apply: no offline-queue executor (a view is not
+   * writable) and no realtime subscription (Postgres publishes changes under
+   * the underlying TABLE's name, never the view's — subscribing to the view
+   * would register a channel that never fires). A view whose freshness matters
+   * needs a refetch trigger of its own.
+   */
+  views?: ViewNames<DB, SchemaName>[]
+}
 
-  // Auth
-  auth?: boolean
-  /** Options forwarded to the internal auth gate (only used when auth is true) */
-  authGate?: {
-    /** Clear all table stores on sign-out (defaults to true) */
-    clearOnSignOut?: boolean
-    /** Refetch all table stores on sign-in (defaults to true) */
-    refetchOnSignIn?: boolean
+// ─── Bulk Factory Options ────────────────────────────────────────────
+
+export type CreateTableStoreOptions<
+  DB,
+  Row,
+  InsertRow,
+  UpdateRow,
+  Extensions extends Record<string, unknown> = Record<string, never>,
+> = {
+  /** @internal Used by createSupabaseStores to inject shared queue */
+  _queue?: unknown
+
+  /**
+   * @internal Used by createSupabaseStores to inject the shared RealtimeManager.
+   *
+   * Without it `store.subscribe()` has nothing to subscribe *with*: one channel
+   * per table is the manager's job, and a store opening its own would duplicate
+   * the ones `createSupabaseStores` already opened.
+   */
+  _realtimeManager?: unknown
+
+  // Cache strategy
+  cacheStrategy?: CacheStrategy
+
+  // Conflict
+  conflict?: ConflictConfig<Row>
+
+  // Cross-tab sync
+  crossTab?: { enabled?: boolean; name?: string; sessionId?: string }
+
+  // Query defaults
+  defaultFilters?: FilterDescriptor<Row>[]
+
+  /**
+   * Applied to every fetch that does not pass its own `queryFn`, for a source
+   * that always needs the escape hatch: a PostgREST modifier the filter DSL has
+   * no word for. Unlike a per-call `queryFn`, this one does not make queries
+   * unkeyable — it is the same function for all of them, so
+   * `filters`/`sort`/`select`/`limit`/`offset` still tell them apart and each
+   * keeps its own loading state, error and count.
+   *
+   * **It must not change the shape of a row.** Only `fetch` goes through it:
+   * `fetchOne` reads by primary key through its own builder, and each of the six
+   * mutations reads its row back with `defaultSelect`, and all of them write into
+   * the same `records` map every query then projects. A function that widens the
+   * row — an embed, an extra column — therefore holds two shapes in one store,
+   * and the narrow one is whatever the user just created or opened by id. Row
+   * shape belongs to `defaultSelect`, which every one of those paths honours.
+   */
+  defaultQueryFn?: (builder: unknown) => unknown
+  defaultSelect?: string
+
+  defaultSort?: SortDescriptor<Row>[]
+
+  devtools?: boolean | { name?: string }
+
+  // Extension
+  extend?: (
+    set: StoreApi<TableStore<Row, InsertRow, UpdateRow>>["setState"],
+    get: StoreApi<TableStore<Row, InsertRow, UpdateRow>>["getState"],
+    store: StoreApi<TableStore<Row, InsertRow, UpdateRow>>,
+    supabase: SupabaseClient<DB>,
+  ) => Extensions
+
+  // Middleware
+  /** Pass the `immer` middleware from `zustand/middleware/immer` to enable draft-based mutations */
+  immer?: (config: any) => any
+
+  // View mode (disables mutations)
+  isView?: boolean
+
+  // Logger
+  logger?: SyncLogger
+
+  // Network
+  network?: NetworkStatusAdapter
+
+  // Offline queue
+  offlineQueue?: {
+    enabled?: boolean
+    flushDebounceMs?: number
+    maxRetries?: number
+
+    /** See `CreateSupabaseStoresOptions.offlineQueue.queueWrites`. */
+    queueWrites?: boolean
+  }
+
+  // Persistence
+  persistence?: {
+    adapter: PersistenceAdapter
+    key?: string
+  }
+
+  primaryKey?: string | string[]
+
+  // Realtime
+  realtime?: {
+    enabled?: boolean
+    events?: RealtimeEvent[]
+    filter?: string | FilterDescriptor<Row>[]
+
+    /** Restrict the postgres_changes payload to these columns. Must include the table's primary key. */
+    select?: string[]
+  }
+
+  schema?: string
+
+  supabase: SupabaseClient<DB>
+
+  table: string
+
+  // Validation
+  validate?: {
+    insert?: (data: InsertRow) => true | string[]
+    update?: (data: UpdateRow) => true | string[]
   }
 }
 
@@ -991,6 +1046,7 @@ export type SupabaseStores<
     >
   >
 } & {
+
   // A view store is a `TableStore` whose mutators throw, rather than a narrower
   // type: the runtime object is the same one, and typing the writes away would
   // hide `setRecord`/`mergeRecords`, which a view legitimately uses when
@@ -999,7 +1055,7 @@ export type SupabaseStores<
     TableStore<ViewRow<DB, ViewName, SchemaName>, never, never>
   >
 } & {
-  auth: StoreApi<AuthStore>
-  _supabase: SupabaseClient<DB>
   _destroy: () => void
+  _supabase: SupabaseClient<DB>
+  auth: StoreApi<AuthStore>
 }

@@ -1,12 +1,38 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
-import type { FetchOptions, FilterDescriptor, SortDescriptor } from "../types.js"
-import { fromTable, applyFilters, applySort } from "../query/queryExecutor.js"
+
 import { fromSupabaseError } from "../errors.js"
+import { applyFilters, applySort,fromTable } from "../query/queryExecutor.js"
+import type { FetchOptions, FilterDescriptor, SortDescriptor } from "../types.js"
 
 export type PrefetchResult<Row> = {
   data: Row[]
   error: Error | null
   fetchedAt: number
+}
+
+/**
+ * Deserialize prefetched data on the client side.
+ */
+export function deserializePrefetchResult<Row>(serialized: string): PrefetchResult<Row> {
+  try {
+    const parsed = JSON.parse(serialized) as {
+      data: Row[]
+      error: string | null
+      fetchedAt: number
+    }
+
+    return {
+      data: parsed.data,
+      error: parsed.error ? new Error(parsed.error) : null,
+      fetchedAt: parsed.fetchedAt,
+    }
+  } catch {
+    return {
+      data: [],
+      error: new Error("Failed to deserialize prefetch result: invalid JSON"),
+      fetchedAt: Date.now(),
+    }
+  }
 }
 
 /**
@@ -50,6 +76,7 @@ export async function prefetch<Row = Record<string, unknown>>(
 
     if (options?.offset != null) {
       const limit = options.limit ?? 1000
+
       builder = builder.range(options.offset, options.offset + limit - 1)
     } else if (options?.limit != null) {
       builder = builder.limit(options.limit)
@@ -62,10 +89,10 @@ export async function prefetch<Row = Record<string, unknown>>(
     }
 
     return { data: (data ?? []) as Row[], error: null, fetchedAt: Date.now() }
-  } catch (err) {
+  } catch (error) {
     return {
       data: [],
-      error: err instanceof Error ? err : new Error(String(err)),
+      error: error instanceof Error ? error : new Error(String(error)),
       fetchedAt: Date.now(),
     }
   }
@@ -81,28 +108,4 @@ export function serializePrefetchResult<Row>(result: PrefetchResult<Row>): strin
     error: result.error ? result.error.message : null,
     fetchedAt: result.fetchedAt,
   })
-}
-
-/**
- * Deserialize prefetched data on the client side.
- */
-export function deserializePrefetchResult<Row>(serialized: string): PrefetchResult<Row> {
-  try {
-    const parsed = JSON.parse(serialized) as {
-      data: Row[]
-      error: string | null
-      fetchedAt: number
-    }
-    return {
-      data: parsed.data,
-      error: parsed.error ? new Error(parsed.error) : null,
-      fetchedAt: parsed.fetchedAt,
-    }
-  } catch {
-    return {
-      data: [],
-      error: new Error("Failed to deserialize prefetch result: invalid JSON"),
-      fetchedAt: Date.now(),
-    }
-  }
 }

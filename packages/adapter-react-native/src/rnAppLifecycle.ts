@@ -1,11 +1,11 @@
 import type { AppLifecycleAdapter } from "@drakkar.software/anchor"
 
-type AppStateModule = {
-  currentState: string
+interface AppStateModule {
   addEventListener: (
     event: string,
     handler: (state: string) => void,
   ) => { remove: () => void }
+  currentState: string
 }
 
 /**
@@ -20,37 +20,43 @@ type AppStateModule = {
  * new RNAppLifecycle(AppState)
  */
 export class RNAppLifecycle implements AppLifecycleAdapter {
-  private AppState: AppStateModule
+  private readonly AppState: AppStateModule
 
   constructor(AppState: AppStateModule) {
     this.AppState = AppState
   }
 
-  onForeground(cb: () => void): () => void {
+  onForeground(callback: () => void): () => void {
     let previousState = this.AppState.currentState
+
     const subscription = this.AppState.addEventListener(
       "change",
       (nextState: string) => {
         if (previousState !== "active" && nextState === "active") {
-          cb()
+          callback()
         }
+
         previousState = nextState
       },
     )
-    return () => subscription.remove()
+
+    return () => { subscription.remove(); }
   }
 
-  onBackground(cb: () => void): () => void {
+  onBackground(callback: () => void): () => void {
     let previousState = this.AppState.currentState
+
     const subscription = this.AppState.addEventListener(
       "change",
       (nextState: string) => {
         if (previousState === "active" && nextState !== "active") {
-          cb()
+          callback()
         }
+
         previousState = nextState
       },
     )
-    return () => subscription.remove()
+
+    return () => { subscription.remove(); }
   }
 }

@@ -1,12 +1,13 @@
-import { describe, it, expect, afterEach, vi } from "vitest"
-import { isPending, getPendingStatus, randomId, createTempId, isTempId } from "./types"
+import { afterEach, describe, expect, it, vi } from "vitest"
+
+import { createTempId, getPendingStatus, isPending, isTempId,randomId } from "./types"
 
 describe("randomId", () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
-  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/v
 
   it("returns a uuid where WebCrypto exists", () => {
     expect(randomId()).toMatch(UUID)
@@ -25,7 +26,9 @@ describe("randomId", () => {
 
   it("keeps minting temp ids without it too", () => {
     vi.stubGlobal("crypto", { getRandomValues: () => new Uint8Array(0) })
+
     const id = createTempId()
+
     expect(isTempId(id)).toBe(true)
     expect(id.slice("_temp:".length)).toMatch(UUID)
   })
@@ -37,19 +40,19 @@ describe("isPending", () => {
   })
 
   it("returns false when _anchor_pending is undefined", () => {
-    expect(isPending({ id: 1, _anchor_pending: undefined })).toBe(false)
+    expect(isPending({ _anchor_pending: undefined, id: 1 })).toBe(false)
   })
 
   it("returns true for insert", () => {
-    expect(isPending({ id: 1, _anchor_pending: "insert" })).toBe(true)
+    expect(isPending({ _anchor_pending: "insert", id: 1 })).toBe(true)
   })
 
   it("returns true for update", () => {
-    expect(isPending({ id: 1, _anchor_pending: "update" })).toBe(true)
+    expect(isPending({ _anchor_pending: "update", id: 1 })).toBe(true)
   })
 
   it("returns true for delete", () => {
-    expect(isPending({ id: 1, _anchor_pending: "delete" })).toBe(true)
+    expect(isPending({ _anchor_pending: "delete", id: 1 })).toBe(true)
   })
 })
 
@@ -59,8 +62,8 @@ describe("getPendingStatus", () => {
   })
 
   it("returns the pending status string", () => {
-    expect(getPendingStatus({ id: 1, _anchor_pending: "insert" })).toBe("insert")
-    expect(getPendingStatus({ id: 1, _anchor_pending: "update" })).toBe("update")
-    expect(getPendingStatus({ id: 1, _anchor_pending: "delete" })).toBe("delete")
+    expect(getPendingStatus({ _anchor_pending: "insert", id: 1 })).toBe("insert")
+    expect(getPendingStatus({ _anchor_pending: "update", id: 1 })).toBe("update")
+    expect(getPendingStatus({ _anchor_pending: "delete", id: 1 })).toBe("delete")
   })
 })

@@ -1,21 +1,26 @@
-import type { StoreApi } from "zustand"
 import type { SupabaseClient } from "@supabase/supabase-js"
-import type { TableStore, AuthStore } from "../types.js"
-import type { RealtimeManager } from "../realtime/realtimeManager.js"
-import type { OfflineQueue } from "../mutation/offlineQueue.js"
+import type { StoreApi } from "zustand"
+
 import { PG_INSUFFICIENT_PRIVILEGE } from "../errors.js"
+import type { OfflineQueue } from "../mutation/offlineQueue.js"
+import type { RealtimeManager } from "../realtime/realtimeManager.js"
+import type { AuthStore,TableStore } from "../types.js"
 
 export type AuthGateOptions = {
   /** Clear all table stores on sign-out */
   clearOnSignOut?: boolean
-  /** Refetch all table stores on sign-in */
-  refetchOnSignIn?: boolean
-  /** Custom callback when auth state changes */
-  onAuthChange?: (event: string, session: unknown) => void
-  /** RealtimeManager to unsubscribe on sign-out */
-  realtimeManager?: RealtimeManager
+
   /** OfflineQueue to clear on sign-out */
   offlineQueue?: OfflineQueue
+
+  /** Custom callback when auth state changes */
+  onAuthChange?: (event: string, session: unknown) => void
+
+  /** RealtimeManager to unsubscribe on sign-out */
+  realtimeManager?: RealtimeManager
+
+  /** Refetch all table stores on sign-in */
+  refetchOnSignIn?: boolean
 }
 
 /**
@@ -30,9 +35,12 @@ export type AuthGateOptions = {
  * literal text "42501" inside prose written for a log file.
  */
 export function isRlsError(error: Error | null): boolean {
-  if (!error) return false
-  if ((error as { code?: unknown }).code === PG_INSUFFICIENT_PRIVILEGE) return true
+  if (!error) {return false}
+
+  if ((error as { code?: unknown }).code === PG_INSUFFICIENT_PRIVILEGE) {return true}
+
   const msg = error.message.toLowerCase()
+
   return (
     msg.includes("row-level security") ||
     msg.includes("rls") ||
@@ -54,10 +62,10 @@ export function setupAuthGate(
 ): () => void {
   const {
     clearOnSignOut = true,
-    refetchOnSignIn = true,
+    offlineQueue,
     onAuthChange,
     realtimeManager,
-    offlineQueue,
+    refetchOnSignIn = true,
   } = options
 
   const { data: { subscription } } = supabase.auth.onAuthStateChange(
@@ -68,8 +76,11 @@ export function setupAuthGate(
         for (const store of tableStores) {
           store.getState().clearAll()
         }
+
+
         // Unsubscribe all realtime channels to prevent data leaks after sign-out
         realtimeManager?.destroy()
+
         // The queue is deliberately NOT cleared here. It used to be, on the
         // grounds of "orphaned mutations executing under the wrong user" —
         // which `enqueue` tagging every mutation with `userId` and `flush`
@@ -109,8 +120,8 @@ export function setupAuthGate(
 
       if (event === "SIGNED_IN" && refetchOnSignIn) {
         for (const store of tableStores) {
-          store.getState().fetch().catch((err: unknown) => {
-            store.setState({ error: err instanceof Error ? err : new Error(String(err)) } as any)
+          store.getState().fetch().catch((error: unknown) => {
+            store.setState({ error: error instanceof Error ? error : new Error(String(error)) } as any)
           })
         }
       }
@@ -126,5 +137,5 @@ export function setupAuthGate(
     },
   )
 
-  return () => subscription.unsubscribe()
+  return () => { subscription.unsubscribe(); }
 }

@@ -1,15 +1,17 @@
-import { describe, it, expect } from "vitest"
+import { describe, expect,it } from "vitest"
+
 import { applyFilters, applySort, executeQuery } from "./queryExecutor.js"
 
 describe("applyFilters", () => {
   it("applies eq filter to a mock builder", () => {
-    const calls: Array<{ method: string; args: unknown[] }> = []
+    const calls: { args: unknown[]; method: string; }[] = []
     const builder = new Proxy(
       {},
       {
         get(_target, prop) {
           return (...args: unknown[]) => {
-            calls.push({ method: String(prop), args })
+            calls.push({ args, method: String(prop) })
+
             return builder
           }
         },
@@ -23,19 +25,20 @@ describe("applyFilters", () => {
     ])
 
     expect(calls).toHaveLength(3)
-    expect(calls[0]).toEqual({ method: "eq", args: ["name", "alice"] })
-    expect(calls[1]).toEqual({ method: "gt", args: ["age", 18] })
-    expect(calls[2]).toEqual({ method: "in", args: ["status", ["active", "pending"]] })
+    expect(calls[0]).toEqual({ args: ["name", "alice"], method: "eq" })
+    expect(calls[1]).toEqual({ args: ["age", 18], method: "gt" })
+    expect(calls[2]).toEqual({ args: ["status", ["active", "pending"]], method: "in" })
   })
 
   it("applies textSearch with options", () => {
-    const calls: Array<{ method: string; args: unknown[] }> = []
+    const calls: { args: unknown[]; method: string; }[] = []
     const builder = new Proxy(
       {},
       {
         get(_target, prop) {
           return (...args: unknown[]) => {
-            calls.push({ method: String(prop), args })
+            calls.push({ args, method: String(prop) })
+
             return builder
           }
         },
@@ -46,7 +49,7 @@ describe("applyFilters", () => {
       {
         column: "body",
         op: "textSearch",
-        value: { query: "hello world", type: "websearch", config: "english" },
+        value: { config: "english", query: "hello world", type: "websearch" },
       },
     ])
 
@@ -83,13 +86,14 @@ describe("applyFilters", () => {
 
 describe("applySort", () => {
   it("applies sort rules to builder", () => {
-    const calls: Array<{ method: string; args: unknown[] }> = []
+    const calls: { args: unknown[]; method: string; }[] = []
     const builder = new Proxy(
       {},
       {
         get(_target, prop) {
           return (...args: unknown[]) => {
-            calls.push({ method: String(prop), args })
+            calls.push({ args, method: String(prop) })
+
             return builder
           }
         },
@@ -97,29 +101,30 @@ describe("applySort", () => {
     )
 
     applySort(builder, [
-      { column: "created_at", ascending: false },
-      { column: "name", ascending: true, nullsFirst: true },
+      { ascending: false, column: "created_at" },
+      { ascending: true, column: "name", nullsFirst: true },
     ])
 
     expect(calls).toHaveLength(2)
     expect(calls[0]).toEqual({
-      method: "order",
       args: ["created_at", { ascending: false, nullsFirst: undefined }],
+      method: "order",
     })
     expect(calls[1]).toEqual({
-      method: "order",
       args: ["name", { ascending: true, nullsFirst: true }],
+      method: "order",
     })
   })
 
   it("defaults to ascending and leaves nullsFirst to PostgREST", () => {
-    const calls: Array<{ method: string; args: unknown[] }> = []
+    const calls: { args: unknown[]; method: string; }[] = []
     const builder = new Proxy(
       {},
       {
         get(_target, prop) {
           return (...args: unknown[]) => {
-            calls.push({ method: String(prop), args })
+            calls.push({ args, method: String(prop) })
+
             return builder
           }
         },
@@ -135,19 +140,20 @@ describe("applySort", () => {
     // run against the database, and enough to change which rows a `limit`
     // keeps. postgrest-js omits the token when the option is `undefined`.
     expect(calls[0]).toEqual({
-      method: "order",
       args: ["id", { ascending: true, nullsFirst: undefined }],
+      method: "order",
     })
   })
 
   it("still forwards an explicit nullsFirst in both positions", () => {
-    const calls: Array<{ method: string; args: unknown[] }> = []
+    const calls: { args: unknown[]; method: string; }[] = []
     const builder: any = new Proxy(
       {},
       {
         get(_target, prop) {
           return (...args: unknown[]) => {
-            calls.push({ method: String(prop), args })
+            calls.push({ args, method: String(prop) })
+
             return builder
           }
         },
@@ -155,8 +161,8 @@ describe("applySort", () => {
     )
 
     applySort(builder, [
-      { column: "a", ascending: false, nullsFirst: true },
-      { column: "b", ascending: false, nullsFirst: false },
+      { ascending: false, column: "a", nullsFirst: true },
+      { ascending: false, column: "b", nullsFirst: false },
     ])
 
     expect(calls[0]!.args[1]).toEqual({ ascending: false, nullsFirst: true })
@@ -171,31 +177,36 @@ describe("applySort", () => {
  */
 describe("executeQuery pagination", () => {
   function recordingClient() {
-    const calls: Array<{ method: string; args: unknown[] }> = []
+    const calls: { args: unknown[]; method: string; }[] = []
     const builder: any = new Proxy(
-      { then: (resolve: (v: unknown) => void) => resolve({ data: [], error: null, count: null }) },
+      { then: (resolve: (v: unknown) => void) => resolve({ count: null, data: [], error: null }) },
       {
         get(target, prop) {
-          if (prop === "then") return (target as any).then
+          if (prop === "then") {return (target as any).then}
+
           return (...args: unknown[]) => {
-            calls.push({ method: String(prop), args })
+            calls.push({ args, method: String(prop) })
+
             return builder
           }
         },
       },
     )
+
     return { calls, supabase: { from: () => builder } as any }
   }
 
   it("turns offset+limit into a single inclusive range", async () => {
     const { calls, supabase } = recordingClient()
-    await executeQuery(supabase, "todos", "public", { offset: 20, limit: 10 })
+
+    await executeQuery(supabase, "todos", "public", { limit: 10, offset: 20 })
 
     // The end is inclusive, so a page of 10 starting at 20 is 20..29 — not 30,
     // which would return 11 rows, and not 29 rows over a wrong base.
     expect(calls.filter((c) => c.method === "range")).toEqual([
-      { method: "range", args: [20, 29] },
+      { args: [20, 29], method: "range" },
     ])
+
     // `range` covers both, so `limit` must NOT also be called: PostgREST would
     // take the narrower of the two and the second page would come back empty.
     expect(calls.some((c) => c.method === "limit")).toBe(false)
@@ -203,33 +214,36 @@ describe("executeQuery pagination", () => {
 
   it("falls back to a 1000-row page when offset comes with no limit", async () => {
     const { calls, supabase } = recordingClient()
+
     await executeQuery(supabase, "todos", "public", { offset: 5 })
 
     expect(calls.filter((c) => c.method === "range")).toEqual([
-      { method: "range", args: [5, 1004] },
+      { args: [5, 1004], method: "range" },
     ])
   })
 
   it("uses limit alone when there is no offset", async () => {
     const { calls, supabase } = recordingClient()
+
     await executeQuery(supabase, "todos", "public", { limit: 3 })
 
     expect(calls.filter((c) => c.method === "limit")).toEqual([
-      { method: "limit", args: [3] },
+      { args: [3], method: "limit" },
     ])
     expect(calls.some((c) => c.method === "range")).toBe(false)
   })
 
   it("paginates the builder a queryFn is handed, before the callback sees it", async () => {
     const { calls, supabase } = recordingClient()
+
     await executeQuery(supabase, "todos", "public", {
-      offset: 20,
       limit: 10,
+      offset: 20,
       queryFn: (builder: any) => builder,
     })
 
     expect(calls.filter((c) => c.method === "range")).toEqual([
-      { method: "range", args: [20, 29] },
+      { args: [20, 29], method: "range" },
     ])
   })
 })

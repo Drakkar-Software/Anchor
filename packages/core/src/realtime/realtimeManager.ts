@@ -1,15 +1,41 @@
-import type { SupabaseClient, RealtimeChannel } from "@supabase/supabase-js"
-import type { SyncLogger, RealtimeEvent, FilterDescriptor } from "../types.js"
-import { noopLogger } from "../types.js"
+import type { RealtimeChannel,SupabaseClient } from "@supabase/supabase-js"
+
+import { type FilterDescriptor,noopLogger,type RealtimeEvent, type SyncLogger  } from "../types.js"
 import { toRealtimeFilter } from "./realtimeFilter.js"
+
+type RealtimeManagerOptions = {
+  logger?: SyncLogger
+  supabase: SupabaseClient
+}
+
+type SubscribeOptions<Row> = {
+  events?: RealtimeEvent[]
+  filter?: string | FilterDescriptor[]
+  onDelete: (oldRow: Partial<Row>) => void
+  onInsert: (row: Row) => void
+  onStatus: (status: SubscriptionStatus) => void
+  onUpdate: (row: Row) => void
+  primaryKey: string
+  schema?: string
+
+  /**
+   * Restrict the postgres_changes payload to these columns (server-side
+   * projection). Must include `primaryKey` — Anchor's records/order maps are
+   * keyed on it, and a payload missing it cannot be applied to the store.
+   */
+  select?: string[]
+  table: string
+}
 
 type SubscriptionStatus = "disconnected" | "connecting" | "connected" | "error"
 
 type TableSubscription = {
-  table: string
-  schema: string
   channel: RealtimeChannel
-  status: SubscriptionStatus
+  cleanup: () => void
+
+  /** Kept so `resume()` can rebuild the subscription it tore down. */
+  options: SubscribeOptions<any>
+
   /**
    * Whether the channel has already been handed back to supabase-js.
    *
@@ -18,41 +44,20 @@ type TableSubscription = {
    * `removeChannel` a second time on a channel that was already gone.
    */
   paused: boolean
-  /** Kept so `resume()` can rebuild the subscription it tore down. */
-  options: SubscribeOptions<any>
-  cleanup: () => void
-}
-
-type SubscribeOptions<Row> = {
+  schema: string
+  status: SubscriptionStatus
   table: string
-  schema?: string
-  primaryKey: string
-  events?: RealtimeEvent[]
-  filter?: string | FilterDescriptor[]
-  /**
-   * Restrict the postgres_changes payload to these columns (server-side
-   * projection). Must include `primaryKey` — Anchor's records/order maps are
-   * keyed on it, and a payload missing it cannot be applied to the store.
-   */
-  select?: string[]
-  onInsert: (row: Row) => void
-  onUpdate: (row: Row) => void
-  onDelete: (oldRow: Partial<Row>) => void
-  onStatus: (status: SubscriptionStatus) => void
-}
-
-type RealtimeManagerOptions = {
-  supabase: SupabaseClient
-  logger?: SyncLogger
 }
 
 /**
  * Manages Supabase Realtime channel subscriptions per table.
  */
 export class RealtimeManager {
-  private supabase: SupabaseClient
-  private subscriptions = new Map<string, TableSubscription>()
-  private logger: SyncLogger
+  private readonly supabase: SupabaseClient
+
+  private readonly subscriptions = new Map<string, TableSubscription>()
+
+  private readonly logger: SyncLogger
 
   constructor(options: RealtimeManagerOptions) {
     this.supabase = options.supabase
@@ -65,16 +70,16 @@ export class RealtimeManager {
    */
   subscribe<Row>(options: SubscribeOptions<Row>): () => void {
     const {
-      table,
-      schema = "public",
-      primaryKey,
       events = ["*"],
       filter,
-      select,
-      onInsert,
-      onUpdate,
       onDelete,
+      onInsert,
       onStatus,
+      onUpdate,
+      primaryKey,
+      schema = "public",
+      select,
+      table,
     } = options
 
     // select is a server-side column projection: a payload missing the
@@ -83,7 +88,7 @@ export class RealtimeManager {
     if (select && !select.includes(primaryKey)) {
       throw new Error(
         `[anchor] realtime subscribe(${table}): "select" must include the primary key ("${primaryKey}") — ` +
-          `payloads without it cannot be keyed into the store.`,
+          "payloads without it cannot be keyed into the store.",
       )
     }
 
@@ -107,11 +112,13 @@ export class RealtimeManager {
         schema,
         table,
       }
+
       if (resolvedFilter) {
-        eventFilter["filter"] = resolvedFilter
+        eventFilter.filter = resolvedFilter
       }
+
       if (select) {
-        eventFilter["select"] = select
+        eventFilter.select = select
       }
 
       channel.on(
@@ -123,15 +130,25 @@ export class RealtimeManager {
           this.logger.realtimeEvent(table, eventType)
 
           switch (eventType) {
-            case "INSERT":
-              onInsert(payload.new as Row)
-              break
-            case "UPDATE":
-              onUpdate(payload.new as Row)
-              break
-            case "DELETE":
+            case "DELETE": {
               onDelete(payload.old as Partial<Row>)
+
               break
+            }
+            case "INSERT": {
+              onInsert(payload.new as Row)
+
+              break
+            }
+            case "UPDATE": {
+              onUpdate(payload.new as Row)
+
+              break
+            }
+
+            default: {
+              break
+            }
           }
         },
       )
@@ -139,40 +156,45 @@ export class RealtimeManager {
 
     const cleanup = () => {
       // Idempotent: `pause()` may already have handed the channel back.
-      if (!sub.paused) this.supabase.removeChannel(channel)
+      if (!sub.paused) {void this.supabase.removeChannel(channel)}
+
       sub.paused = true
       onStatus("disconnected")
     }
 
     // Store subscription BEFORE subscribing (callback may fire synchronously)
     const sub: TableSubscription = {
-      table,
-      schema,
       channel,
-      status: "connecting",
-      paused: false,
-      options: options as SubscribeOptions<any>,
       cleanup,
+      options: options as SubscribeOptions<any>,
+      paused: false,
+      schema,
+      status: "connecting",
+      table,
     }
+
     this.subscriptions.set(table, sub)
 
     // Subscribe to the channel
     channel.subscribe((status: string, err?: Error) => {
       const mappedStatus = mapStatus(status)
+
       if (mappedStatus === "error") {
         // `err` used to be dropped, so a channel error reached the store as a
         // bare status with no way to find out why.
         this.logger.realtimeError?.(table, status, err)
       }
+
       sub.status = mappedStatus
       onStatus(mappedStatus)
     })
 
-    return () => this.unsubscribe(table)
+    return () => { this.unsubscribe(table); }
   }
 
   unsubscribe(table: string): void {
     const sub = this.subscriptions.get(table)
+
     if (sub) {
       sub.cleanup()
       this.subscriptions.delete(table)
@@ -186,8 +208,9 @@ export class RealtimeManager {
    */
   pause(): void {
     for (const [, sub] of this.subscriptions) {
-      if (sub.paused) continue
-      this.supabase.removeChannel(sub.channel)
+      if (sub.paused) {continue}
+
+      void this.supabase.removeChannel(sub.channel)
       sub.paused = true
       sub.status = "disconnected"
       sub.options.onStatus("disconnected")
@@ -203,8 +226,9 @@ export class RealtimeManager {
    * was relaunched.
    */
   resume(): void {
-    for (const sub of [...this.subscriptions.values()]) {
-      if (!sub.paused) continue
+    for (const sub of this.subscriptions.values()) {
+      if (!sub.paused) {continue}
+
       // `subscribe()` unsubscribes the table first, which would remove a
       // channel already handed back — the entry is dropped rather than reused.
       this.subscriptions.delete(sub.table)
@@ -213,7 +237,8 @@ export class RealtimeManager {
   }
 
   destroy(): void {
-    const tables = [...this.subscriptions.keys()]
+    const tables = Array.from(this.subscriptions.keys())
+
     for (const table of tables) {
       this.unsubscribe(table)
     }
@@ -221,9 +246,11 @@ export class RealtimeManager {
 
   getStatus(): Map<string, SubscriptionStatus> {
     const result = new Map<string, SubscriptionStatus>()
+
     for (const [table, sub] of this.subscriptions) {
       result.set(table, sub.status)
     }
+
     return result
   }
 }
@@ -238,14 +265,19 @@ export class RealtimeManager {
  */
 function mapStatus(status: string): SubscriptionStatus {
   switch (status) {
-    case "SUBSCRIBED":
-      return "connected"
     case "CHANNEL_ERROR":
-    case "TIMED_OUT":
+    case "TIMED_OUT": {
       return "error"
-    case "CLOSED":
+    }
+    case "CLOSED": {
       return "disconnected"
-    default:
+    }
+    case "SUBSCRIBED": {
+      return "connected"
+    }
+
+    default: {
       return "connecting"
+    }
   }
 }

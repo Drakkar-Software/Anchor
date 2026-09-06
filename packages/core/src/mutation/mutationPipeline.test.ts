@@ -1,7 +1,8 @@
-import { describe, it, expect, vi } from "vitest"
-import { executeRemoteMutation, createMutationExecutor } from "./mutationPipeline.js"
-import { createTableStore } from "../createTableStore.js"
+import { describe, expect, it, vi } from "vitest"
+
 import { createMockSupabase } from "../__tests__/mockSupabase.js"
+import { createTableStore } from "../createTableStore.js"
+import { createMutationExecutor,executeRemoteMutation } from "./mutationPipeline.js"
 
 describe("executeRemoteMutation", () => {
   it("executes INSERT and returns server data with serverId", async () => {
@@ -11,15 +12,15 @@ describe("executeRemoteMutation", () => {
       "todos",
       "id",
       {
+        createdAt: Date.now(),
         id: "m1",
-        table: "todos",
         operation: "INSERT",
         payload: { title: "New todo" },
         primaryKey: { id: "_temp:abc" },
-        createdAt: Date.now(),
-        status: "in_flight",
         retryCount: 0,
         rollbackSnapshot: null,
+        status: "in_flight",
+        table: "todos",
       },
       new Map(),
     )
@@ -46,28 +47,29 @@ describe("executeRemoteMutation", () => {
       "todos",
       "id",
       {
+        createdAt: Date.now(),
         id: "m1",
-        table: "todos",
         operation: "INSERT",
         payload: { id: "_temp:xyz", title: "A" },
         primaryKey: { id: "_temp:xyz" },
-        createdAt: Date.now(),
-        status: "in_flight",
         retryCount: 0,
         rollbackSnapshot: null,
+        status: "in_flight",
+        table: "todos",
       },
       new Map(),
     )
 
     // The payload sent to insert should NOT have the temp id
     const insertedPayload = insertSpy.mock.calls[0][0]
+
     expect(insertedPayload.id).toBeUndefined()
     expect(insertedPayload.title).toBe("A")
   })
 
   it("executes UPDATE with correct primaryKey", async () => {
     const supabase = createMockSupabase({
-      todos: [{ id: 1, title: "Old", completed: false }],
+      todos: [{ completed: false, id: 1, title: "Old" }],
     })
 
     const result = await executeRemoteMutation(
@@ -75,15 +77,15 @@ describe("executeRemoteMutation", () => {
       "todos",
       "id",
       {
+        createdAt: Date.now(),
         id: "m1",
-        table: "todos",
         operation: "UPDATE",
         payload: { title: "Updated" },
         primaryKey: { id: 1 },
-        createdAt: Date.now(),
-        status: "in_flight",
         retryCount: 0,
         rollbackSnapshot: { id: 1, title: "Old" },
+        status: "in_flight",
+        table: "todos",
       },
       new Map(),
     )
@@ -102,15 +104,15 @@ describe("executeRemoteMutation", () => {
       "todos",
       "id",
       {
+        createdAt: Date.now(),
         id: "m1",
-        table: "todos",
         operation: "DELETE",
         payload: null,
         primaryKey: { id: 1 },
-        createdAt: Date.now(),
-        status: "in_flight",
         retryCount: 0,
         rollbackSnapshot: { id: 1, title: "A" },
+        status: "in_flight",
+        table: "todos",
       },
       new Map(),
     )
@@ -124,6 +126,7 @@ describe("executeRemoteMutation", () => {
     })
 
     const tempIdMap = new Map<string, unknown>()
+
     tempIdMap.set("_temp:parent", 42)
 
     const result = await executeRemoteMutation(
@@ -131,15 +134,15 @@ describe("executeRemoteMutation", () => {
       "todos",
       "id",
       {
+        createdAt: Date.now(),
         id: "m1",
-        table: "todos",
         operation: "UPDATE",
         payload: { parentId: "_temp:parent", title: "Child" },
         primaryKey: { id: 42 },
-        createdAt: Date.now(),
-        status: "in_flight",
         retryCount: 0,
         rollbackSnapshot: null,
+        status: "in_flight",
+        table: "todos",
       },
       tempIdMap,
     )
@@ -163,7 +166,7 @@ describe("executeRemoteMutation", () => {
     await expect(
       executeRemoteMutation(
         supabase, "todos", "id",
-        { id: "m1", table: "todos", operation: "INSERT", payload: { title: "A" }, primaryKey: { id: 1 }, createdAt: 0, status: "in_flight", retryCount: 0, rollbackSnapshot: null },
+        { createdAt: 0, id: "m1", operation: "INSERT", payload: { title: "A" }, primaryKey: { id: 1 }, retryCount: 0, rollbackSnapshot: null, status: "in_flight", table: "todos" },
         new Map(),
       ),
     ).rejects.toThrow("Insert failed")
@@ -177,17 +180,17 @@ describe("createMutationExecutor", () => {
 
     const executor = createMutationExecutor(supabase, "todos", "id", store)
 
-    const result = await executor(
+    await executor(
       {
+        createdAt: Date.now(),
         id: "m1",
-        table: "todos",
         operation: "INSERT",
         payload: { title: "Test" },
         primaryKey: { id: "_temp:test" },
-        createdAt: Date.now(),
-        status: "in_flight",
         retryCount: 0,
         rollbackSnapshot: null,
+        status: "in_flight",
+        table: "todos",
       },
       new Map(),
     )

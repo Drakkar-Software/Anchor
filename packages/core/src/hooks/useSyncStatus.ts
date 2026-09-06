@@ -1,16 +1,17 @@
 "use client"
 
-import { useSyncExternalStore, useCallback, useRef } from "react"
+import { useCallback, useRef,useSyncExternalStore } from "react"
 import type { StoreApi } from "zustand"
-import type { TableStore, NetworkStatusAdapter } from "../types.js"
+
+import type { NetworkStatusAdapter,TableStore } from "../types.js"
 
 export type SyncStatus = "synced" | "syncing" | "offline" | "error"
 
 export type SyncStatusResult = {
-  pendingCount: number
+  failedCount: number
   isSyncing: boolean
   lastSyncedAt: number | null
-  failedCount: number
+  pendingCount: number
   status: SyncStatus
 }
 
@@ -30,31 +31,32 @@ export function computeSyncStatus(
 
   for (const store of stores) {
     const state = store.getState()
-    if (state.isLoading) isSyncing = true
+
+    if (state.isLoading) {isSyncing = true}
+
     if (state.error) {
       hasError = true
       failedCount++
     }
 
     for (const row of state.records.values()) {
-      if (row._anchor_pending) pendingCount++
+      if (row._anchor_pending) {pendingCount++}
     }
 
-    if (state.lastFetchedAt !== null) {
-      if (oldestFetch === null || state.lastFetchedAt < oldestFetch) {
+    if (state.lastFetchedAt !== null && (oldestFetch === null || state.lastFetchedAt < oldestFetch)) {
         oldestFetch = state.lastFetchedAt
       }
-    }
   }
 
   const isOffline = network ? !network.isOnline() : false
 
   let status: SyncStatus = "synced"
-  if (hasError) status = "error"
-  else if (isOffline) status = "offline"
-  else if (isSyncing || pendingCount > 0) status = "syncing"
 
-  return { pendingCount, isSyncing, lastSyncedAt: oldestFetch, failedCount, status }
+  if (hasError) {status = "error"}
+  else if (isOffline) {status = "offline"}
+  else if (isSyncing || pendingCount > 0) {status = "syncing"}
+
+  return { failedCount, isSyncing, lastSyncedAt: oldestFetch, pendingCount, status }
 }
 
 /**
@@ -68,28 +70,29 @@ export function useSyncStatus(
   stores: StoreApi<TableStore<any, any, any>>[],
   options?: { network?: NetworkStatusAdapter },
 ): SyncStatusResult {
-  const storesRef = useRef(stores)
-  storesRef.current = stores
-
-  const networkRef = useRef(options?.network)
-  networkRef.current = options?.network
+  const network = options?.network
 
   const cachedRef = useRef<SyncStatusResult>({
-    pendingCount: 0,
+    failedCount: 0,
     isSyncing: false,
     lastSyncedAt: null,
-    failedCount: 0,
+    pendingCount: 0,
     status: "synced",
   })
 
+  // `stores` is the dependency list itself: same store instances keep
+  // `subscribe` stable even when the caller allocates a fresh array literal.
   const subscribe = useCallback((onStoreChange: () => void) => {
-    const unsubs = storesRef.current.map((s) => s.subscribe(onStoreChange))
-    return () => unsubs.forEach((u) => u())
-  }, [])
+    const unsubs = stores.map((s) => s.subscribe(onStoreChange))
 
-  const getSnapshot = useCallback(() => {
-    const next = computeSyncStatus(storesRef.current, networkRef.current)
+    return () => { unsubs.forEach((u) => { u(); }); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `stores` IS the dependency array (instance identity)
+  }, stores)
+
+  const getSnapshot = () => {
+    const next = computeSyncStatus(stores, network)
     const prev = cachedRef.current
+
     if (
       prev.pendingCount === next.pendingCount &&
       prev.isSyncing === next.isSyncing &&
@@ -99,9 +102,11 @@ export function useSyncStatus(
     ) {
       return prev
     }
+
     cachedRef.current = next
+
     return next
-  }, [])
+  }
 
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 }

@@ -19,10 +19,16 @@
 export class AnchorError extends Error {
   /** PostgREST/Postgres error code — `23505`, `42501`, `PGRST116`, … */
   readonly code?: string
+
+
   /** Postgres' longer explanation, when the API sends one. */
   readonly details?: string
+
+
   /** Postgres' suggested fix, when the API sends one. */
   readonly hint?: string
+
+
   /** HTTP status, for the boundaries that expose one (storage, functions). */
   readonly status?: number
 
@@ -49,16 +55,17 @@ export class AnchorError extends Error {
  * without nesting.
  */
 export function fromSupabaseError(error: unknown, fallbackMessage = "Unknown error"): AnchorError {
-  if (error instanceof AnchorError) return error
+  if (error instanceof AnchorError) {return error}
 
   if (typeof error === "object" && error !== null) {
     const e = error as {
-      message?: unknown
       code?: unknown
       details?: unknown
       hint?: unknown
+      message?: unknown
       status?: unknown
     }
+
     return new AnchorError(typeof e.message === "string" ? e.message : fallbackMessage, {
       // An empty `code` is *absent*, not a code. postgrest-js writes `code: ""`
       // on every failure Postgres never saw — see `isTransportError` — and a
@@ -99,16 +106,21 @@ export function fromSupabaseError(error: unknown, fallbackMessage = "Unknown err
  * ("Failed to fetch" on web, "Network request failed" on React Native).
  */
 export function isTransportError(error: unknown, status: number | undefined): boolean {
-  if (error == null || status !== 0) return false
-  const code = (error as { code?: unknown }).code
+  if (error == null || status !== 0) {return false}
+
+  const {code} = (error as { code?: unknown })
+
   return typeof code !== "string" || code === ""
 }
 
 /** Postgres `insufficient_privilege` — what RLS returns when a policy refuses. */
 export const PG_INSUFFICIENT_PRIVILEGE = "42501"
+
 /** Postgres `unique_violation`. */
 export const PG_UNIQUE_VIOLATION = "23505"
+
 /** Postgres `foreign_key_violation`. */
 export const PG_FOREIGN_KEY_VIOLATION = "23503"
+
 /** PostgREST: `.single()` matched no row. */
 export const PGRST_NO_ROWS = "PGRST116"

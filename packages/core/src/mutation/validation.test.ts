@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest"
+import { describe, expect,it } from "vitest"
+
 import { runValidation, ValidationError, zodValidator } from "./validation.js"
 
 describe("runValidation", () => {
@@ -8,6 +9,7 @@ describe("runValidation", () => {
 
   it("passes when validator returns true", () => {
     const validator = () => true as const
+
     expect(() => runValidation(validator, { title: "test" }, "insert")).not.toThrow()
   })
 
@@ -22,13 +24,14 @@ describe("runValidation", () => {
 
   it("ValidationError contains error messages", () => {
     const validator = () => ["Error 1", "Error 2"]
+
     try {
       runValidation(validator, {}, "insert")
-    } catch (err) {
-      expect(err).toBeInstanceOf(ValidationError)
-      expect((err as ValidationError).errors).toEqual(["Error 1", "Error 2"])
-      expect((err as ValidationError).message).toContain("Error 1")
-      expect((err as ValidationError).message).toContain("Error 2")
+    } catch (error) {
+      expect(error).toBeInstanceOf(ValidationError)
+      expect((error as ValidationError).errors).toEqual(["Error 1", "Error 2"])
+      expect((error as ValidationError).message).toContain("Error 1")
+      expect((error as ValidationError).message).toContain("Error 2")
     }
   })
 })
@@ -39,12 +42,14 @@ describe("zodValidator", () => {
     const schema = {
       safeParse: (data: unknown) => {
         const d = data as { title?: string }
+
         if (d.title && d.title.length > 0) {
           return { success: true }
         }
+
         return {
-          success: false,
           error: { issues: [{ message: "Title is required" }] },
+          success: false,
         }
       },
     }

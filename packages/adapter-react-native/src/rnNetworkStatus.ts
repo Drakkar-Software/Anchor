@@ -1,8 +1,8 @@
 import type { NetworkStatusAdapter } from "@drakkar.software/anchor"
 
-type NetInfoModule = {
+interface NetInfoModule {
   addEventListener: (
-    cb: (state: { isConnected: boolean | null }) => void,
+    callback: (state: { isConnected: boolean | null }) => void,
   ) => () => void
 }
 
@@ -17,18 +17,17 @@ type NetInfoModule = {
  * new RNNetworkStatus(NetInfo)
  */
 export class RNNetworkStatus implements NetworkStatusAdapter {
-  private _isOnline = true
-  private netInfo: NetInfoModule
+  private readonly netInfo: NetInfoModule
 
-  constructor(NetInfo: NetInfoModule) {
+constructor(NetInfo: NetInfoModule) {
     this.netInfo = NetInfo
   }
 
-  isOnline(): boolean {
+isOnline(): boolean {
     return this._isOnline
   }
 
-  subscribe(callback: (online: boolean) => void): () => void {
+subscribe(callback: (online: boolean) => void): () => void {
     return this.netInfo.addEventListener(
       (state: { isConnected: boolean | null }) => {
         this._isOnline = state.isConnected ?? false
@@ -36,4 +35,13 @@ export class RNNetworkStatus implements NetworkStatusAdapter {
       },
     )
   }
+
+private _isOnline = true
+  
+
+  
+
+  
+
+  
 }

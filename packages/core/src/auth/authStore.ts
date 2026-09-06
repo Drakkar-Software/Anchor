@@ -1,38 +1,12 @@
-import type { SupabaseClient, Session } from "@supabase/supabase-js"
+import type { Session,SupabaseClient } from "@supabase/supabase-js"
 import { createStore, type StoreApi } from "zustand/vanilla"
-import type { AuthStore } from "../types.js"
+
 import { fromSupabaseError } from "../errors.js"
+import type { AuthStore } from "../types.js"
 
 type CreateAuthStoreOptions = {
-  supabase: SupabaseClient
   devtools?: boolean
-}
-
-/**
- * Decode the payload of a session's access token. **Nothing is verified.**
- *
- * The previous docstring said "no crypto verification — Supabase handles that",
- * which is true of the token's use on the *server* and irrelevant here: this
- * reads a string the client already holds, and a client that has been handed a
- * forged token will parse the forged claims out of it just as happily.
- *
- * That is fine for what it is for — deciding which tab to show, rendering a
- * plan name — because no client-side check is a security boundary in the first
- * place; RLS is. It is not fine as the only claims API, which is why
- * `getVerifiedClaims()` exists alongside it.
- */
-function parseJwtClaims(session: Session | null): Record<string, unknown> {
-  if (!session?.access_token) return {}
-  try {
-    const parts = session.access_token.split(".")
-    if (parts.length !== 3) return {}
-    // base64url → base64 → decode
-    const b64 = parts[1]!.replace(/-/g, "+").replace(/_/g, "/")
-    const decoded = atob(b64)
-    return JSON.parse(decoded) as Record<string, unknown>
-  } catch {
-    return {}
-  }
+  supabase: SupabaseClient
 }
 
 /**
@@ -61,154 +35,8 @@ export function createAuthStore(
   let sawAuthEvent = false
 
   return createStore<AuthStore>()((set, get) => ({
-    // State
-    session: null,
-    user: null,
-    isLoading: true,
-    error: null,
     claims: {},
-
-    // Actions
-    async initialize() {
-      try {
-        const { data, error } = await supabase.auth.getSession()
-
-        // A listener answered while this round-trip was in flight; its answer is
-        // the newer one. Clearing the flag is still this call's job — nothing
-        // else does it when `getSession()` resolves last.
-        if (sawAuthEvent) {
-          set({ isLoading: false, error: error ? fromSupabaseError(error) : null })
-          return
-        }
-
-        const session = data?.session ?? null
-        set({
-          session,
-          user: session?.user ?? null,
-          isLoading: false,
-          error: error ? fromSupabaseError(error) : null,
-          claims: parseJwtClaims(session),
-        })
-      } catch (err) {
-        set({
-          isLoading: false,
-          error:
-            err instanceof Error ? err : new Error(String(err)),
-        })
-      }
-    },
-
-    async signIn({ email, password }) {
-      set({ isLoading: true, error: null })
-      const { data, error } =
-        await supabase.auth.signInWithPassword({ email, password })
-
-      if (error) {
-        set({ isLoading: false, error: fromSupabaseError(error) })
-        throw fromSupabaseError(error)
-      }
-
-      set({
-        session: data.session,
-        user: data.user,
-        isLoading: false,
-        error: null,
-        claims: parseJwtClaims(data.session),
-      })
-    },
-
-    async signUp({ email, password }) {
-      set({ isLoading: true, error: null })
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-      })
-
-      if (error) {
-        set({ isLoading: false, error: fromSupabaseError(error) })
-        throw fromSupabaseError(error)
-      }
-
-      set({
-        session: data.session,
-        user: data.user,
-        isLoading: false,
-        error: null,
-        claims: parseJwtClaims(data.session),
-      })
-    },
-
-    async signOut() {
-      set({ isLoading: true })
-      const { error } = await supabase.auth.signOut()
-
-      if (error) {
-        set({ isLoading: false, error: fromSupabaseError(error) })
-        throw fromSupabaseError(error)
-      }
-
-      set({
-        session: null,
-        user: null,
-        isLoading: false,
-        error: null,
-        claims: {},
-      })
-    },
-
-    async signInWithOAuth({ provider, redirectTo }) {
-      set({ isLoading: true, error: null })
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: provider as any,
-        options: { redirectTo },
-      })
-
-      if (error) {
-        set({ error: fromSupabaseError(error), isLoading: false })
-        throw fromSupabaseError(error)
-      }
-
-      // OAuth redirects away; reset loading for SPA/webview contexts
-      set({ isLoading: false })
-    },
-
-    async refreshSession() {
-      try {
-        const { data, error } = await supabase.auth.refreshSession()
-
-        if (error) {
-          set({ error: fromSupabaseError(error) })
-          return
-        }
-
-        set({
-          session: data.session,
-          user: data.user,
-          error: null,
-          claims: parseJwtClaims(data.session),
-        })
-      } catch (err) {
-        set({
-          error: err instanceof Error ? err : new Error(String(err)),
-        })
-      }
-    },
-
-    onAuthStateChange() {
-      const {
-        data: { subscription },
-      } = supabase.auth.onAuthStateChange((_event, session) => {
-        sawAuthEvent = true
-        set({
-          session,
-          user: session?.user ?? null,
-          isLoading: false,
-          claims: parseJwtClaims(session),
-        })
-      })
-
-      return () => subscription.unsubscribe()
-    },
+    error: null,
 
     getClaim(key: string) {
       return get().claims[key]
@@ -223,11 +51,207 @@ export function createAuthStore(
         getClaims: (jwt?: string) => Promise<{ data: unknown; error: unknown }>
       }
       const { data, error } = await auth.getClaims()
-      if (error) return { claims: null, error: fromSupabaseError(error) }
+
+      if (error) {return { claims: null, error: fromSupabaseError(error) }}
+
       // supabase-js returns `{claims, headers, signature}`; a session-less
       // client returns null rather than erroring.
       const claims = (data as { claims?: Record<string, unknown> } | null)?.claims ?? null
+
       return { claims, error: null }
     },
+
+
+    // Actions
+    async initialize() {
+      try {
+        const { data, error } = await supabase.auth.getSession()
+
+        // A listener answered while this round-trip was in flight; its answer is
+        // the newer one. Clearing the flag is still this call's job — nothing
+        // else does it when `getSession()` resolves last.
+        if (sawAuthEvent) {
+          set({ error: error ? fromSupabaseError(error) : null, isLoading: false })
+
+          return
+        }
+
+        const session = data.session ?? null
+
+        set({
+          claims: parseJwtClaims(session),
+          error: error ? fromSupabaseError(error) : null,
+          isLoading: false,
+          session,
+          user: session?.user ?? null,
+        })
+      } catch (error) {
+        set({
+          error:
+            error instanceof Error ? error : new Error(String(error)),
+
+          isLoading: false,
+        })
+      }
+    },
+
+    isLoading: true,
+
+    onAuthStateChange() {
+      const {
+        data: { subscription },
+      } = supabase.auth.onAuthStateChange((_event, session) => {
+        sawAuthEvent = true
+        set({
+          claims: parseJwtClaims(session),
+          isLoading: false,
+          session,
+          user: session?.user ?? null,
+        })
+      })
+
+      return () => { subscription.unsubscribe(); }
+    },
+
+    async refreshSession() {
+      try {
+        const { data, error } = await supabase.auth.refreshSession()
+
+        if (error) {
+          set({ error: fromSupabaseError(error) })
+
+          return
+        }
+
+        set({
+          claims: parseJwtClaims(data.session),
+          error: null,
+          session: data.session,
+          user: data.user,
+        })
+      } catch (error) {
+        set({
+          error: error instanceof Error ? error : new Error(String(error)),
+        })
+      }
+    },
+
+    // State
+    session: null,
+
+    async signIn({ email, password }) {
+      set({ error: null, isLoading: true })
+
+      const { data, error } =
+        await supabase.auth.signInWithPassword({ email, password })
+
+      if (error) {
+        set({ error: fromSupabaseError(error), isLoading: false })
+
+        throw fromSupabaseError(error)
+      }
+
+      set({
+        claims: parseJwtClaims(data.session),
+        error: null,
+        isLoading: false,
+        session: data.session,
+        user: data.user,
+      })
+    },
+
+    async signInWithOAuth({ provider, redirectTo }) {
+      set({ error: null, isLoading: true })
+
+      const { error } = await supabase.auth.signInWithOAuth({
+        options: { redirectTo },
+        provider: provider as any,
+      })
+
+      if (error) {
+        set({ error: fromSupabaseError(error), isLoading: false })
+
+        throw fromSupabaseError(error)
+      }
+
+      // OAuth redirects away; reset loading for SPA/webview contexts
+      set({ isLoading: false })
+    },
+
+    async signOut() {
+      set({ isLoading: true })
+
+      const { error } = await supabase.auth.signOut()
+
+      if (error) {
+        set({ error: fromSupabaseError(error), isLoading: false })
+
+        throw fromSupabaseError(error)
+      }
+
+      set({
+        claims: {},
+        error: null,
+        isLoading: false,
+        session: null,
+        user: null,
+      })
+    },
+
+    async signUp({ email, password }) {
+      set({ error: null, isLoading: true })
+
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+      })
+
+      if (error) {
+        set({ error: fromSupabaseError(error), isLoading: false })
+
+        throw fromSupabaseError(error)
+      }
+
+      set({
+        claims: parseJwtClaims(data.session),
+        error: null,
+        isLoading: false,
+        session: data.session,
+        user: data.user,
+      })
+    },
+
+    user: null,
   }))
+}
+
+/**
+ * Decode the payload of a session's access token. **Nothing is verified.**
+ *
+ * The previous docstring said "no crypto verification — Supabase handles that",
+ * which is true of the token's use on the *server* and irrelevant here: this
+ * reads a string the client already holds, and a client that has been handed a
+ * forged token will parse the forged claims out of it just as happily.
+ *
+ * That is fine for what it is for — deciding which tab to show, rendering a
+ * plan name — because no client-side check is a security boundary in the first
+ * place; RLS is. It is not fine as the only claims API, which is why
+ * `getVerifiedClaims()` exists alongside it.
+ */
+function parseJwtClaims(session: Session | null): Record<string, unknown> {
+  if (!session?.access_token) {return {}}
+
+  try {
+    const parts = session.access_token.split(".")
+
+    if (parts.length !== 3) {return {}}
+
+    // base64url → base64 → decode
+    const b64 = parts[1]!.replaceAll("-", "+").replaceAll("_", "/")
+    const decoded = atob(b64)
+
+    return JSON.parse(decoded) as Record<string, unknown>
+  } catch {
+    return {}
+  }
 }

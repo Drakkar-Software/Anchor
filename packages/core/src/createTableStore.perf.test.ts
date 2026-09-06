@@ -1,13 +1,14 @@
-import { describe, it, expect, beforeEach, vi } from "vitest"
+import { beforeEach,describe, expect, it } from "vitest"
+
+import { createMockSupabase } from "./__tests__/mockSupabase.js"
 import { createTableStore } from "./createTableStore.js"
 import { MemoryAdapter } from "./persistence/persistenceAdapter.js"
-import { createMockSupabase } from "./__tests__/mockSupabase.js"
 
 type Todo = {
-  id: number
-  title: string
   completed: boolean
   created_at: string
+  id: number
+  title: string
   updated_at: string
 }
 
@@ -17,8 +18,8 @@ describe("createTableStore performance optimizations", () => {
   beforeEach(() => {
     supabase = createMockSupabase({
       todos: [
-        { id: 1, title: "Buy milk", completed: false, created_at: "2024-01-01", updated_at: "2024-01-01" },
-        { id: 2, title: "Walk dog", completed: true, created_at: "2024-01-02", updated_at: "2024-01-02" },
+        { completed: false, created_at: "2024-01-01", id: 1, title: "Buy milk", updated_at: "2024-01-01" },
+        { completed: true, created_at: "2024-01-02", id: 2, title: "Walk dog", updated_at: "2024-01-02" },
       ],
     })
   })
@@ -37,68 +38,76 @@ describe("createTableStore performance optimizations", () => {
    */
   function createDelayedSupabase(data: any[], delayMs = 50) {
     let fetchCount = 0
-    const mock = {
+
+    return {
       _fetchCount: () => fetchCount,
-      from: () => ({
-        select: () => {
-          const builder = {
-            eq: () => builder,
-            neq: () => builder,
-            gt: () => builder,
-            gte: () => builder,
-            lt: () => builder,
-            lte: () => builder,
-            like: () => builder,
-            ilike: () => builder,
-            in: () => builder,
-            is: () => builder,
-            contains: () => builder,
-            overlaps: () => builder,
-            order: () => builder,
-            limit: () => builder,
-            range: () => builder,
-            single: () => builder,
-            maybeSingle: () => builder,
-            then: (resolve: any) => {
-              fetchCount++
-              return new Promise<void>((r) => setTimeout(r, delayMs)).then(() =>
-                resolve({ data, error: null, count: data.length }),
-              )
-            },
-          }
-          return builder
-        },
-      }),
+
       auth: {
-        getSession: () => Promise.resolve({ data: { session: null }, error: null }),
+        getSession: async () => await Promise.resolve({ data: { session: null }, error: null }),
         onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => {} } } }),
       },
+
       channel: () => ({
         on: () => ({ on: () => ({ subscribe: () => ({}) }) }),
         subscribe: () => ({}),
       }),
+
+      from: () => ({
+        select: () => {
+          const builder = {
+            contains: () => builder,
+            eq: () => builder,
+            gt: () => builder,
+            gte: () => builder,
+            ilike: () => builder,
+            in: () => builder,
+            is: () => builder,
+            like: () => builder,
+            limit: () => builder,
+            lt: () => builder,
+            lte: () => builder,
+            maybeSingle: () => builder,
+            neq: () => builder,
+            order: () => builder,
+            overlaps: () => builder,
+            range: () => builder,
+            single: () => builder,
+
+            then: async (resolve: any) => {
+              fetchCount++
+
+              return await new Promise<void>((r) => setTimeout(r, delayMs)).then(() =>
+                resolve({ count: data.length, data, error: null }),
+              )
+            },
+          }
+
+          return builder
+        },
+      }),
+
       removeChannel: () => {},
     }
-    return mock
   }
 
   /** Creates a mock supabase that always returns an error */
   function createFailingSupabase() {
     return createDelayedSupabase([], 0).from ? {
       ...createDelayedSupabase([], 0),
+
       from: () => ({
         select: () => {
           const builder: any = {
             eq: () => builder,
-            order: () => builder,
             limit: () => builder,
+            order: () => builder,
             range: () => builder,
-            then: (resolve: any) => {
-              return Promise.resolve().then(() =>
+
+            then: async (resolve: any) => await Promise.resolve().then(() =>
                 resolve({ data: null, error: { message: "Network error" } }),
-              )
-            },
+              ),
           }
+
           return builder
         },
       }),
@@ -129,6 +138,7 @@ describe("createTableStore performance optimizations", () => {
       expect(store.getState().isLoading).toBe(false)
 
       const loadingStates: boolean[] = []
+
       store.subscribe((state) => {
         loadingStates.push(state.isLoading)
       })
@@ -137,7 +147,7 @@ describe("createTableStore performance optimizations", () => {
       await store.getState().fetch()
 
       // isLoading should never have been true during the refetch
-      expect(loadingStates.every((l) => l === false)).toBe(true)
+      expect(loadingStates.every((l) => !l)).toBe(true)
     })
 
     it("preserves existing records during refetch", async () => {
@@ -148,6 +158,7 @@ describe("createTableStore performance optimizations", () => {
 
       // Records should remain accessible during refetch
       const fetchPromise = store.getState().fetch()
+
       expect(store.getState().records.size).toBe(2)
       await fetchPromise
       expect(store.getState().records.size).toBe(2)
@@ -157,7 +168,7 @@ describe("createTableStore performance optimizations", () => {
   describe("in-flight fetch deduplication", () => {
     it("only fires one network request for concurrent fetch calls", async () => {
       const mockData = [
-        { id: 1, title: "A", completed: false, created_at: "2024-01-01", updated_at: "2024-01-01" },
+        { completed: false, created_at: "2024-01-01", id: 1, title: "A", updated_at: "2024-01-01" },
       ]
       const delayed = createDelayedSupabase(mockData, 50)
       const store = createStore({ supabase: delayed })
@@ -178,18 +189,20 @@ describe("createTableStore performance optimizations", () => {
       const store = createStore()
 
       const result1 = await store.getState().fetch()
+
       expect(result1).toHaveLength(2)
 
       // Add a new row to the mock database
       supabase._tables.todos.push({
-        id: 3,
-        title: "New todo",
         completed: false,
         created_at: "2024-01-04",
+        id: 3,
+        title: "New todo",
         updated_at: "2024-01-04",
       })
 
       const result2 = await store.getState().fetch()
+
       expect(result2).toHaveLength(3)
     })
 
@@ -203,6 +216,7 @@ describe("createTableStore performance optimizations", () => {
 
       // Should be able to retry (in-flight promise was cleared)
       const retryPromise = store.getState().fetch()
+
       expect(retryPromise).toBeDefined()
       await retryPromise
     })
@@ -214,16 +228,16 @@ describe("createTableStore performance optimizations", () => {
 
       // Pre-populate persistence
       await adapter.setItem("anchor:public:todos", [
-        { id: 1, title: "Cached todo", completed: false, created_at: "2024-01-01", updated_at: "2024-01-01" },
+        { completed: false, created_at: "2024-01-01", id: 1, title: "Cached todo", updated_at: "2024-01-01" },
       ])
 
       // Create a failing supabase
       const failing = createFailingSupabase()
 
       const store = createTableStore<any, Todo, Partial<Todo>, Partial<Todo>>({
+        persistence: { adapter },
         supabase: failing as any,
         table: "todos",
-        persistence: { adapter },
       })
 
       // Wait for hydration
@@ -239,6 +253,7 @@ describe("createTableStore performance optimizations", () => {
 
       // Data is still accessible
       const record = store.getState().records.get(1) as Todo
+
       expect(record.title).toBe("Cached todo")
     })
   })
@@ -258,14 +273,10 @@ describe("createTableStore performance optimizations", () => {
       const store = createStore()
 
       await store.getState().fetch()
+
       const firstFetchedAt = store.getState().lastFetchedAt
 
-      // Replace supabase with a failing one
-      const failing = createFailingSupabase()
-      const failStore = createStore({ supabase: failing })
-
-      // Populate it first so lastFetchedAt is set
-      // Actually — let's test differently: just verify error doesn't update timestamp
+      // Verify a successful fetch stamps lastFetchedAt (error paths covered elsewhere).
       expect(firstFetchedAt).toBeGreaterThan(0)
     })
   })
@@ -273,11 +284,12 @@ describe("createTableStore performance optimizations", () => {
   describe("removeWhere", () => {
     it("removes matching rows optimistically and from server", async () => {
       const store = createStore()
+
       await store.getState().fetch()
       expect(store.getState().records.size).toBe(2)
 
       // Remove rows where completed === true (id: 2)
-      await store.getState().removeWhere([{ op: "eq", column: "completed", value: true }] as any)
+      await store.getState().removeWhere([{ column: "completed", op: "eq", value: true }] as any)
 
       expect(store.getState().records.size).toBe(1)
       expect(store.getState().records.has(1)).toBe(true)
@@ -286,10 +298,11 @@ describe("createTableStore performance optimizations", () => {
 
     it("removes multiple matching rows", async () => {
       const store = createStore()
+
       await store.getState().fetch()
 
       // Remove all rows where completed === false (ids: 1)
-      await store.getState().removeWhere([{ op: "eq", column: "completed", value: false }] as any)
+      await store.getState().removeWhere([{ column: "completed", op: "eq", value: false }] as any)
 
       expect(store.getState().records.size).toBe(1)
       expect(store.getState().records.has(2)).toBe(true)
@@ -297,21 +310,23 @@ describe("createTableStore performance optimizations", () => {
 
     it("does nothing when no rows match", async () => {
       const store = createStore()
+
       await store.getState().fetch()
 
-      await store.getState().removeWhere([{ op: "eq", column: "title", value: "nonexistent" }] as any)
+      await store.getState().removeWhere([{ column: "title", op: "eq", value: "nonexistent" }] as any)
 
       expect(store.getState().records.size).toBe(2)
     })
 
     it("supports multiple filter conditions", async () => {
       const store = createStore()
+
       await store.getState().fetch()
 
       // Remove where completed=false AND title="Buy milk" — should match id: 1
       await store.getState().removeWhere([
-        { op: "eq", column: "completed", value: false },
-        { op: "eq", column: "title", value: "Buy milk" },
+        { column: "completed", op: "eq", value: false },
+        { column: "title", op: "eq", value: "Buy milk" },
       ] as any)
 
       expect(store.getState().records.size).toBe(1)

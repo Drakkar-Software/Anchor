@@ -1,12 +1,13 @@
 "use client"
 
-import { useState, useEffect, useCallback, useRef } from "react"
 import type { SupabaseClient } from "@supabase/supabase-js"
+import { useCallback, useEffect, useRef,useState } from "react"
+
 import { callRpc } from "../rpc/rpcAction.js"
 
 type UseRpcOptions = {
-  enabled?: boolean
   deps?: unknown[]
+  enabled?: boolean
 }
 
 type UseRpcResult<T> = {
@@ -39,29 +40,35 @@ export function useRpc<
   const enabled = options?.enabled ?? true
   const deps = options?.deps ?? []
   const argsRef = useRef(args)
-  argsRef.current = args
+
+  useEffect(() => {
+    argsRef.current = args
+  }, [args])
 
   const fetch = useCallback(async () => {
     setIsLoading(true)
     setError(null)
+
     try {
       const result = await callRpc<T, Args>(
         supabase,
         functionName,
         argsRef.current,
       )
+
       setData(result.data)
       setError(result.error)
-    } catch (err) {
-      setError(err instanceof Error ? err : new Error(String(err)))
+    } catch (error_) {
+      setError(error_ instanceof Error ? error_ : new Error(String(error_)))
     } finally {
       setIsLoading(false)
     }
   }, [supabase, functionName])
 
   useEffect(() => {
-    if (!enabled) return
-    fetch()
+    if (!enabled) {return}
+
+    void fetch()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, fetch, ...deps])
 

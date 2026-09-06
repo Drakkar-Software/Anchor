@@ -1,45 +1,13 @@
-import type { SupabaseClient, Session } from "@supabase/supabase-js"
+import type { Session,SupabaseClient } from "@supabase/supabase-js"
+
 import { fromSupabaseError } from "../errors.js"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-/** The `type` field from a Supabase auth callback URL */
-export type AuthCallbackType =
-  | "recovery"
-  | "signup"
-  | "magiclink"
-  | "email"
-  | "email_change"
-  | "invite"
-  | string
-
-/** Parsed parameters from a Supabase auth callback URL */
-export type ParsedAuthCallback = {
-  /** access_token from the hash fragment (implicit flow) */
-  accessToken: string | null
-  /** refresh_token from the hash fragment (implicit flow) */
-  refreshToken: string | null
-  /** authorization code from query params (PKCE flow) */
-  code: string | null
-  /**
-   * `sb_flow_id` from query params — present only when the client that
-   * started the flow set `appendPkceFlowIdToRedirects: true`. Identifies
-   * which concurrent PKCE flow (e.g. two OAuth providers started in
-   * different tabs) this callback belongs to; forwarded to
-   * `exchangeCodeForSession` so the right verifier is used.
-   */
-  flowId: string | null
-  /** auth flow type (recovery, signup, magiclink, email, email_change, invite) */
-  type: AuthCallbackType | null
-  /** OAuth/Supabase error code */
-  error: string | null
-  /** Human-readable error description */
-  errorDescription: string | null
-}
-
 /** Result of a successful auth callback */
 export type AuthCallbackResult = {
   session: Session
+
   /** auth flow type from the callback URL */
   type: AuthCallbackType
 }
@@ -56,84 +24,81 @@ export type AuthCallbackResult = {
  * }
  */
 export type AuthCallbackRoutes = {
-  recovery?: string
-  signup?: string
-  magiclink?: string
+  [type: string]: string | undefined
+
+  /** Fallback for any type without an explicit entry. */
+  default?: string
   email?: string
   email_change?: string
   invite?: string
-  /** Fallback for any type without an explicit entry. */
-  default?: string
-  [type: string]: string | undefined
+  magiclink?: string
+  recovery?: string
+  signup?: string
 }
 
-/**
- * Resolves a post-login destination path from a callback type and a routes map.
- *
- * Returns the type-specific route if present, otherwise `routes.default`,
- * otherwise `null` (no navigation should occur).
- *
- * @example
- * resolveAuthRedirect('recovery', { recovery: '/settings/security', default: '/home' })
- * // => '/settings/security'
- *
- * resolveAuthRedirect('signup', { default: '/home' })
- * // => '/home'
- *
- * resolveAuthRedirect('email', { recovery: '/settings/security' })
- * // => null
- */
-export function resolveAuthRedirect(
-  type: AuthCallbackType,
-  routes: AuthCallbackRoutes | undefined,
-): string | null {
-  if (!routes) return null
-  return routes[type] ?? routes.default ?? null
+/** The `type` field from a Supabase auth callback URL */
+export type AuthCallbackType =
+  | "recovery"
+  | "signup"
+  | "magiclink"
+  | "email"
+  | "email_change"
+  | "invite"
+  | string
+
+/** Parsed parameters from a Supabase auth callback URL */
+export type ParsedAuthCallback = {
+  /** access_token from the hash fragment (implicit flow) */
+  accessToken: string | null
+
+  /** authorization code from query params (PKCE flow) */
+  code: string | null
+
+  /** OAuth/Supabase error code */
+  error: string | null
+
+  /** Human-readable error description */
+  errorDescription: string | null
+
+  /**
+   * `sb_flow_id` from query params — present only when the client that
+   * started the flow set `appendPkceFlowIdToRedirects: true`. Identifies
+   * which concurrent PKCE flow (e.g. two OAuth providers started in
+   * different tabs) this callback belongs to; forwarded to
+   * `exchangeCodeForSession` so the right verifier is used.
+   */
+  flowId: string | null
+
+  /** refresh_token from the hash fragment (implicit flow) */
+  refreshToken: string | null
+
+  /** auth flow type (recovery, signup, magiclink, email, email_change, invite) */
+  type: AuthCallbackType | null
 }
+
+/** Every OTP flow Supabase can verify, by which identifier it arrives on. */
+export type VerifyOtpParams =
+  | {
+      email: string
+      options?: { captchaToken?: string; redirectTo?: string; }
+      token: string
+      type: "signup" | "invite" | "magiclink" | "recovery" | "email_change" | "email"
+    }
+  | {
+      options?: { captchaToken?: string }
+      phone: string
+      token: string
+      type: "sms" | "phone_change"
+    }
+  | {
+      options?: { captchaToken?: string; redirectTo?: string; }
+
+      /** From a `?token_hash=` callback link, where no address is echoed back. */
+      token_hash: string
+      type: "signup" | "invite" | "magiclink" | "recovery" | "email_change" | "email"
+    }
 
 // ─── URL Parsing ──────────────────────────────────────────────────────────────
-
-/**
- * Parse auth parameters from a Supabase auth callback URL.
- *
- * Handles both:
- * - Implicit flow: tokens in the URL hash fragment (`#access_token=…&refresh_token=…`)
- * - PKCE flow: authorization code in query params (`?code=…`)
- *
- * @example
- * const { accessToken, type } = parseAuthCallbackUrl(window.location.href)
- */
-export function parseAuthCallbackUrl(url: string): ParsedAuthCallback {
-  const hashIndex = url.indexOf("#")
-  const hashString = hashIndex >= 0 ? url.slice(hashIndex + 1) : ""
-  const hashParams = new URLSearchParams(hashString)
-
-  const queryString = url.split("?")[1]?.split("#")[0] ?? ""
-  const queryParams = new URLSearchParams(queryString)
-
-  return {
-    accessToken: hashParams.get("access_token"),
-    refreshToken: hashParams.get("refresh_token"),
-    code: queryParams.get("code"),
-    flowId: queryParams.get("sb_flow_id"),
-    type: hashParams.get("type") ?? queryParams.get("type"),
-    error: hashParams.get("error") ?? queryParams.get("error"),
-    errorDescription:
-      hashParams.get("error_description") ??
-      queryParams.get("error_description"),
-  }
-}
-
-/**
- * Detect whether a URL contains Supabase auth callback parameters
- * (access_token, code, or error) that require processing.
- */
-export function hasAuthCallbackParams(url: string): boolean {
-  const parsed = parseAuthCallbackUrl(url)
-  return !!(parsed.accessToken ?? parsed.code ?? parsed.error)
-}
-
-// ─── Session from URL ─────────────────────────────────────────────────────────
 
 /**
  * Establish a Supabase session from an auth callback URL.
@@ -173,8 +138,11 @@ export async function createSessionFromUrl(
       access_token: parsed.accessToken,
       refresh_token: parsed.refreshToken,
     })
-    if (error) throw fromSupabaseError(error)
-    if (!data.session) throw new Error("Session could not be established")
+
+    if (error) {throw fromSupabaseError(error)}
+
+    if (!data.session) {throw new Error("Session could not be established")}
+
     return { session: data.session, type }
   }
 
@@ -191,15 +159,16 @@ export async function createSessionFromUrl(
       parsed.code,
       parsed.flowId ? { flowId: parsed.flowId } : undefined,
     )
-    if (error) throw fromSupabaseError(error)
-    if (!data.session) throw new Error("Session could not be established")
+
+    if (error) {throw fromSupabaseError(error)}
+
+    if (!data.session) {throw new Error("Session could not be established")}
+
     return { session: data.session, type }
   }
 
   return null
 }
-
-// ─── Redirect URL Helpers ─────────────────────────────────────────────────────
 
 /**
  * Build a Supabase auth redirect URL for web environments.
@@ -214,18 +183,92 @@ export async function createSessionFromUrl(
  * const redirectTo = getWebAuthRedirectTo() // "https://example.com/auth-callback"
  */
 export function getWebAuthRedirectTo(path = "auth-callback"): string {
-  if (typeof window === "undefined") {
-    throw new Error(
+  if (typeof globalThis === "undefined") {
+    throw new TypeError(
       "getWebAuthRedirectTo() is only available in browser environments. " +
         "For native (React Native / Expo), use your app scheme: " +
         '`Linking.createURL("auth-callback")` from expo-linking.',
     )
   }
-  const cleanPath = path.replace(/^\//, "")
-  return `${window.location.origin}/${cleanPath}`
+
+  const cleanPath = path.replace(/^\//v, "")
+
+  return `${globalThis.location.origin}/${cleanPath}`
+}
+
+// ─── Session from URL ─────────────────────────────────────────────────────────
+
+/**
+ * Detect whether a URL contains Supabase auth callback parameters
+ * (access_token, code, or error) that require processing.
+ */
+export function hasAuthCallbackParams(url: string): boolean {
+  const parsed = parseAuthCallbackUrl(url)
+
+  return Boolean(parsed.accessToken ?? parsed.code ?? parsed.error)
+}
+
+// ─── Redirect URL Helpers ─────────────────────────────────────────────────────
+
+/**
+ * Parse auth parameters from a Supabase auth callback URL.
+ *
+ * Handles both:
+ * - Implicit flow: tokens in the URL hash fragment (`#access_token=…&refresh_token=…`)
+ * - PKCE flow: authorization code in query params (`?code=…`)
+ *
+ * @example
+ * const { accessToken, type } = parseAuthCallbackUrl(window.location.href)
+ */
+export function parseAuthCallbackUrl(url: string): ParsedAuthCallback {
+  const hashIndex = url.indexOf("#")
+  const hashString = hashIndex === -1 ? "" : url.slice(hashIndex + 1)
+  const hashParams = new URLSearchParams(hashString)
+
+  const queryString = url.split("?")[1]?.split("#")[0] ?? ""
+  const queryParams = new URLSearchParams(queryString)
+
+  return {
+    accessToken: hashParams.get("access_token"),
+    code: queryParams.get("code"),
+    error: hashParams.get("error") ?? queryParams.get("error"),
+
+    errorDescription:
+      hashParams.get("error_description") ??
+      queryParams.get("error_description"),
+
+    flowId: queryParams.get("sb_flow_id"),
+    refreshToken: hashParams.get("refresh_token"),
+    type: hashParams.get("type") ?? queryParams.get("type"),
+  }
 }
 
 // ─── Auth Flow Helpers ────────────────────────────────────────────────────────
+
+/**
+ * Resolves a post-login destination path from a callback type and a routes map.
+ *
+ * Returns the type-specific route if present, otherwise `routes.default`,
+ * otherwise `null` (no navigation should occur).
+ *
+ * @example
+ * resolveAuthRedirect('recovery', { recovery: '/settings/security', default: '/home' })
+ * // => '/settings/security'
+ *
+ * resolveAuthRedirect('signup', { default: '/home' })
+ * // => '/home'
+ *
+ * resolveAuthRedirect('email', { recovery: '/settings/security' })
+ * // => null
+ */
+export function resolveAuthRedirect(
+  type: AuthCallbackType,
+  routes: AuthCallbackRoutes | undefined,
+): string | null {
+  if (!routes) {return null}
+
+  return routes[type] ?? routes.default ?? null
+}
 
 /**
  * Send a password recovery email with a one-click link.
@@ -248,46 +291,9 @@ export async function sendPasswordRecovery(
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
     redirectTo: options?.redirectTo,
   })
+
   return { error: error ? fromSupabaseError(error) : null }
 }
-
-/**
- * Verify a 6-digit OTP code from a password recovery email.
- * Use as a manual fallback when the one-click link cannot be opened
- * (e.g. the link expired, or opened on a different device).
- *
- * @example
- * const { session, error } = await verifyRecoveryOTP(supabase, email, otp)
- * if (session) router.replace('/settings/security')
- */
-export async function verifyRecoveryOTP(
-  supabase: SupabaseClient,
-  email: string,
-  otp: string,
-): Promise<{ session: Session | null; error: Error | null }> {
-  return verifyOtp(supabase, { email, token: otp, type: "recovery" })
-}
-
-/** Every OTP flow Supabase can verify, by which identifier it arrives on. */
-export type VerifyOtpParams =
-  | {
-      email: string
-      token: string
-      type: "signup" | "invite" | "magiclink" | "recovery" | "email_change" | "email"
-      options?: { redirectTo?: string; captchaToken?: string }
-    }
-  | {
-      phone: string
-      token: string
-      type: "sms" | "phone_change"
-      options?: { captchaToken?: string }
-    }
-  | {
-      /** From a `?token_hash=` callback link, where no address is echoed back. */
-      token_hash: string
-      type: "signup" | "invite" | "magiclink" | "recovery" | "email_change" | "email"
-      options?: { redirectTo?: string; captchaToken?: string }
-    }
 
 /**
  * Verify any OTP, not only a password recovery one.
@@ -312,10 +318,30 @@ export type VerifyOtpParams =
 export async function verifyOtp(
   supabase: SupabaseClient,
   params: VerifyOtpParams,
-): Promise<{ session: Session | null; error: Error | null }> {
+): Promise<{ error: Error | null; session: Session | null; }> {
   const { data, error } = await supabase.auth.verifyOtp(params as never)
+
+
   // Error first: `data.session` is null on failure and reading it first reports
   // a refused code as a successful sign-in with no session.
-  if (error) return { session: null, error: fromSupabaseError(error) }
-  return { session: data?.session ?? null, error: null }
+  if (error) {return { error: fromSupabaseError(error), session: null }}
+
+  return { error: null, session: data.session ?? null }
+}
+
+/**
+ * Verify a 6-digit OTP code from a password recovery email.
+ * Use as a manual fallback when the one-click link cannot be opened
+ * (e.g. the link expired, or opened on a different device).
+ *
+ * @example
+ * const { session, error } = await verifyRecoveryOTP(supabase, email, otp)
+ * if (session) router.replace('/settings/security')
+ */
+export async function verifyRecoveryOTP(
+  supabase: SupabaseClient,
+  email: string,
+  otp: string,
+): Promise<{ error: Error | null; session: Session | null; }> {
+  return await verifyOtp(supabase, { email, token: otp, type: "recovery" })
 }

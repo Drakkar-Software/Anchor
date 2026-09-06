@@ -17,6 +17,12 @@ TypeScript library that binds Zustand state management to Supabase. Auto-generat
 # CI does NOT run this — the publish workflow runs build + test only.
 pnpm -r typecheck
 
+# Lint every package (eslint-config-hardcore; ESLint 8 eslintrc).
+pnpm lint
+
+# React Doctor (all rules enabled via doctor.config.json).
+pnpm lint:doctor
+
 # Run tests. The binaries live under the PACKAGE's node_modules under pnpm;
 # ../../node_modules/.bin does not exist.
 cd packages/core && ./node_modules/.bin/vitest run
