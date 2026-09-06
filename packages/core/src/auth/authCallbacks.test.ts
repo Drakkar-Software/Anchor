@@ -1,12 +1,13 @@
-import { describe, it, expect, vi, beforeEach } from "vitest"
+import { describe, expect, it, vi } from "vitest"
+
 import {
-  parseAuthCallbackUrl,
-  hasAuthCallbackParams,
   createSessionFromUrl,
-  sendPasswordRecovery,
-  verifyRecoveryOTP,
-  verifyOtp,
+  hasAuthCallbackParams,
+  parseAuthCallbackUrl,
   resolveAuthRedirect,
+  sendPasswordRecovery,
+  verifyOtp,
+  verifyRecoveryOTP,
 } from "./authCallbacks.js"
 
 // ─── parseAuthCallbackUrl ─────────────────────────────────────────────────────
@@ -16,6 +17,7 @@ describe("parseAuthCallbackUrl", () => {
     const url =
       "https://app.example.com/auth-callback#access_token=tok123&refresh_token=ref456&type=recovery&token_type=bearer"
     const result = parseAuthCallbackUrl(url)
+
     expect(result.accessToken).toBe("tok123")
     expect(result.refreshToken).toBe("ref456")
     expect(result.type).toBe("recovery")
@@ -27,6 +29,7 @@ describe("parseAuthCallbackUrl", () => {
     const url =
       "https://app.example.com/auth-callback?code=pkce_code_abc&type=signup"
     const result = parseAuthCallbackUrl(url)
+
     expect(result.code).toBe("pkce_code_abc")
     expect(result.type).toBe("signup")
     expect(result.accessToken).toBeNull()
@@ -39,6 +42,7 @@ describe("parseAuthCallbackUrl", () => {
     const url =
       "https://app.example.com/auth-callback?code=pkce_code_abc&sb_flow_id=flow_123&type=signup"
     const result = parseAuthCallbackUrl(url)
+
     expect(result.code).toBe("pkce_code_abc")
     expect(result.flowId).toBe("flow_123")
   })
@@ -47,6 +51,7 @@ describe("parseAuthCallbackUrl", () => {
     const url =
       "https://app.example.com/auth-callback#error=access_denied&error_description=Link+has+expired"
     const result = parseAuthCallbackUrl(url)
+
     expect(result.error).toBe("access_denied")
     expect(result.errorDescription).toBe("Link has expired")
     expect(result.accessToken).toBeNull()
@@ -56,6 +61,7 @@ describe("parseAuthCallbackUrl", () => {
     const url =
       "https://app.example.com/auth-callback?error=bad_request&error_description=Invalid+token"
     const result = parseAuthCallbackUrl(url)
+
     expect(result.error).toBe("bad_request")
     expect(result.errorDescription).toBe("Invalid token")
   })
@@ -64,6 +70,7 @@ describe("parseAuthCallbackUrl", () => {
     const url =
       "https://app.example.com/#access_token=tok&refresh_token=ref&type=magiclink"
     const result = parseAuthCallbackUrl(url)
+
     expect(result.accessToken).toBe("tok")
     expect(result.refreshToken).toBe("ref")
     expect(result.type).toBe("magiclink")
@@ -71,6 +78,7 @@ describe("parseAuthCallbackUrl", () => {
 
   it("returns all nulls for a URL with no auth params", () => {
     const result = parseAuthCallbackUrl("https://app.example.com/home")
+
     expect(result.accessToken).toBeNull()
     expect(result.refreshToken).toBeNull()
     expect(result.code).toBeNull()
@@ -83,6 +91,7 @@ describe("parseAuthCallbackUrl", () => {
     const url =
       "myapp://auth-callback#access_token=nativeTok&refresh_token=nativeRef&type=recovery"
     const result = parseAuthCallbackUrl(url)
+
     expect(result.accessToken).toBe("nativeTok")
     expect(result.refreshToken).toBe("nativeRef")
     expect(result.type).toBe("recovery")
@@ -92,6 +101,7 @@ describe("parseAuthCallbackUrl", () => {
     const url =
       "https://app.example.com/auth-callback?type=signup#access_token=tok&refresh_token=ref&type=recovery"
     const result = parseAuthCallbackUrl(url)
+
     expect(result.type).toBe("recovery") // hash wins
   })
 })
@@ -131,25 +141,31 @@ describe("hasAuthCallbackParams", () => {
 function makeSupabase(authOverrides: Record<string, ReturnType<typeof vi.fn>> = {}) {
   return {
     auth: {
-      setSession: vi.fn().mockResolvedValue({
-        data: {
-          session: { access_token: "tok", refresh_token: "ref", user: { id: "u1" } },
-          user: { id: "u1" },
-        },
-        error: null,
-      }),
       exchangeCodeForSession: vi.fn().mockResolvedValue({
         data: {
           session: { access_token: "tok2", refresh_token: "ref2", user: { id: "u2" } },
           user: { id: "u2" },
         },
+
         error: null,
       }),
+
       resetPasswordForEmail: vi.fn().mockResolvedValue({ error: null }),
+
+      setSession: vi.fn().mockResolvedValue({
+        data: {
+          session: { access_token: "tok", refresh_token: "ref", user: { id: "u1" } },
+          user: { id: "u1" },
+        },
+
+        error: null,
+      }),
+
       verifyOtp: vi.fn().mockResolvedValue({
         data: { session: { access_token: "tok3", user: { id: "u3" } } },
         error: null,
       }),
+
       ...authOverrides,
     },
   } as any
@@ -200,12 +216,14 @@ describe("createSessionFromUrl", () => {
       "https://app.example.com/auth-callback#access_token=tok&refresh_token=ref"
 
     const result = await createSessionFromUrl(supabase, url)
+
     expect(result?.type).toBe("email")
   })
 
   it("returns null when no auth params are present", async () => {
     const supabase = makeSupabase()
     const result = await createSessionFromUrl(supabase, "https://app.example.com/home")
+
     expect(result).toBeNull()
     expect(supabase.auth.setSession).not.toHaveBeenCalled()
     expect(supabase.auth.exchangeCodeForSession).not.toHaveBeenCalled()
@@ -261,11 +279,13 @@ describe("createSessionFromUrl", () => {
 
   it("handles legacy root URL redirect (site_url without /auth-callback)", async () => {
     const supabase = makeSupabase()
+
     // Supabase redirected to / instead of /auth-callback (old site_url config)
     const url =
       "https://app.example.com/#access_token=tok&refresh_token=ref&type=magiclink"
 
     const result = await createSessionFromUrl(supabase, url)
+
     expect(result?.type).toBe("magiclink")
     expect(supabase.auth.setSession).toHaveBeenCalled()
   })
@@ -316,7 +336,7 @@ describe("sendPasswordRecovery", () => {
 describe("verifyRecoveryOTP", () => {
   it("calls verifyOtp with type='recovery'", async () => {
     const supabase = makeSupabase()
-    const { session, error } = await verifyRecoveryOTP(supabase, "user@example.com", "123456")
+    const { error, session } = await verifyRecoveryOTP(supabase, "user@example.com", "123456")
 
     expect(supabase.auth.verifyOtp).toHaveBeenCalledWith({
       email: "user@example.com",
@@ -333,7 +353,7 @@ describe("verifyRecoveryOTP", () => {
         .fn()
         .mockResolvedValue({ data: { session: null }, error: { message: "OTP expired" } }),
     })
-    const { session, error } = await verifyRecoveryOTP(supabase, "user@example.com", "000000")
+    const { error, session } = await verifyRecoveryOTP(supabase, "user@example.com", "000000")
 
     expect(session).toBeNull()
     expect(error).toBeInstanceOf(Error)
@@ -346,13 +366,13 @@ describe("verifyRecoveryOTP", () => {
 describe("resolveAuthRedirect", () => {
   it("returns the type-specific route for recovery", () => {
     expect(
-      resolveAuthRedirect("recovery", { recovery: "/settings/security", default: "/home" }),
+      resolveAuthRedirect("recovery", { default: "/home", recovery: "/settings/security" }),
     ).toBe("/settings/security")
   })
 
   it("falls back to default when type has no explicit entry", () => {
     expect(
-      resolveAuthRedirect("email", { recovery: "/settings/security", default: "/home" }),
+      resolveAuthRedirect("email", { default: "/home", recovery: "/settings/security" }),
     ).toBe("/home")
   })
 
@@ -370,19 +390,19 @@ describe("resolveAuthRedirect", () => {
 
   it("resolves a custom/unknown type via the index signature", () => {
     expect(
-      resolveAuthRedirect("sso", { sso: "/dashboard", default: "/home" }),
+      resolveAuthRedirect("sso", { default: "/home", sso: "/dashboard" }),
     ).toBe("/dashboard")
   })
 
   it("resolves signup route explicitly", () => {
     expect(
-      resolveAuthRedirect("signup", { signup: "/onboarding", default: "/home" }),
+      resolveAuthRedirect("signup", { default: "/home", signup: "/onboarding" }),
     ).toBe("/onboarding")
   })
 
   it("resolves magiclink to default when no specific entry", () => {
     expect(
-      resolveAuthRedirect("magiclink", { recovery: "/settings/security", default: "/home" }),
+      resolveAuthRedirect("magiclink", { default: "/home", recovery: "/settings/security" }),
     ).toBe("/home")
   })
 })
@@ -408,6 +428,7 @@ describe("verifyOtp", () => {
 
   it("verifies an SMS code, which needs a phone rather than an email", async () => {
     const supabase = makeSupabase()
+
     await verifyOtp(supabase, { phone: "+15551234567", token: "123456", type: "sms" })
 
     expect(supabase.auth.verifyOtp).toHaveBeenCalledWith({
@@ -419,6 +440,7 @@ describe("verifyOtp", () => {
 
   it("verifies a token_hash, where no address comes back with the link", async () => {
     const supabase = makeSupabase()
+
     await verifyOtp(supabase, { token_hash: "abc123", type: "recovery" })
 
     expect(supabase.auth.verifyOtp).toHaveBeenCalledWith({
@@ -428,7 +450,7 @@ describe("verifyOtp", () => {
   })
 
   it("returns the session on success", async () => {
-    const { session, error } = await verifyOtp(makeSupabase(), {
+    const { error, session } = await verifyOtp(makeSupabase(), {
       email: "u@example.com",
       token: "123456",
       type: "signup",
@@ -442,10 +464,10 @@ describe("verifyOtp", () => {
     const supabase = makeSupabase({
       verifyOtp: vi
         .fn()
-        .mockResolvedValue({ data: { session: null }, error: { message: "Token has expired", code: "otp_expired" } }),
+        .mockResolvedValue({ data: { session: null }, error: { code: "otp_expired", message: "Token has expired" } }),
     })
 
-    const { session, error } = await verifyOtp(supabase, {
+    const { error, session } = await verifyOtp(supabase, {
       email: "u@example.com",
       token: "000000",
       type: "signup",
@@ -453,13 +475,15 @@ describe("verifyOtp", () => {
 
     expect(session).toBeNull()
     expect(error?.message).toBe("Token has expired")
+
     // Routed through AnchorError, so the caller can branch on the code rather
     // than on the message text.
-    expect((error as { code?: string })?.code).toBe("otp_expired")
+    expect((error as { code?: string }).code).toBe("otp_expired")
   })
 
   it("still backs verifyRecoveryOTP, which keeps its recovery type", async () => {
     const supabase = makeSupabase()
+
     await verifyRecoveryOTP(supabase, "u@example.com", "123456")
 
     expect(supabase.auth.verifyOtp).toHaveBeenCalledWith({

@@ -1,7 +1,7 @@
 "use client"
 
-import { useStore } from "zustand"
-import type { StoreApi } from "zustand"
+import { type StoreApi , useStore } from "zustand"
+
 import type { TableStore } from "../types.js"
 
 export type QueueStatusResult = {
@@ -22,8 +22,9 @@ export function useQueueStatus(
   const records = useStore(store, (s) => s.records)
 
   let pendingCount = 0
+
   for (const row of records.values()) {
-    if (row._anchor_pending) pendingCount++
+    if (row._anchor_pending) {pendingCount++}
   }
 
   return { pendingCount, queueSize: store.getState().getQueueSize() }

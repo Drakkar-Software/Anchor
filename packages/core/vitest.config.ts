@@ -2,7 +2,6 @@ import { defineConfig } from "vitest/config"
 
 export default defineConfig({
   test: {
-    globals: true,
     // Node, deliberately, and not jsdom. Every hook test opts itself in with a
     // `// @vitest-environment jsdom` docblock instead.
     //
@@ -12,6 +11,7 @@ export default defineConfig({
     // on. Their tests would start exercising a different path than the one they
     // were written against, and would still pass.
     environment: "node",
+    globals: true,
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
   },
 })

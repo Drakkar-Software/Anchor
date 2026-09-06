@@ -3,14 +3,17 @@ import type { FilterDescriptor, SortDescriptor } from "../types.js"
 export type CursorDirection = "forward" | "backward"
 
 export type CursorPaginationOptions<Row = Record<string, unknown>> = {
-  /** Column to paginate on (must be sortable, e.g. created_at, id) */
-  cursorColumn: string & keyof Row
-  /** Number of items per page */
-  pageSize: number
   /** Current cursor value (null = start from beginning) */
   cursor?: unknown
+
+  /** Column to paginate on (must be sortable, e.g. created_at, id) */
+  cursorColumn: string & keyof Row
+
   /** Direction: forward (after cursor) or backward (before cursor) */
   direction?: CursorDirection
+
+  /** Number of items per page */
+  pageSize: number
 }
 
 export type PaginationState = {
@@ -28,14 +31,14 @@ export function buildCursorQuery<Row>(
   options: CursorPaginationOptions<Row>,
 ): {
   filters: FilterDescriptor<Row>[]
-  sort: SortDescriptor<Row>[]
   limit: number
+  sort: SortDescriptor<Row>[]
 } {
   const {
-    cursorColumn,
-    pageSize,
     cursor,
+    cursorColumn,
     direction = "forward",
+    pageSize,
   } = options
 
   const filters: FilterDescriptor<Row>[] = []
@@ -50,11 +53,11 @@ export function buildCursorQuery<Row>(
   }
 
   const sort: SortDescriptor<Row>[] = [
-    { column: cursorColumn, ascending },
+    { ascending, column: cursorColumn },
   ]
 
   // Fetch one extra to detect if there's a next page
-  return { filters, sort, limit: pageSize + 1 }
+  return { filters, limit: pageSize + 1, sort }
 }
 
 /**
@@ -68,7 +71,7 @@ export function processCursorResults<Row>(
   data: Row[]
   pagination: PaginationState
 } {
-  const { cursorColumn, pageSize, cursor, direction = "forward" } = options
+  const { cursor, cursorColumn, direction = "forward", pageSize } = options
   const hasMore = rows.length > pageSize
   const data = hasMore ? rows.slice(0, pageSize) : rows
 
@@ -77,15 +80,17 @@ export function processCursorResults<Row>(
     data.reverse()
   }
 
-  const lastItem = data[data.length - 1] as Record<string, unknown> | undefined
+  const lastItem = data.at(-1) as Record<string, unknown> | undefined
   const firstItem = data[0] as Record<string, unknown> | undefined
 
   return {
     data,
+
     pagination: {
       cursor: direction === "forward"
-        ? (lastItem?.[cursorColumn as string] ?? null)
-        : (firstItem?.[cursorColumn as string] ?? null),
+        ? (lastItem?.[cursorColumn] ?? null)
+        : (firstItem?.[cursorColumn] ?? null),
+
       hasNextPage: direction === "forward" ? hasMore : cursor != null,
       hasPreviousPage: direction === "forward" ? cursor != null : hasMore,
       pageSize,

@@ -1,7 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from "vitest"
-import { isStale, isExpired } from "./cacheTtl.js"
-import { createTableStore } from "../createTableStore.js"
+import { describe, expect,it } from "vitest"
+
 import { createMockSupabase } from "../__tests__/mockSupabase.js"
+import { createTableStore } from "../createTableStore.js"
+import { isExpired,isStale } from "./cacheTtl.js"
 
 describe("isStale", () => {
   it("returns true when never fetched", () => {
@@ -10,6 +11,7 @@ describe("isStale", () => {
       supabase,
       table: "todos",
     })
+
     expect(isStale(store)).toBe(true)
   })
 
@@ -19,8 +21,9 @@ describe("isStale", () => {
       supabase,
       table: "todos",
     })
+
     await store.getState().fetch()
-    expect(isStale(store, 60000)).toBe(false)
+    expect(isStale(store, 60_000)).toBe(false)
   })
 
   it("returns true when staleTTL exceeded", async () => {
@@ -29,10 +32,12 @@ describe("isStale", () => {
       supabase,
       table: "todos",
     })
+
     await store.getState().fetch()
+
     // Manually set lastFetchedAt to past
-    store.setState({ lastFetchedAt: Date.now() - 120000 } as any)
-    expect(isStale(store, 60000)).toBe(true)
+    store.setState({ lastFetchedAt: Date.now() - 120_000 } as any)
+    expect(isStale(store, 60_000)).toBe(true)
   })
 })
 
@@ -43,6 +48,7 @@ describe("isExpired", () => {
       supabase,
       table: "todos",
     })
+
     expect(isExpired(store)).toBe(true)
   })
 
@@ -52,6 +58,7 @@ describe("isExpired", () => {
       supabase,
       table: "todos",
     })
+
     await store.getState().fetch()
     expect(isExpired(store, 30 * 60 * 1000)).toBe(false)
   })

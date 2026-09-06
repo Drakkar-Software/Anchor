@@ -2,12 +2,34 @@ import type { FilterDescriptor, FilterOperator, SortDescriptor } from "../types.
 
 // ─── Type-safe Filter Helpers ────────────────────────────────────────
 
-function createFilter<Row>(
-  column: string & keyof Row,
-  op: FilterOperator,
+export function asc<Row, K extends string & keyof Row>(
+  column: K,
+  options?: { nullsFirst?: boolean },
+): SortDescriptor<Row> {
+  return { ascending: true, column, nullsFirst: options?.nullsFirst }
+}
+
+/** Contained by (array): column <@ value */
+export function containedBy<Row, K extends string & keyof Row>(
+  column: K,
   value: unknown,
 ): FilterDescriptor<Row> {
-  return { column, op, value }
+  return createFilter<Row>(column, "containedBy", value)
+}
+
+/** Contains (jsonb/array/range): column @> value */
+export function contains<Row, K extends string & keyof Row>(
+  column: K,
+  value: unknown,
+): FilterDescriptor<Row> {
+  return createFilter<Row>(column, "contains", value)
+}
+
+export function desc<Row, K extends string & keyof Row>(
+  column: K,
+  options?: { nullsFirst?: boolean },
+): SortDescriptor<Row> {
+  return { ascending: false, column, nullsFirst: options?.nullsFirst }
 }
 
 /** Equal: column = value */
@@ -16,14 +38,6 @@ export function eq<Row, K extends string & keyof Row>(
   value: Row[K],
 ): FilterDescriptor<Row> {
   return createFilter<Row>(column, "eq", value)
-}
-
-/** Not equal: column != value */
-export function neq<Row, K extends string & keyof Row>(
-  column: K,
-  value: Row[K],
-): FilterDescriptor<Row> {
-  return createFilter<Row>(column, "neq", value)
 }
 
 /** Greater than: column > value */
@@ -42,6 +56,38 @@ export function gte<Row, K extends string & keyof Row>(
   return createFilter<Row>(column, "gte", value)
 }
 
+/** Pattern match (case-insensitive): column ILIKE pattern */
+export function ilike<Row, K extends string & keyof Row>(
+  column: K,
+  pattern: string,
+): FilterDescriptor<Row> {
+  return createFilter<Row>(column, "ilike", pattern)
+}
+
+/** IN check: column IN (values) */
+export function inValues<Row, K extends string & keyof Row>(
+  column: K,
+  values: Row[K][],
+): FilterDescriptor<Row> {
+  return createFilter<Row>(column, "in", values)
+}
+
+/** IS check: column IS value (null, true, false) */
+export function is<Row, K extends string & keyof Row>(
+  column: K,
+  value: null | boolean,
+): FilterDescriptor<Row> {
+  return createFilter<Row>(column, "is", value)
+}
+
+/** Pattern match (case-sensitive): column LIKE pattern */
+export function like<Row, K extends string & keyof Row>(
+  column: K,
+  pattern: string,
+): FilterDescriptor<Row> {
+  return createFilter<Row>(column, "like", pattern)
+}
+
 /** Less than: column < value */
 export function lt<Row, K extends string & keyof Row>(
   column: K,
@@ -56,71 +102,6 @@ export function lte<Row, K extends string & keyof Row>(
   value: Row[K],
 ): FilterDescriptor<Row> {
   return createFilter<Row>(column, "lte", value)
-}
-
-/** Pattern match (case-sensitive): column LIKE pattern */
-export function like<Row, K extends string & keyof Row>(
-  column: K,
-  pattern: string,
-): FilterDescriptor<Row> {
-  return createFilter<Row>(column, "like", pattern)
-}
-
-/** Pattern match (case-insensitive): column ILIKE pattern */
-export function ilike<Row, K extends string & keyof Row>(
-  column: K,
-  pattern: string,
-): FilterDescriptor<Row> {
-  return createFilter<Row>(column, "ilike", pattern)
-}
-
-/** IS check: column IS value (null, true, false) */
-export function is<Row, K extends string & keyof Row>(
-  column: K,
-  value: null | boolean,
-): FilterDescriptor<Row> {
-  return createFilter<Row>(column, "is", value)
-}
-
-/** IN check: column IN (values) */
-export function inValues<Row, K extends string & keyof Row>(
-  column: K,
-  values: Row[K][],
-): FilterDescriptor<Row> {
-  return createFilter<Row>(column, "in", values)
-}
-
-/** Contains (jsonb/array/range): column @> value */
-export function contains<Row, K extends string & keyof Row>(
-  column: K,
-  value: unknown,
-): FilterDescriptor<Row> {
-  return createFilter<Row>(column, "contains", value)
-}
-
-/** Contained by (array): column <@ value */
-export function containedBy<Row, K extends string & keyof Row>(
-  column: K,
-  value: unknown,
-): FilterDescriptor<Row> {
-  return createFilter<Row>(column, "containedBy", value)
-}
-
-/** Overlaps (array/range): column && value */
-export function overlaps<Row, K extends string & keyof Row>(
-  column: K,
-  value: unknown,
-): FilterDescriptor<Row> {
-  return createFilter<Row>(column, "overlaps", value)
-}
-
-/** Full-text search: column @@ to_tsquery(query) */
-export function textSearch<Row, K extends string & keyof Row>(
-  column: K,
-  query: string,
-  options?: { type?: "plain" | "phrase" | "websearch"; config?: string },
-): FilterDescriptor<Row> {
-  return createFilter<Row>(column, "textSearch", { query, ...options })
 }
 
 /**
@@ -149,18 +130,37 @@ export function match<Row>(
   )
 }
 
-// ─── Sort Helpers ────────────────────────────────────────────────────
-
-export function asc<Row, K extends string & keyof Row>(
+/** Not equal: column != value */
+export function neq<Row, K extends string & keyof Row>(
   column: K,
-  options?: { nullsFirst?: boolean },
-): SortDescriptor<Row> {
-  return { column, ascending: true, nullsFirst: options?.nullsFirst }
+  value: Row[K],
+): FilterDescriptor<Row> {
+  return createFilter<Row>(column, "neq", value)
 }
 
-export function desc<Row, K extends string & keyof Row>(
+/** Overlaps (array/range): column && value */
+export function overlaps<Row, K extends string & keyof Row>(
   column: K,
-  options?: { nullsFirst?: boolean },
-): SortDescriptor<Row> {
-  return { column, ascending: false, nullsFirst: options?.nullsFirst }
+  value: unknown,
+): FilterDescriptor<Row> {
+  return createFilter<Row>(column, "overlaps", value)
+}
+
+// ─── Sort Helpers ────────────────────────────────────────────────────
+
+/** Full-text search: column @@ to_tsquery(query) */
+export function textSearch<Row, K extends string & keyof Row>(
+  column: K,
+  query: string,
+  options?: { config?: string; type?: "plain" | "phrase" | "websearch"; },
+): FilterDescriptor<Row> {
+  return createFilter<Row>(column, "textSearch", { query, ...options })
+}
+
+function createFilter<Row>(
+  column: string & keyof Row,
+  op: FilterOperator,
+  value: unknown,
+): FilterDescriptor<Row> {
+  return { column, op, value }
 }

@@ -1,5 +1,5 @@
-import { postgresChangesFilter } from "@supabase/supabase-js"
-import type { RealtimePostgresFilterBuilder } from "@supabase/supabase-js"
+import { postgresChangesFilter,type RealtimePostgresFilterBuilder  } from "@supabase/supabase-js"
+
 import type { FilterDescriptor } from "../types.js"
 
 /**
@@ -24,44 +24,68 @@ export function toRealtimeFilter(
   filters: FilterDescriptor[],
 ): RealtimePostgresFilterBuilder {
   const builder = postgresChangesFilter()
+
   for (const f of filters) {
     switch (f.op) {
-      case "eq":
+      case "eq": {
         builder.eq(f.column, f.value as never)
+
         break
-      case "neq":
-        builder.neq(f.column, f.value as never)
-        break
-      case "gt":
+      }
+      case "gt": {
         builder.gt(f.column, f.value as never)
+
         break
-      case "gte":
+      }
+      case "gte": {
         builder.gte(f.column, f.value as never)
+
         break
-      case "lt":
-        builder.lt(f.column, f.value as never)
-        break
-      case "lte":
-        builder.lte(f.column, f.value as never)
-        break
-      case "like":
-        builder.like(f.column, f.value as string)
-        break
-      case "ilike":
+      }
+      case "ilike": {
         builder.ilike(f.column, f.value as string)
+
         break
-      case "is":
-        builder.is(f.column, f.value as never)
-        break
-      case "in":
+      }
+      case "in": {
         builder.in(f.column, f.value as never)
+
         break
-      default:
+      }
+      case "is": {
+        builder.is(f.column, f.value as never)
+
+        break
+      }
+      case "like": {
+        builder.like(f.column, f.value as string)
+
+        break
+      }
+      case "lt": {
+        builder.lt(f.column, f.value as never)
+
+        break
+      }
+      case "lte": {
+        builder.lte(f.column, f.value as never)
+
+        break
+      }
+      case "neq": {
+        builder.neq(f.column, f.value as never)
+
+        break
+      }
+
+      default: {
         throw new Error(
           `[anchor] realtime filter: operator "${f.op}" is not supported by Supabase Realtime postgres_changes filters (column "${f.column}"). ` +
-            `Supported: eq, neq, gt, gte, lt, lte, like, ilike, is, in.`,
+            "Supported: eq, neq, gt, gte, lt, lte, like, ilike, is, in.",
         )
+      }
     }
   }
+
   return builder
 }

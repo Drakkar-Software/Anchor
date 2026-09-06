@@ -1,24 +1,24 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useEffect,useState } from "react"
+
 import type {
-  ConflictAuditLog,
   ConflictAuditEntry,
+  ConflictAuditLog,
 } from "../mutation/conflictAudit.js"
 
 export function useConflictNotifications(auditLog: ConflictAuditLog) {
   const [conflicts, setConflicts] = useState<ConflictAuditEntry[]>([])
 
-  useEffect(() => {
-    return auditLog.onConflict((entry) => {
+  useEffect(() => auditLog.onConflict((entry) => {
       setConflicts((prev) => [...prev, entry])
-    })
-  }, [auditLog])
+    }), [auditLog])
 
   return {
+    clearAll: () => { setConflicts([]); },
     conflicts,
-    clearAll: () => setConflicts([]),
+
     dismiss: (index: number) =>
-      setConflicts((prev) => prev.filter((_, i) => i !== index)),
+      { setConflicts((prev) => prev.filter((_, i) => i !== index)); },
   }
 }

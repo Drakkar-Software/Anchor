@@ -1,8 +1,8 @@
 "use client"
 
 import { useEffect } from "react"
-import { setupAppLifecycle } from "../lifecycle/appLifecycle.js"
-import type { AppLifecycleOptions } from "../lifecycle/appLifecycle.js"
+
+import { type AppLifecycleOptions , setupAppLifecycle } from "../lifecycle/appLifecycle.js"
 
 /**
  * React hook that wires app lifecycle events to store operations.

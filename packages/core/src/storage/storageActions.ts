@@ -1,6 +1,19 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
-import { withRetry, type RetryOptions } from "../utils/retry.js"
+
 import { fromSupabaseError } from "../errors.js"
+import { type RetryOptions,withRetry } from "../utils/retry.js"
+
+export type ListOptions = {
+  limit?: number
+  offset?: number
+  search?: string
+  sortBy?: { column: string; order: "asc" | "desc" }
+}
+
+export type SignedUrlOptions = {
+  download?: boolean | string
+  expiresIn: number
+}
 
 export type StorageResult<T> = {
   data: T | null
@@ -10,52 +23,54 @@ export type StorageResult<T> = {
 export type UploadOptions = {
   cacheControl?: string
   contentType?: string
-  upsert?: boolean
+
   /** Retry configuration for transient failures */
   retry?: RetryOptions
-}
-
-export type ListOptions = {
-  limit?: number
-  offset?: number
-  sortBy?: { column: string; order: "asc" | "desc" }
-  search?: string
-}
-
-export type SignedUrlOptions = {
-  expiresIn: number
-  download?: boolean | string
+  upsert?: boolean
 }
 
 /**
- * Upload a file to Supabase Storage.
+ * Create a signed URL for private file access.
  */
-export async function uploadFile(
+export async function createSignedUrl(
   supabase: SupabaseClient,
   bucket: string,
   path: string,
-  file: File | Blob | ArrayBuffer | string,
-  options?: UploadOptions,
-): Promise<StorageResult<{ path: string }>> {
-  const execute = async (): Promise<StorageResult<{ path: string }>> => {
+  options: SignedUrlOptions,
+): Promise<StorageResult<{ signedUrl: string }>> {
+  try {
     const { data, error } = await supabase.storage
       .from(bucket)
-      .upload(path, file, {
-        cacheControl: options?.cacheControl,
-        contentType: options?.contentType,
-        upsert: options?.upsert,
+      .createSignedUrl(path, options.expiresIn, {
+        download: options.download,
       })
-    if (error) throw fromSupabaseError(error)
-    return { data: { path: data.path }, error: null }
-  }
 
-  try {
-    if (options?.retry) {
-      return await withRetry(execute, options.retry)
-    }
-    return await execute()
-  } catch (err) {
-    return { data: null, error: err instanceof Error ? err : new Error(String(err)) }
+    if (error) {return { data: null, error: fromSupabaseError(error) }}
+
+    return { data: { signedUrl: data.signedUrl }, error: null }
+  } catch (error) {
+    return { data: null, error: error instanceof Error ? error : new Error(String(error)) }
+  }
+}
+
+/**
+ * Creates a typed storage helper bound to a specific bucket.
+ */
+export function createStorageActions(supabase: SupabaseClient, bucket: string) {
+  return {
+    createSignedUrl: async (path: string, options: SignedUrlOptions) =>
+      await createSignedUrl(supabase, bucket, path, options),
+
+    download: async (path: string) => await downloadFile(supabase, bucket, path),
+    getPublicUrl: (path: string) => getPublicUrl(supabase, bucket, path),
+
+    list: async (path?: string, options?: ListOptions) =>
+      await listFiles(supabase, bucket, path, options),
+
+    remove: async (paths: string[]) => await removeFiles(supabase, bucket, paths),
+
+    upload: async (path: string, file: File | Blob | ArrayBuffer | string, options?: UploadOptions) =>
+      await uploadFile(supabase, bucket, path, file, options),
   }
 }
 
@@ -69,10 +84,12 @@ export async function downloadFile(
 ): Promise<StorageResult<Blob>> {
   try {
     const { data, error } = await supabase.storage.from(bucket).download(path)
-    if (error) return { data: null, error: fromSupabaseError(error) }
+
+    if (error) {return { data: null, error: fromSupabaseError(error) }}
+
     return { data, error: null }
-  } catch (err) {
-    return { data: null, error: err instanceof Error ? err : new Error(String(err)) }
+  } catch (error) {
+    return { data: null, error: error instanceof Error ? error : new Error(String(error)) }
   }
 }
 
@@ -97,29 +114,8 @@ export function getPublicUrl(
   path: string,
 ): string {
   const { data } = supabase.storage.from(bucket).getPublicUrl(path)
-  return data.publicUrl
-}
 
-/**
- * Create a signed URL for private file access.
- */
-export async function createSignedUrl(
-  supabase: SupabaseClient,
-  bucket: string,
-  path: string,
-  options: SignedUrlOptions,
-): Promise<StorageResult<{ signedUrl: string }>> {
-  try {
-    const { data, error } = await supabase.storage
-      .from(bucket)
-      .createSignedUrl(path, options.expiresIn, {
-        download: options.download,
-      })
-    if (error) return { data: null, error: fromSupabaseError(error) }
-    return { data: { signedUrl: data.signedUrl }, error: null }
-  } catch (err) {
-    return { data: null, error: err instanceof Error ? err : new Error(String(err)) }
-  }
+  return data.publicUrl
 }
 
 /**
@@ -130,27 +126,30 @@ export async function listFiles(
   bucket: string,
   path?: string,
   options?: ListOptions,
-): Promise<StorageResult<Array<{ name: string; id: string | null; metadata: Record<string, unknown> | null }>>> {
+): Promise<StorageResult<{ id: string | null; metadata: Record<string, unknown> | null; name: string; }[]>> {
   try {
     const { data, error } = await supabase.storage
       .from(bucket)
       .list(path, {
         limit: options?.limit,
         offset: options?.offset,
-        sortBy: options?.sortBy,
         search: options?.search,
+        sortBy: options?.sortBy,
       })
-    if (error) return { data: null, error: fromSupabaseError(error) }
+
+    if (error) {return { data: null, error: fromSupabaseError(error) }}
+
     return {
       data: (data ?? []).map((f) => ({
-        name: f.name,
         id: f.id ?? null,
         metadata: (f.metadata as Record<string, unknown>) ?? null,
+        name: f.name,
       })),
+
       error: null,
     }
-  } catch (err) {
-    return { data: null, error: err instanceof Error ? err : new Error(String(err)) }
+  } catch (error) {
+    return { data: null, error: error instanceof Error ? error : new Error(String(error)) }
   }
 }
 
@@ -164,26 +163,46 @@ export async function removeFiles(
 ): Promise<StorageResult<void>> {
   try {
     const { error } = await supabase.storage.from(bucket).remove(paths)
-    if (error) return { data: null, error: fromSupabaseError(error) }
+
+    if (error) {return { data: null, error: fromSupabaseError(error) }}
+
     return { data: undefined as unknown as void, error: null }
-  } catch (err) {
-    return { data: null, error: err instanceof Error ? err : new Error(String(err)) }
+  } catch (error) {
+    return { data: null, error: error instanceof Error ? error : new Error(String(error)) }
   }
 }
 
 /**
- * Creates a typed storage helper bound to a specific bucket.
+ * Upload a file to Supabase Storage.
  */
-export function createStorageActions(supabase: SupabaseClient, bucket: string) {
-  return {
-    upload: (path: string, file: File | Blob | ArrayBuffer | string, options?: UploadOptions) =>
-      uploadFile(supabase, bucket, path, file, options),
-    download: (path: string) => downloadFile(supabase, bucket, path),
-    getPublicUrl: (path: string) => getPublicUrl(supabase, bucket, path),
-    createSignedUrl: (path: string, options: SignedUrlOptions) =>
-      createSignedUrl(supabase, bucket, path, options),
-    list: (path?: string, options?: ListOptions) =>
-      listFiles(supabase, bucket, path, options),
-    remove: (paths: string[]) => removeFiles(supabase, bucket, paths),
+export async function uploadFile(
+  supabase: SupabaseClient,
+  bucket: string,
+  path: string,
+  file: File | Blob | ArrayBuffer | string,
+  options?: UploadOptions,
+): Promise<StorageResult<{ path: string }>> {
+  const execute = async (): Promise<StorageResult<{ path: string }>> => {
+    const { data, error } = await supabase.storage
+      .from(bucket)
+      .upload(path, file, {
+        cacheControl: options?.cacheControl,
+        contentType: options?.contentType,
+        upsert: options?.upsert,
+      })
+
+    if (error) {throw fromSupabaseError(error)}
+
+    return { data: { path: data.path }, error: null }
+  }
+
+  try {
+    if (options?.retry) {
+      return await withRetry(execute, options.retry)
+    }
+
+    return await execute()
+  } catch (error) {
+    return { data: null, error: error instanceof Error ? error : new Error(String(error)) }
   }
 }

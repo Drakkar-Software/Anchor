@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest"
-import { encodeKey, buildPkFilter, applyPkFilters, normalizePk } from "./compositeKey.js"
+import { describe, expect,it } from "vitest"
+
+import { applyPkFilters, buildPkFilter, encodeKey, normalizePk } from "./compositeKey.js"
 
 describe("encodeKey", () => {
   it("returns scalar value for single string PK", () => {
@@ -11,12 +12,14 @@ describe("encodeKey", () => {
   })
 
   it("encodes composite key as JSON", () => {
-    const result = encodeKey({ user_id: "u1", post_id: "p1" }, ["user_id", "post_id"])
+    const result = encodeKey({ post_id: "p1", user_id: "u1" }, ["user_id", "post_id"])
+
     expect(result).toBe(JSON.stringify(["u1", "p1"]))
   })
 
   it("preserves numeric types in composite keys", () => {
     const result = encodeKey({ a: 1, b: 2 }, ["a", "b"])
+
     expect(result).toBe(JSON.stringify([1, 2]))
   })
 })
@@ -28,24 +31,27 @@ describe("buildPkFilter", () => {
 
   it("builds composite-key filter from JSON", () => {
     const encoded = JSON.stringify(["u1", "p1"])
+
     expect(buildPkFilter(["user_id", "post_id"], encoded)).toEqual({
-      user_id: "u1",
       post_id: "p1",
+      user_id: "u1",
     })
   })
 
   it("preserves numeric types in composite filter", () => {
     const encoded = JSON.stringify([1, 2])
+
     expect(buildPkFilter(["a", "b"], encoded)).toEqual({ a: 1, b: 2 })
   })
 })
 
 describe("applyPkFilters", () => {
   it("applies single eq for simple PK", () => {
-    const calls: Array<{ col: string; val: unknown }> = []
+    const calls: { col: string; val: unknown }[] = []
     const builder = {
       eq(col: string, val: unknown) {
         calls.push({ col, val })
+
         return builder
       },
     }
@@ -55,15 +61,17 @@ describe("applyPkFilters", () => {
   })
 
   it("applies multiple eq for composite PK", () => {
-    const calls: Array<{ col: string; val: unknown }> = []
+    const calls: { col: string; val: unknown }[] = []
     const builder = {
       eq(col: string, val: unknown) {
         calls.push({ col, val })
+
         return builder
       },
     }
 
     const encoded = JSON.stringify(["u1", "p1"])
+
     applyPkFilters(builder, ["user_id", "post_id"], encoded)
     expect(calls).toEqual([
       { col: "user_id", val: "u1" },

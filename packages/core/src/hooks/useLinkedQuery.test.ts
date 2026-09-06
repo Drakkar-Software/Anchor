@@ -1,6 +1,7 @@
-import { describe, it, expect, vi } from "vitest"
-import { createStore } from "zustand/vanilla"
+import { describe, expect, it, vi } from "vitest"
 import type { StoreApi } from "zustand"
+import { createStore } from "zustand/vanilla"
+
 import type { TableStore } from "../types.js"
 
 /**
@@ -10,36 +11,36 @@ import type { TableStore } from "../types.js"
  */
 
 function createMockTableStore(
-  initialRecords: Map<string | number, any> = new Map(),
+  initialRecords = new Map<string | number, any>(),
 ): StoreApi<TableStore<any, any, any>> {
   return createStore<any>()(() => ({
-    records: initialRecords,
-    order: [...initialRecords.keys()],
-    isLoading: false,
+    clearAll: () => {},
     error: null,
-    isHydrated: true,
-    isRestoring: false,
-    lastFetchedAt: null,
-    realtimeStatus: "disconnected" as const,
-    getQueueSize: () => 0,
     fetch: async () => [],
     fetchOne: async () => null,
-    refetch: async () => [],
+    flushQueue: async () => {},
+    getQueueSize: () => 0,
+    hydrate: async () => {},
     insert: async () => ({}),
     insertMany: async () => [],
-    update: async () => ({}),
-    upsert: async () => ({}),
+    isHydrated: true,
+    isLoading: false,
+    isRestoring: false,
+    lastFetchedAt: null,
+    mergeRecords: () => {},
+    order: Array.from(initialRecords.keys()),
+    persist: async () => {},
+    realtimeStatus: "disconnected" as const,
+    records: initialRecords,
+    refetch: async () => [],
     remove: async () => {},
+    removeRecord: () => {},
     removeWhere: async () => {},
     setRecord: () => {},
-    removeRecord: () => {},
-    clearAll: () => {},
-    mergeRecords: () => {},
     subscribe: () => () => {},
     unsubscribe: () => {},
-    hydrate: async () => {},
-    persist: async () => {},
-    flushQueue: async () => {},
+    update: async () => ({}),
+    upsert: async () => ({}),
   }))
 }
 
@@ -50,6 +51,7 @@ describe("useLinkedQuery - store subscription pattern", () => {
     )
 
     const callback = vi.fn()
+
     store.subscribe((state) => {
       callback(state.records)
     })
@@ -57,8 +59,9 @@ describe("useLinkedQuery - store subscription pattern", () => {
     // Simulate a mutation — creates a new Map reference (same pattern as createTableStore)
     const prev = store.getState().records
     const next = new Map(prev)
+
     next.set(2, { id: 2, name: "Bob" })
-    store.setState({ records: next, order: [1, 2] })
+    store.setState({ order: [1, 2], records: next })
 
     expect(callback).toHaveBeenCalledTimes(1)
     expect(callback.mock.calls[0][0]).not.toBe(prev)
@@ -71,6 +74,7 @@ describe("useLinkedQuery - store subscription pattern", () => {
     )
 
     const callback = vi.fn()
+
     let prevRecords = store.getState().records
 
     store.subscribe((state) => {
@@ -90,6 +94,7 @@ describe("useLinkedQuery - store subscription pattern", () => {
     const store2 = createMockTableStore(new Map([[10, { id: 10 }]]))
 
     const stores = [store1, store2]
+
     let version = 0
 
     const prevRecords = stores.map((s) => s.getState().records)
@@ -105,23 +110,29 @@ describe("useLinkedQuery - store subscription pattern", () => {
 
     // Mutate store1
     const next1 = new Map(store1.getState().records)
+
     next1.set(2, { id: 2 })
     store1.setState({ records: next1 })
     expect(version).toBe(1)
 
     // Mutate store2
     const next2 = new Map(store2.getState().records)
+
     next2.delete(10)
     store2.setState({ records: next2 })
     expect(version).toBe(2)
 
-    unsubs.forEach((u) => u())
+    unsubs.forEach((u) => {
+      u()
+    })
   })
 
   it("unsubscribes cleanly on cleanup", () => {
     const store = createMockTableStore()
 
     const unsub = store.subscribe(() => {})
+
+
     // Should not throw
     unsub()
   })
@@ -159,16 +170,23 @@ describe("useLinkedQuery - store subscription pattern", () => {
     const resolved = typeof getter === "function" ? getter() : getter
 
     expect(resolved).toBeUndefined()
+
+
     // isLoading initial state = enabled && !hasInitialData = true && true = true
-    const isLoading = true && resolved === undefined
+    const enabled = true
+    const isLoading = enabled && resolved === undefined
+
     expect(isLoading).toBe(true)
   })
 
   it("initialData present suppresses initial loading state", () => {
     const seed = [{ id: "1" }, { id: "2" }]
     const hasInitialData = seed !== undefined
+
     // isLoading initial = enabled && !hasInitialData
-    const isLoadingInitial = true && !hasInitialData
+    const enabled = true
+    const isLoadingInitial = enabled && !hasInitialData
+
     expect(isLoadingInitial).toBe(false)
   })
 
@@ -177,23 +195,25 @@ describe("useLinkedQuery - store subscription pattern", () => {
   it("mergeToStore calls mergeRecords when result is an array", async () => {
     const mergeRecords = vi.fn()
     const store = createMockTableStore()
+
     store.setState({ ...store.getState(), mergeRecords })
 
     const rows = [{ id: "1" }, { id: "2" }]
+
     let gen = 0
 
     const runRefetch = async (queryFn: () => Promise<unknown>) => {
       const currentGen = ++gen
       const result = await queryFn()
-      if (currentGen === gen) {
-        if (Array.isArray(result)) {
-          store.getState().mergeRecords(result as any[])
+
+      if (currentGen === gen && Array.isArray(result)) {
+          store.getState().mergeRecords(result)
         }
-      }
+
       return result
     }
 
-    await runRefetch(() => Promise.resolve(rows))
+    await runRefetch(async () => await Promise.resolve(rows))
     expect(mergeRecords).toHaveBeenCalledTimes(1)
     expect(mergeRecords).toHaveBeenCalledWith(rows)
   })
@@ -201,45 +221,49 @@ describe("useLinkedQuery - store subscription pattern", () => {
   it("mergeToStore does not call mergeRecords when result is not an array", async () => {
     const mergeRecords = vi.fn()
     const store = createMockTableStore()
+
     store.setState({ ...store.getState(), mergeRecords })
 
     const singleRecord = { id: "1", title: "Single" }
+
     let gen = 0
 
     const runRefetch = async (queryFn: () => Promise<unknown>) => {
       const currentGen = ++gen
       const result = await queryFn()
-      if (currentGen === gen) {
-        if (Array.isArray(result)) {
-          store.getState().mergeRecords(result as any[])
+
+      if (currentGen === gen && Array.isArray(result)) {
+          store.getState().mergeRecords(result)
         }
-      }
     }
 
-    await runRefetch(() => Promise.resolve(singleRecord))
+    await runRefetch(async () => await Promise.resolve(singleRecord))
     expect(mergeRecords).not.toHaveBeenCalled()
   })
 
   it("mergeToStore is not called when the query throws", async () => {
     const mergeRecords = vi.fn()
     const store = createMockTableStore()
+
     store.setState({ ...store.getState(), mergeRecords })
 
     let gen = 0
 
     const runRefetch = async (queryFn: () => Promise<unknown>) => {
       const currentGen = ++gen
+
       try {
         const result = await queryFn()
+
         if (currentGen === gen && Array.isArray(result)) {
-          store.getState().mergeRecords(result as any[])
+          store.getState().mergeRecords(result)
         }
       } catch {
         // error handling — mergeRecords must not be called
       }
     }
 
-    await runRefetch(() => Promise.reject(new Error("network error")))
+    await runRefetch(async () => await Promise.reject(new Error("network error")))
     expect(mergeRecords).not.toHaveBeenCalled()
   })
 
@@ -258,6 +282,8 @@ describe("useLinkedQuery - store subscription pattern", () => {
     store.subscribe((state) => {
       if (state.records !== prevRecords[0]) {
         prevRecords[0] = state.records
+
+
         // Same guard as useLinkedQuery: skip bump when merging
         if (!isMerging) {
           storeVersion++
@@ -267,7 +293,9 @@ describe("useLinkedQuery - store subscription pattern", () => {
 
     // Simulate mergeToStore write (guarded)
     isMerging = true
+
     const next = new Map(store.getState().records)
+
     next.set("2", { id: "2", name: "Bob" })
     store.setState({ records: next })
     isMerging = false
@@ -277,6 +305,7 @@ describe("useLinkedQuery - store subscription pattern", () => {
 
     // External mutation (not guarded) SHOULD increment
     const next2 = new Map(store.getState().records)
+
     next2.set("3", { id: "3", name: "Charlie" })
     store.setState({ records: next2 })
 
@@ -290,9 +319,11 @@ describe("useLinkedQuery - store subscription pattern", () => {
     const lastFetchedAt = Date.now() - 100 // fetched 100ms ago
     const staleTime = 5000
     const storeVersion = 0
+
     let prevStoreVersion = 0
 
     const storeVersionChanged = prevStoreVersion !== storeVersion
+
     prevStoreVersion = storeVersion
 
     const shouldSkip =
@@ -308,9 +339,11 @@ describe("useLinkedQuery - store subscription pattern", () => {
     const lastFetchedAt = Date.now() - 10_000 // fetched 10s ago
     const staleTime = 5000
     const storeVersion = 0
+
     let prevStoreVersion = 0
 
     const storeVersionChanged = prevStoreVersion !== storeVersion
+
     prevStoreVersion = storeVersion
 
     const shouldSkip =
@@ -326,9 +359,11 @@ describe("useLinkedQuery - store subscription pattern", () => {
     const lastFetchedAt = Date.now() - 100 // data is fresh
     const staleTime = 5000
     const storeVersion = 1 // store mutated
+
     let prevStoreVersion = 0
 
     const storeVersionChanged = prevStoreVersion !== storeVersion
+
     prevStoreVersion = storeVersion
 
     const shouldSkip =
@@ -346,9 +381,11 @@ describe("useLinkedQuery - store subscription pattern", () => {
     const lastFetchedAt = Date.now() - 1 // nearly instant ago
     const staleTime = 0
     const storeVersion = 0
+
     let prevStoreVersion = 0
 
     const storeVersionChanged = prevStoreVersion !== storeVersion
+
     prevStoreVersion = storeVersion
 
     const shouldSkip =
@@ -367,7 +404,7 @@ describe("useLinkedQuery - store subscription pattern", () => {
 
     // Simulate refetch() with SWR guard
     const startLoading = () => {
-      if (!hasData) isLoading = true
+      if (!hasData) {isLoading = true}
     }
     const finishFetch = () => {
       hasData = true
@@ -383,11 +420,12 @@ describe("useLinkedQuery - store subscription pattern", () => {
   })
 
   it("staleTime: isLoading is true when no data yet (cold start)", () => {
-    let hasData = false
+    const hasData = false
+
     let isLoading = false
 
     const startLoading = () => {
-      if (!hasData) isLoading = true
+      if (!hasData) {isLoading = true}
     }
 
     startLoading()
@@ -398,14 +436,16 @@ describe("useLinkedQuery - store subscription pattern", () => {
 
   it("queryKey: module-level cache stores data and timestamp after fetch", () => {
     // Simulate what refetch() does when cacheKey is set
-    const cache = new Map<string, { lastFetchedAt: number; data: unknown }>()
+    const cache = new Map<string, { data: unknown; lastFetchedAt: number; }>()
     const cacheKey = "offers:user-123"
     const fetchResult = [{ id: "1", title: "Offer A" }]
 
     const now = Date.now()
-    cache.set(cacheKey, { lastFetchedAt: now, data: fetchResult })
+
+    cache.set(cacheKey, { data: fetchResult, lastFetchedAt: now })
 
     const entry = cache.get(cacheKey)
+
     expect(entry).toBeDefined()
     expect(entry?.data).toEqual(fetchResult)
     expect(entry?.lastFetchedAt).toBeGreaterThanOrEqual(now)
@@ -413,10 +453,11 @@ describe("useLinkedQuery - store subscription pattern", () => {
 
   it("queryKey: remounted component reads data and timestamp from cache", () => {
     // Simulate unmount+remount: cache has a fresh entry from a previous mount
-    const cache = new Map<string, { lastFetchedAt: number; data: unknown }>()
+    const cache = new Map<string, { data: unknown; lastFetchedAt: number; }>()
     const cacheKey = "offers:user-123"
     const fetchResult = [{ id: "1" }]
-    cache.set(cacheKey, { lastFetchedAt: Date.now() - 500, data: fetchResult })
+
+    cache.set(cacheKey, { data: fetchResult, lastFetchedAt: Date.now() - 500 })
 
     // On remount, hook reads from cache
     const cachedEntry = cache.get(cacheKey)
@@ -439,9 +480,10 @@ describe("useLinkedQuery - store subscription pattern", () => {
   })
 
   it("queryKey: stale cache entry does not suppress refetch", () => {
-    const cache = new Map<string, { lastFetchedAt: number; data: unknown }>()
+    const cache = new Map<string, { data: unknown; lastFetchedAt: number; }>()
     const cacheKey = "offers:user-123"
-    cache.set(cacheKey, { lastFetchedAt: Date.now() - 120_000, data: [] }) // 2min old
+
+    cache.set(cacheKey, { data: [], lastFetchedAt: Date.now() - 120_000 }) // 2min old
 
     const cachedEntry = cache.get(cacheKey)
     const lastFetchedAt = cachedEntry?.lastFetchedAt ?? null
@@ -465,6 +507,7 @@ describe("useLinkedQuery - store subscription pattern", () => {
 
   it("generation counter pattern discards stale results", async () => {
     let generationRef = 0
+
     const results: string[] = []
 
     // Simulate two concurrent fetches where the first resolves after the second
@@ -477,14 +520,16 @@ describe("useLinkedQuery - store subscription pattern", () => {
 
     // Start fetch1
     const gen1 = ++generationRef
+
     fetch1.then((result) => {
-      if (gen1 === generationRef) results.push(result)
+      if (gen1 === generationRef) {results.push(result)}
     })
 
     // Start fetch2 (supersedes fetch1)
     const gen2 = ++generationRef
+
     fetch2.then((result) => {
-      if (gen2 === generationRef) results.push(result)
+      if (gen2 === generationRef) {results.push(result)}
     })
 
     await new Promise((r) => setTimeout(r, 50))

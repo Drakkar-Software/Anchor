@@ -1,18 +1,19 @@
 "use client"
 
-import { useState, useCallback } from "react"
 import type { SupabaseClient } from "@supabase/supabase-js"
+import { useCallback,useState } from "react"
+
 import {
+  type EdgeFunctionResult,
   invokeEdgeFunction,
   type InvokeOptions,
-  type EdgeFunctionResult,
 } from "../functions/edgeFunctions.js"
 
 type UseEdgeFunctionResult<T> = {
   data: T | null
   error: Error | null
-  isLoading: boolean
   invoke: (options?: InvokeOptions) => Promise<EdgeFunctionResult<T>>
+  isLoading: boolean
 }
 
 /**
@@ -30,14 +31,19 @@ export function useEdgeFunction<T = unknown>(
     async (options?: InvokeOptions): Promise<EdgeFunctionResult<T>> => {
       setIsLoading(true)
       setError(null)
+
       try {
         const result = await invokeEdgeFunction<T>(supabase, functionName, options)
+
         setData(result.data)
         setError(result.error)
+
         return result
-      } catch (err) {
-        const error = err instanceof Error ? err : new Error(String(err))
+      } catch (error_) {
+        const error = error_ instanceof Error ? error_ : new Error(String(error_))
+
         setError(error)
+
         return { data: null, error }
       } finally {
         setIsLoading(false)
@@ -46,5 +52,5 @@ export function useEdgeFunction<T = unknown>(
     [supabase, functionName],
   )
 
-  return { data, error, isLoading, invoke }
+  return { data, error, invoke, isLoading }
 }

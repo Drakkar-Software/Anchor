@@ -1,9 +1,10 @@
-import { describe, it, expect, vi } from "vitest"
-import { isRlsError, setupAuthGate } from "./authGate.js"
-import { createMockSupabase } from "../__tests__/mockSupabase.js"
-import { createAuthStore } from "./authStore.js"
+import { describe, expect, it, vi } from "vitest"
 import type { StoreApi } from "zustand"
+
+import { createMockSupabase } from "../__tests__/mockSupabase.js"
 import type { TableStore } from "../types.js"
+import { isRlsError, setupAuthGate } from "./authGate.js"
+import { createAuthStore } from "./authStore.js"
 
 describe("isRlsError", () => {
   it("returns false for null", () => {
@@ -34,14 +35,15 @@ describe("setupAuthGate", () => {
     // ever see it.
     const state = {
       clearAll: vi.fn(),
-      fetch: vi.fn(() => Promise.resolve([])),
+      fetch: vi.fn(async () => await Promise.resolve([])),
     }
     const store = {
+      _state: state,
       getState: vi.fn(() => state),
       setState: vi.fn(),
       subscribe: vi.fn(),
-      _state: state,
     }
+
     return store as unknown as StoreApi<TableStore<any, any, any>> & {
       _state: typeof state
     }
@@ -74,7 +76,7 @@ describe("setupAuthGate", () => {
     const supabase = createMockSupabase()
     const authStore = createAuthStore({ supabase })
     const tableStore = createMockTableStore()
-    const offlineQueue = { clearQueue: vi.fn(() => Promise.resolve()) }
+    const offlineQueue = { clearQueue: vi.fn(async () => await Promise.resolve()) }
 
     setupAuthGate(supabase, authStore, [tableStore], {
       offlineQueue: offlineQueue as any,
@@ -84,6 +86,7 @@ describe("setupAuthGate", () => {
     await supabase.auth.signOut()
 
     expect(offlineQueue.clearQueue).not.toHaveBeenCalled()
+
     // The stores are still cleared, which is what sign-out is for.
     expect(tableStore._state.clearAll).toHaveBeenCalledTimes(1)
   })
@@ -133,12 +136,12 @@ describe("setupAuthGate", () => {
     const authStore = createAuthStore({ supabase })
     const tableStore = createMockTableStore()
     const realtimeManager = { destroy: vi.fn() }
-    const offlineQueue = { clearQueue: vi.fn(() => Promise.resolve()) }
+    const offlineQueue = { clearQueue: vi.fn(async () => await Promise.resolve()) }
 
     setupAuthGate(supabase, authStore, [tableStore], {
       clearOnSignOut: false,
-      realtimeManager: realtimeManager as any,
       offlineQueue: offlineQueue as any,
+      realtimeManager: realtimeManager as any,
     })
 
     await supabase.auth.signInWithPassword({ email: "a@b.com", password: "x" })

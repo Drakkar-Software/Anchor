@@ -1,10 +1,10 @@
 "use client"
 
-import { useStore } from "zustand"
+import { type StoreApi , useStore } from "zustand"
 import { useShallow } from "zustand/react/shallow"
-import type { StoreApi } from "zustand"
-import type { TableStore, TrackedRow } from "../types.js"
+
 import { selectAllRows } from "../query/selectRows.js"
+import type { TableStore, TrackedRow } from "../types.js"
 
 /**
  * Hook factory: creates a typed hook for a specific table store.
@@ -25,12 +25,28 @@ export function createTableHook<
   type S = TableStore<Row, InsertRow, UpdateRow> & Extensions
 
   function useTableStore(): S
+
   function useTableStore<U>(selector: (state: S) => U): U
+
   function useTableStore<U>(selector?: (state: S) => U) {
     return useStore(store, selector as any)
   }
 
   return useTableStore
+}
+
+/**
+ * Hook to get a single record by ID.
+ */
+export function useRecord<
+  Row extends Record<string, unknown>,
+  InsertRow extends Record<string, unknown>,
+  UpdateRow extends Record<string, unknown>,
+>(
+  store: StoreApi<TableStore<Row, InsertRow, UpdateRow>>,
+  id: string | number,
+): TrackedRow<Row> | undefined {
+  return useStore(store, (state) => state.records.get(id))
 }
 
 /**
@@ -51,18 +67,4 @@ export function useRecords<
     store,
     useShallow((state: TableStore<Row, InsertRow, UpdateRow>) => selectAllRows<Row>(state)),
   )
-}
-
-/**
- * Hook to get a single record by ID.
- */
-export function useRecord<
-  Row extends Record<string, unknown>,
-  InsertRow extends Record<string, unknown>,
-  UpdateRow extends Record<string, unknown>,
->(
-  store: StoreApi<TableStore<Row, InsertRow, UpdateRow>>,
-  id: string | number,
-): TrackedRow<Row> | undefined {
-  return useStore(store, (state) => state.records.get(id))
 }

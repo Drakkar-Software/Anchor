@@ -1,15 +1,16 @@
-import { describe, it, expect } from "vitest"
-import { matchRow } from "./matchRow.js"
+import { describe, expect,it } from "vitest"
+
 import { match } from "./filters.js"
+import { matchRow } from "./matchRow.js"
 
 const row = {
-  id: 1,
-  title: "Buy milk",
-  done: false,
-  owner: null,
-  day: "2026-08-12",
   count: 5,
+  day: "2026-08-12",
+  done: false,
+  id: 1,
+  owner: null,
   tags: ["a", "b"],
+  title: "Buy milk",
 }
 
 describe("matchRow", () => {
@@ -37,6 +38,7 @@ describe("matchRow", () => {
     expect(matchRow(row, [{ column: "id", op: "eq", value: 1 }])).toBe(true)
     expect(matchRow(row, [{ column: "id", op: "eq", value: 2 }])).toBe(false)
     expect(matchRow(row, [{ column: "id", op: "neq", value: 2 }])).toBe(true)
+
     // A column present and null is a real value, judged rather than skipped.
     expect(matchRow(row, [{ column: "owner", op: "eq", value: null }])).toBe(true)
     expect(matchRow(row, [{ column: "owner", op: "eq", value: 7 }])).toBe(false)
@@ -46,6 +48,7 @@ describe("matchRow", () => {
     expect(matchRow(row, [{ column: "count", op: "gt", value: 4 }])).toBe(true)
     expect(matchRow(row, [{ column: "count", op: "lt", value: 5 }])).toBe(false)
     expect(matchRow(row, [{ column: "count", op: "lte", value: 5 }])).toBe(true)
+
     // The metcare case: today's journey tasks.
     expect(matchRow(row, [{ column: "day", op: "gte", value: "2026-08-12" }])).toBe(true)
     expect(matchRow(row, [{ column: "day", op: "gte", value: "2026-08-13" }])).toBe(false)
@@ -57,6 +60,7 @@ describe("matchRow", () => {
     expect(matchRow(row, [{ column: "title", op: "ilike", value: "buy%" }])).toBe(true)
     expect(matchRow(row, [{ column: "title", op: "like", value: "%milk" }])).toBe(true)
     expect(matchRow(row, [{ column: "title", op: "like", value: "Buy_milk" }])).toBe(true)
+
     // A `.` is a literal in SQL LIKE, so it must not behave as "any character".
     expect(matchRow({ title: "ab" }, [{ column: "title", op: "like", value: "a.b" }])).toBe(false)
   })
@@ -85,9 +89,11 @@ describe("matchRow", () => {
     // default, no created_at, no trigger output. Judging `undefined >= today`
     // as false makes the task a user just created vanish from the screen that
     // created it, then reappear when the insert confirms.
-    const pending = { title: "just typed", _anchor_pending: true }
+    const pending = { _anchor_pending: true, title: "just typed" }
+
     expect(matchRow(pending, [{ column: "day", op: "gte", value: "2026-08-12" }])).toBe(true)
     expect(matchRow(pending, [{ column: "journey_id", op: "eq", value: "j1" }])).toBe(true)
+
     // The columns it DOES carry are still judged.
     expect(matchRow(pending, [{ column: "title", op: "eq", value: "something else" }])).toBe(false)
   })
@@ -103,16 +109,16 @@ describe("matchRow with a match descriptor", () => {
   // this shape only arrives hand-built. It used to fall through to the default
   // arm and include every row, which for a local read means showing rows the
   // server would not have returned.
-  const row = { id: 1, status: "open", priority: 2 }
+  const row = { id: 1, priority: 2, status: "open" }
 
   it("keeps a row whose every named column agrees", () => {
-    expect(matchRow(row, [{ column: "", op: "match", value: { status: "open", priority: 2 } }])).toBe(
+    expect(matchRow(row, [{ column: "", op: "match", value: { priority: 2, status: "open" } }])).toBe(
       true,
     )
   })
 
   it("drops a row where one named column disagrees", () => {
-    expect(matchRow(row, [{ column: "", op: "match", value: { status: "open", priority: 9 } }])).toBe(
+    expect(matchRow(row, [{ column: "", op: "match", value: { priority: 9, status: "open" } }])).toBe(
       false,
     )
   })
@@ -126,10 +132,10 @@ describe("matchRow with a match descriptor", () => {
 
 describe("the match() helper's expansion", () => {
   it("emits eq descriptors, which matchRow can judge", () => {
-    const filters = match<{ status: string; priority: number }>({ status: "open", priority: 2 })
+    const filters = match<{ priority: number; status: string; }>({ priority: 2, status: "open" })
 
     expect(filters.map((f) => f.op)).toEqual(["eq", "eq"])
-    expect(matchRow({ id: 1, status: "open", priority: 2 }, filters)).toBe(true)
-    expect(matchRow({ id: 2, status: "done", priority: 2 }, filters)).toBe(false)
+    expect(matchRow({ id: 1, priority: 2, status: "open" }, filters)).toBe(true)
+    expect(matchRow({ id: 2, priority: 2, status: "done" }, filters)).toBe(false)
   })
 })

@@ -1,14 +1,17 @@
-import { describe, it, expect, vi } from "vitest"
+import { describe, expect, it, vi } from "vitest"
+
 import { ManualNetworkStatus } from "./onlineManager.js"
 
 describe("ManualNetworkStatus", () => {
   it("defaults to online", () => {
     const ns = new ManualNetworkStatus()
+
     expect(ns.isOnline()).toBe(true)
   })
 
   it("setOnline changes state", () => {
     const ns = new ManualNetworkStatus()
+
     ns.setOnline(false)
     expect(ns.isOnline()).toBe(false)
     ns.setOnline(true)
@@ -18,6 +21,7 @@ describe("ManualNetworkStatus", () => {
   it("notifies subscribers on change", () => {
     const ns = new ManualNetworkStatus()
     const callback = vi.fn()
+
     ns.subscribe(callback)
 
     ns.setOnline(false)
@@ -30,6 +34,7 @@ describe("ManualNetworkStatus", () => {
   it("does not fire when value unchanged", () => {
     const ns = new ManualNetworkStatus()
     const callback = vi.fn()
+
     ns.subscribe(callback)
 
     ns.setOnline(true) // Already true
@@ -50,6 +55,7 @@ describe("ManualNetworkStatus", () => {
     const ns = new ManualNetworkStatus()
     const cb1 = vi.fn()
     const cb2 = vi.fn()
+
     ns.subscribe(cb1)
     ns.subscribe(cb2)
 

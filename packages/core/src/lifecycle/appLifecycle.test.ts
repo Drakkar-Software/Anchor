@@ -1,49 +1,57 @@
-import { describe, it, expect, beforeEach, vi } from "vitest"
-import { setupAppLifecycle } from "./appLifecycle.js"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+
 import type { AppLifecycleAdapter } from "../types.js"
+import { setupAppLifecycle } from "./appLifecycle.js"
 
 function createMockLifecycleAdapter(): AppLifecycleAdapter & {
-  triggerForeground: () => void
   triggerBackground: () => void
+  triggerForeground: () => void
 } {
   const foregroundCbs = new Set<() => void>()
   const backgroundCbs = new Set<() => void>()
 
   return {
-    onForeground(cb) {
-      foregroundCbs.add(cb)
-      return () => foregroundCbs.delete(cb)
-    },
     onBackground(cb) {
       backgroundCbs.add(cb)
+
       return () => backgroundCbs.delete(cb)
     },
-    triggerForeground: () => {
-      for (const cb of foregroundCbs) cb()
+
+    onForeground(cb) {
+      foregroundCbs.add(cb)
+
+      return () => foregroundCbs.delete(cb)
     },
+
     triggerBackground: () => {
-      for (const cb of backgroundCbs) cb()
+      for (const cb of backgroundCbs) {cb()}
+    },
+
+    triggerForeground: () => {
+      for (const cb of foregroundCbs) {cb()}
     },
   }
 }
 
 function createMockStore(overrides: Record<string, unknown> = {}) {
   return {
+    getInitialState: vi.fn(),
+
     getState: () => ({
-      records: new Map(),
-      order: [],
-      isLoading: false,
       error: null,
       isHydrated: true,
+      isLoading: false,
       isRestoring: false,
       lastFetchedAt: null,
+      order: [],
       realtimeStatus: "disconnected" as const,
+      records: new Map(),
       refetch: vi.fn().mockResolvedValue([]),
       ...overrides,
     }),
+
     setState: vi.fn(),
     subscribe: vi.fn(() => () => {}),
-    getInitialState: vi.fn(),
   } as any
 }
 
@@ -56,6 +64,7 @@ describe("setupAppLifecycle", () => {
 
   it("flushes queue on foreground", () => {
     const flush = vi.fn().mockResolvedValue(undefined)
+
     setupAppLifecycle({
       adapter,
       queue: { flush },
@@ -82,6 +91,7 @@ describe("setupAppLifecycle", () => {
 
   it("revalidates stale stores on foreground", () => {
     const refetch = vi.fn().mockResolvedValue([])
+
     // lastFetchedAt is old enough to be stale
     const store = createMockStore({
       lastFetchedAt: Date.now() - 10 * 60 * 1000, // 10 minutes ago
@@ -90,8 +100,8 @@ describe("setupAppLifecycle", () => {
 
     setupAppLifecycle({
       adapter,
-      stores: [store],
       staleTTL: 5 * 60 * 1000,
+      stores: [store],
     })
 
     adapter.triggerForeground()
@@ -107,8 +117,8 @@ describe("setupAppLifecycle", () => {
 
     setupAppLifecycle({
       adapter,
-      stores: [store],
       staleTTL: 5 * 60 * 1000,
+      stores: [store],
     })
 
     adapter.triggerForeground()
@@ -124,8 +134,8 @@ describe("setupAppLifecycle", () => {
 
     setupAppLifecycle({
       adapter,
-      queue: { flush },
       network,
+      queue: { flush },
     })
 
     adapter.triggerForeground()
@@ -134,10 +144,11 @@ describe("setupAppLifecycle", () => {
 
   it("respects flushQueueOnForeground: false", () => {
     const flush = vi.fn().mockResolvedValue(undefined)
+
     setupAppLifecycle({
       adapter,
-      queue: { flush },
       flushQueueOnForeground: false,
+      queue: { flush },
     })
 
     adapter.triggerForeground()
@@ -175,6 +186,7 @@ describe("setupAppLifecycle", () => {
 
   it("handles errors in flush gracefully", () => {
     const flush = vi.fn().mockRejectedValue(new Error("flush failed"))
+
     setupAppLifecycle({
       adapter,
       queue: { flush },
@@ -189,14 +201,14 @@ describe("setupAppLifecycle", () => {
     const subscribe = vi.fn(() => () => {})
     const store = createMockStore({
       realtimeStatus: "connected" as const,
-      unsubscribe,
       subscribe,
+      unsubscribe,
     })
 
     setupAppLifecycle({
       adapter,
-      stores: [store],
       pauseRealtimeOnBackground: true,
+      stores: [store],
     })
 
     adapter.triggerBackground()
@@ -208,14 +220,14 @@ describe("setupAppLifecycle", () => {
     const subscribe = vi.fn(() => () => {})
     const store = createMockStore({
       realtimeStatus: "disconnected" as const,
-      unsubscribe,
       subscribe,
+      unsubscribe,
     })
 
     setupAppLifecycle({
       adapter,
-      stores: [store],
       pauseRealtimeOnBackground: true,
+      stores: [store],
     })
 
     // Foreground should call subscribe since status is disconnected
@@ -233,6 +245,7 @@ describe("setupAppLifecycle", () => {
     setupAppLifecycle({
       adapter,
       stores: [store],
+
       // pauseRealtimeOnBackground defaults to false
     })
 

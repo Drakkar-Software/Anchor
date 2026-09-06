@@ -1,18 +1,19 @@
-import { describe, it, expect, beforeEach } from "vitest"
+import { beforeEach,describe, expect, it } from "vitest"
+
+import { EncryptedAdapter,type EncryptionFunctions  } from "./encryptedAdapter.js"
 import { MemoryAdapter } from "./persistenceAdapter.js"
-import { EncryptedAdapter } from "./encryptedAdapter.js"
-import type { EncryptionFunctions } from "./encryptedAdapter.js"
 
 // Simple reversible "encryption" for testing (ROT13-like XOR)
 function createTestEncryption(): EncryptionFunctions {
   return {
-    async encrypt(plaintext: string): Promise<string> {
-      return Buffer.from(plaintext).map((b) => b ^ 0x42).toString("base64")
-    },
     async decrypt(ciphertext: string): Promise<string> {
       return Buffer.from(
         Buffer.from(ciphertext, "base64").map((b) => b ^ 0x42),
       ).toString()
+    },
+
+    async encrypt(plaintext: string): Promise<string> {
+      return Buffer.from(plaintext).map((b) => b ^ 0x42).toString("base64")
     },
   }
 }
@@ -30,9 +31,12 @@ describe("EncryptedAdapter", () => {
 
   describe("getItem / setItem", () => {
     it("round-trips data correctly", async () => {
-      const data = { id: 1, title: "Test", tags: ["a", "b"] }
+      const data = { id: 1, tags: ["a", "b"], title: "Test" }
+
       await adapter.setItem("key1", data)
+
       const result = await adapter.getItem("key1")
+
       expect(result).toEqual(data)
     })
 
@@ -42,15 +46,21 @@ describe("EncryptedAdapter", () => {
 
     it("stores encrypted data in inner adapter", async () => {
       const data = { secret: "password123" }
+
       await adapter.setItem("key1", data)
 
       const raw = await inner.getItem<string>("key1")
+
       expect(raw).not.toBeNull()
       expect(typeof raw).toBe("string")
+
       // Raw should NOT be the plaintext JSON
       expect(raw).not.toBe(JSON.stringify(data))
+
+
       // But we should be able to decrypt it
       const decrypted = await encryption.decrypt(raw!)
+
       expect(JSON.parse(decrypted)).toEqual(data)
     })
 
@@ -61,12 +71,14 @@ describe("EncryptedAdapter", () => {
 
     it("handles array values", async () => {
       const arr = [1, 2, 3]
+
       await adapter.setItem("arr", arr)
       expect(await adapter.getItem("arr")).toEqual(arr)
     })
 
     it("handles null values in objects", async () => {
       const data = { a: null, b: 1 }
+
       await adapter.setItem("nulls", data)
       expect(await adapter.getItem("nulls")).toEqual(data)
     })
@@ -94,17 +106,20 @@ describe("EncryptedAdapter", () => {
 
       // Verify inner has encrypted values
       const raw = await inner.getItem<string>("k1")
+
       expect(raw).not.toBe(JSON.stringify({ id: 1 }))
     })
 
     it("falls back to individual setItem when inner has no multiSet", async () => {
       const plainAdapter: any = {
         getItem: inner.getItem.bind(inner),
-        setItem: inner.setItem.bind(inner),
         removeItem: inner.removeItem.bind(inner),
+        setItem: inner.setItem.bind(inner),
+
         // No multiSet
       }
       const encrypted = new EncryptedAdapter(plainAdapter, encryption)
+
       await encrypted.multiSet([
         ["a", 1],
         ["b", 2],
@@ -121,6 +136,7 @@ describe("EncryptedAdapter", () => {
       await adapter.setItem("other", 3)
 
       const keys = await adapter.keys("anchor:")
+
       expect(keys).toEqual(expect.arrayContaining(["anchor:a", "anchor:b"]))
       expect(keys).not.toContain("other")
     })
@@ -128,10 +144,11 @@ describe("EncryptedAdapter", () => {
     it("throws if inner adapter has no keys()", async () => {
       const minimal: any = {
         getItem: async () => null,
-        setItem: async () => {},
         removeItem: async () => {},
+        setItem: async () => {},
       }
       const encrypted = new EncryptedAdapter(minimal, encryption)
+
       await expect(encrypted.keys()).rejects.toThrow("does not support keys()")
     })
   })
@@ -149,10 +166,11 @@ describe("EncryptedAdapter", () => {
     it("throws if inner adapter has no clear()", async () => {
       const minimal: any = {
         getItem: async () => null,
-        setItem: async () => {},
         removeItem: async () => {},
+        setItem: async () => {},
       }
       const encrypted = new EncryptedAdapter(minimal, encryption)
+
       await expect(encrypted.clear()).rejects.toThrow("does not support clear()")
     })
   })
@@ -160,14 +178,16 @@ describe("EncryptedAdapter", () => {
   describe("error propagation", () => {
     it("propagates encryption errors", async () => {
       const failEncryption: EncryptionFunctions = {
-        async encrypt(): Promise<string> {
-          throw new Error("encrypt failed")
-        },
         async decrypt(): Promise<string> {
           throw new Error("decrypt failed")
         },
+
+        async encrypt(): Promise<string> {
+          throw new Error("encrypt failed")
+        },
       }
       const failAdapter = new EncryptedAdapter(inner, failEncryption)
+
       await expect(failAdapter.setItem("k", "v")).rejects.toThrow(
         "encrypt failed",
       )
@@ -176,15 +196,18 @@ describe("EncryptedAdapter", () => {
     it("propagates decryption errors", async () => {
       // Store raw data that can't be decrypted
       await inner.setItem("bad", "not-valid-encrypted-data")
+
       const failDecrypt: EncryptionFunctions = {
-        async encrypt(p: string): Promise<string> {
-          return p
-        },
         async decrypt(): Promise<string> {
           throw new Error("decrypt failed")
         },
+
+        async encrypt(p: string): Promise<string> {
+          return p
+        },
       }
       const failAdapter = new EncryptedAdapter(inner, failDecrypt)
+
       await expect(failAdapter.getItem("bad")).rejects.toThrow(
         "decrypt failed",
       )

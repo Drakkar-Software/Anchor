@@ -1,34 +1,37 @@
-import { describe, it, expect } from "vitest"
-import { computeSyncStatus } from "./useSyncStatus.js"
+import { describe, expect,it } from "vitest"
 import type { StoreApi } from "zustand"
+
 import type { TableStore } from "../types.js"
+import { computeSyncStatus } from "./useSyncStatus.js"
 
 function createMockStore(
   overrides: Record<string, unknown> = {},
 ): StoreApi<TableStore<any, any, any>> {
   const state = {
-    records: new Map(),
-    order: [],
-    isLoading: false,
     error: null,
+    getQueueSize: () => 0,
     isHydrated: true,
+    isLoading: false,
     isRestoring: false,
     lastFetchedAt: null,
+    order: [],
     realtimeStatus: "disconnected" as const,
-    getQueueSize: () => 0,
+    records: new Map(),
     ...overrides,
   }
+
   return {
+    getInitialState: () => state as any,
     getState: () => state as any,
     setState: () => {},
-    subscribe: (cb: () => void) => () => {},
-    getInitialState: () => state as any,
+    subscribe: (_cb: () => void) => () => {},
   } as any
 }
 
 describe("computeSyncStatus", () => {
   it("returns synced with no stores", () => {
     const result = computeSyncStatus([])
+
     expect(result.status).toBe("synced")
     expect(result.pendingCount).toBe(0)
     expect(result.isSyncing).toBe(false)
@@ -39,6 +42,7 @@ describe("computeSyncStatus", () => {
   it("returns syncing when a store is loading", () => {
     const store = createMockStore({ isLoading: true })
     const result = computeSyncStatus([store])
+
     expect(result.status).toBe("syncing")
     expect(result.isSyncing).toBe(true)
   })
@@ -46,23 +50,25 @@ describe("computeSyncStatus", () => {
   it("returns error when a store has an error", () => {
     const store = createMockStore({ error: new Error("fail") })
     const result = computeSyncStatus([store])
+
     expect(result.status).toBe("error")
     expect(result.failedCount).toBe(1)
   })
 
   it("counts pending rows across stores", () => {
     const records1 = new Map([
-      [1, { id: 1, _anchor_pending: "insert" }],
+      [1, { _anchor_pending: "insert", id: 1 }],
       [2, { id: 2 }],
     ])
     const records2 = new Map([
-      [3, { id: 3, _anchor_pending: "update" }],
-      [4, { id: 4, _anchor_pending: "delete" }],
+      [3, { _anchor_pending: "update", id: 3 }],
+      [4, { _anchor_pending: "delete", id: 4 }],
     ])
     const store1 = createMockStore({ records: records1 })
     const store2 = createMockStore({ records: records2 })
 
     const result = computeSyncStatus([store1, store2])
+
     expect(result.pendingCount).toBe(3)
     expect(result.status).toBe("syncing")
   })
@@ -74,6 +80,7 @@ describe("computeSyncStatus", () => {
       subscribe: () => () => {},
     }
     const result = computeSyncStatus([store], network)
+
     expect(result.status).toBe("offline")
   })
 
@@ -83,12 +90,14 @@ describe("computeSyncStatus", () => {
     const store3 = createMockStore({ lastFetchedAt: 500 })
 
     const result = computeSyncStatus([store1, store2, store3])
+
     expect(result.lastSyncedAt).toBe(500)
   })
 
   it("returns null lastSyncedAt when no stores have fetched", () => {
     const store = createMockStore({ lastFetchedAt: null })
     const result = computeSyncStatus([store])
+
     expect(result.lastSyncedAt).toBeNull()
   })
 
@@ -99,6 +108,7 @@ describe("computeSyncStatus", () => {
       subscribe: () => () => {},
     }
     const result = computeSyncStatus([store], network)
+
     expect(result.status).toBe("error")
   })
 
@@ -109,6 +119,7 @@ describe("computeSyncStatus", () => {
       subscribe: () => () => {},
     }
     const result = computeSyncStatus([store], network)
+
     expect(result.status).toBe("offline")
   })
 
@@ -118,6 +129,7 @@ describe("computeSyncStatus", () => {
     const store3 = createMockStore()
 
     const result = computeSyncStatus([store1, store2, store3])
+
     expect(result.failedCount).toBe(2)
   })
 })

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
-import { withRetry, type RetryOptions } from "../utils/retry.js"
+
 import { AnchorError } from "../errors.js"
+import { type RetryOptions,withRetry } from "../utils/retry.js"
 
 export type EdgeFunctionResult<T> = {
   data: T | null
@@ -8,11 +9,29 @@ export type EdgeFunctionResult<T> = {
 }
 
 export type InvokeOptions = {
-  headers?: Record<string, string>
   body?: unknown
+  headers?: Record<string, string>
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"
+
   /** Retry configuration for transient failures */
   retry?: RetryOptions
+}
+
+/**
+ * Creates a reusable typed Edge Function action.
+ *
+ * @example
+ * ```typescript
+ * const sendEmail = createEdgeFunctionAction<{ success: boolean }>(supabase, 'send-email')
+ * const result = await sendEmail({ body: { to: 'user@example.com', subject: 'Hello' } })
+ * ```
+ */
+export function createEdgeFunctionAction<T = unknown>(
+  supabase: SupabaseClient,
+  functionName: string,
+) {
+  return async (options?: InvokeOptions): Promise<EdgeFunctionResult<T>> =>
+    await invokeEdgeFunction<T>(supabase, functionName, options)
 }
 
 /**
@@ -33,6 +52,7 @@ export async function invokeEdgeFunction<T = unknown>(
     if (error) {
       throw await toAnchorError(error)
     }
+
     return { data: data as T, error: null }
   }
 
@@ -40,11 +60,12 @@ export async function invokeEdgeFunction<T = unknown>(
     if (options?.retry) {
       return await withRetry(execute, options.retry)
     }
+
     return await execute()
-  } catch (err) {
+  } catch (error) {
     return {
       data: null,
-      error: err instanceof Error ? err : new Error(String(err)),
+      error: error instanceof Error ? error : new Error(String(error)),
     }
   }
 }
@@ -64,11 +85,11 @@ export async function invokeEdgeFunction<T = unknown>(
  * "Edge Function returned a non-2xx status code".
  */
 async function toAnchorError(error: {
-  name?: string
-  message: string
   context?: unknown
+  message: string
+  name?: string
 }): Promise<AnchorError> {
-  const context = error.context
+  const {context} = error
   const isResponse =
     typeof context === "object" &&
     context !== null &&
@@ -80,7 +101,9 @@ async function toAnchorError(error: {
 
   if (isResponse) {
     const response = context as Response
+
     status = response.status
+
     try {
       // `clone()` so a caller reaching for the raw response still finds its body
       // unread.
@@ -97,21 +120,4 @@ async function toAnchorError(error: {
     details,
     status,
   })
-}
-
-/**
- * Creates a reusable typed Edge Function action.
- *
- * @example
- * ```typescript
- * const sendEmail = createEdgeFunctionAction<{ success: boolean }>(supabase, 'send-email')
- * const result = await sendEmail({ body: { to: 'user@example.com', subject: 'Hello' } })
- * ```
- */
-export function createEdgeFunctionAction<T = unknown>(
-  supabase: SupabaseClient,
-  functionName: string,
-) {
-  return (options?: InvokeOptions): Promise<EdgeFunctionResult<T>> =>
-    invokeEdgeFunction<T>(supabase, functionName, options)
 }

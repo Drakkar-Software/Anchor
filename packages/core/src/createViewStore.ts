@@ -1,41 +1,42 @@
-import type { StoreApi } from "zustand"
 import type { SupabaseClient } from "@supabase/supabase-js"
+import type { StoreApi } from "zustand"
+
+import { createTableStore } from "./createTableStore.js"
 import type {
-  TableStoreState,
-  TrackedRow,
+  CacheStrategy,
   FetchOptions,
   FilterDescriptor,
-  SortDescriptor,
   PersistenceAdapter,
+  SortDescriptor,
   SyncLogger,
-  CacheStrategy,
+  TableStoreState,
+  TrackedRow,
 } from "./types.js"
-import { createTableStore } from "./createTableStore.js"
+
+export type CreateViewStoreOptions<DB, Row extends Record<string, unknown>> = {
+  cacheStrategy?: CacheStrategy
+  defaultFilters?: FilterDescriptor<Row>[]
+  defaultSelect?: string
+  defaultSort?: SortDescriptor<Row>[]
+  devtools?: boolean | { name?: string }
+  logger?: SyncLogger
+  persistence?: { adapter: PersistenceAdapter }
+  primaryKey?: string
+  schema?: string
+  supabase: SupabaseClient<DB>
+  view: string
+}
 
 /** Read-only store type for database views */
 export type ViewStore<Row> = TableStoreState<Row> & {
+  clearAll: () => void
+  clearAndFetch: (options?: FetchOptions<Row>) => Promise<TrackedRow<Row>[]>
   fetch: (options?: FetchOptions<Row>) => Promise<TrackedRow<Row>[]>
   fetchOne: (id: string | number) => Promise<TrackedRow<Row> | null>
-  refetch: () => Promise<TrackedRow<Row>[]>
   hydrate: () => Promise<void>
-  persist: () => Promise<void>
-  clearAll: () => void
   mergeRecords: (rows: Row[]) => void
-  clearAndFetch: (options?: FetchOptions<Row>) => Promise<TrackedRow<Row>[]>
-}
-
-export type CreateViewStoreOptions<DB, Row extends Record<string, unknown>> = {
-  supabase: SupabaseClient<DB>
-  view: string
-  schema?: string
-  primaryKey?: string
-  defaultFilters?: FilterDescriptor<Row>[]
-  defaultSort?: SortDescriptor<Row>[]
-  defaultSelect?: string
-  persistence?: { adapter: PersistenceAdapter }
-  cacheStrategy?: CacheStrategy
-  devtools?: boolean | { name?: string }
-  logger?: SyncLogger
+  persist: () => Promise<void>
+  refetch: () => Promise<TrackedRow<Row>[]>
 }
 
 /**
@@ -63,8 +64,8 @@ export function createViewStore<
 
   const store = createTableStore<DB, Row, never, never>({
     ...rest,
-    table: view,
     isView: true,
+    table: view,
   })
 
   return store as unknown as StoreApi<ViewStore<Row>>

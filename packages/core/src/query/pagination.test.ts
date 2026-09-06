@@ -1,7 +1,8 @@
-import { describe, it, expect } from "vitest"
+import { describe, expect,it } from "vitest"
+
 import { buildCursorQuery, processCursorResults } from "./pagination.js"
 
-type Todo = { id: number; title: string; created_at: string }
+type Todo = { created_at: string; id: number; title: string; }
 
 describe("buildCursorQuery", () => {
   it("builds forward query without cursor", () => {
@@ -9,17 +10,19 @@ describe("buildCursorQuery", () => {
       cursorColumn: "created_at",
       pageSize: 10,
     })
+
     expect(result.filters).toEqual([])
-    expect(result.sort).toEqual([{ column: "created_at", ascending: true }])
+    expect(result.sort).toEqual([{ ascending: true, column: "created_at" }])
     expect(result.limit).toBe(11) // pageSize + 1 for hasNext detection
   })
 
   it("builds forward query with cursor", () => {
     const result = buildCursorQuery<Todo>({
+      cursor: "2024-01-15",
       cursorColumn: "created_at",
       pageSize: 10,
-      cursor: "2024-01-15",
     })
+
     expect(result.filters).toEqual([
       { column: "created_at", op: "gt", value: "2024-01-15" },
     ])
@@ -27,24 +30,25 @@ describe("buildCursorQuery", () => {
 
   it("builds backward query with cursor", () => {
     const result = buildCursorQuery<Todo>({
-      cursorColumn: "created_at",
-      pageSize: 10,
       cursor: "2024-01-15",
+      cursorColumn: "created_at",
       direction: "backward",
+      pageSize: 10,
     })
+
     expect(result.filters).toEqual([
       { column: "created_at", op: "lt", value: "2024-01-15" },
     ])
-    expect(result.sort![0]!.ascending).toBe(false)
+    expect(result.sort[0]!.ascending).toBe(false)
   })
 })
 
 describe("processCursorResults", () => {
   it("detects hasNextPage when extra row exists", () => {
     const rows = Array.from({ length: 11 }, (_, i) => ({
+      created_at: `2024-01-${String(i + 1).padStart(2, "0")}`,
       id: i,
       title: `Todo ${i}`,
-      created_at: `2024-01-${String(i + 1).padStart(2, "0")}`,
     }))
 
     const result = processCursorResults(rows, {
@@ -59,9 +63,9 @@ describe("processCursorResults", () => {
 
   it("detects no next page when exact rows", () => {
     const rows = Array.from({ length: 5 }, (_, i) => ({
+      created_at: `2024-01-${String(i + 1).padStart(2, "0")}`,
       id: i,
       title: `Todo ${i}`,
-      created_at: `2024-01-${String(i + 1).padStart(2, "0")}`,
     }))
 
     const result = processCursorResults(rows, {
@@ -75,17 +79,19 @@ describe("processCursorResults", () => {
 
   it("hasPreviousPage when cursor is set", () => {
     const result = processCursorResults(
-      [{ id: 1, title: "A", created_at: "2024-01-01" }],
-      { cursorColumn: "created_at", pageSize: 10, cursor: "2024-01-01" },
+      [{ created_at: "2024-01-01", id: 1, title: "A" }],
+      { cursor: "2024-01-01", cursorColumn: "created_at", pageSize: 10 },
     )
+
     expect(result.pagination.hasPreviousPage).toBe(true)
   })
 
   it("no previousPage on first page", () => {
     const result = processCursorResults(
-      [{ id: 1, title: "A", created_at: "2024-01-01" }],
+      [{ created_at: "2024-01-01", id: 1, title: "A" }],
       { cursorColumn: "created_at", pageSize: 10 },
     )
+
     expect(result.pagination.hasPreviousPage).toBe(false)
   })
 })

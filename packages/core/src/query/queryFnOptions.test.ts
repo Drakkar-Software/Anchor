@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach, vi } from "vitest"
-import { createTableStore } from "../createTableStore.js"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+
 import { createMockSupabase } from "../__tests__/mockSupabase.js"
+import { createTableStore } from "../createTableStore.js"
 
 /**
  * The escape hatch and the options it used to throw away.
@@ -12,12 +13,12 @@ import { createMockSupabase } from "../__tests__/mockSupabase.js"
  * `select` reached the builder.
  */
 
-type Todo = { id: string; title: string; done: boolean; rank: number }
+type Todo = { done: boolean; id: string; rank: number; title: string; }
 
 const ROWS: Todo[] = [
-  { id: "t1", title: "one", done: false, rank: 3 },
-  { id: "t2", title: "two", done: true, rank: 1 },
-  { id: "t3", title: "three", done: false, rank: 2 },
+  { done: false, id: "t1", rank: 3, title: "one" },
+  { done: true, id: "t2", rank: 1, title: "two" },
+  { done: false, id: "t3", rank: 2, title: "three" },
 ]
 
 describe("queryFn and the options it is handed", () => {
@@ -38,8 +39,8 @@ describe("queryFn and the options it is handed", () => {
   it("hands the queryFn a builder carrying the fetch's filters", async () => {
     const s = store()
     const rows = await s.getState().fetch({
-      queryFn: (builder: any) => builder,
       filters: [{ column: "done", op: "eq", value: false }],
+      queryFn: (builder: any) => builder,
     })
 
     expect(rows.map((r) => r.id)).toEqual(["t1", "t3"])
@@ -48,8 +49,8 @@ describe("queryFn and the options it is handed", () => {
   it("hands it the limit too", async () => {
     const s = store()
     const rows = await s.getState().fetch({
-      queryFn: (builder: any) => builder.order("rank", { ascending: true }),
       limit: 2,
+      queryFn: (builder: any) => builder.order("rank", { ascending: true }),
     })
 
     expect(rows.map((r) => r.id)).toEqual(["t2", "t3"])
@@ -62,7 +63,7 @@ describe("queryFn and the options it is handed", () => {
     // tiebreaker behind it — and ordering through a referenced table is one of
     // the gaps the escape hatch exists for. `limit`/`range` overwrite and
     // filters compose as AND, so both of those pre-apply safely.
-    const s = store({ defaultSort: [{ column: "done", ascending: true }] })
+    const s = store({ defaultSort: [{ ascending: true, column: "done" }] })
     const rows = await s.getState().fetch({
       queryFn: (builder: any) => builder.order("rank", { ascending: true }),
     })
@@ -101,22 +102,23 @@ describe("defaultQueryFn", () => {
   it("applies to every fetch that does not pass its own", async () => {
     const seen = vi.fn((builder: any) => builder.eq("done", false))
     const s = createTableStore<any, Todo, any, any>({
+      defaultQueryFn: seen,
       supabase,
       table: "todos",
-      defaultQueryFn: seen,
     } as any)
 
     const rows = await s.getState().fetch()
+
     expect(seen).toHaveBeenCalledTimes(1)
     expect(rows.map((r) => r.id)).toEqual(["t1", "t3"])
   })
 
   it("keeps per-query scoping, unlike a per-call queryFn", async () => {
     const s = createTableStore<any, Todo, any, any>({
-      supabase,
-      table: "todos",
       cacheStrategy: "merge",
       defaultQueryFn: (builder: any) => builder,
+      supabase,
+      table: "todos",
     } as any)
 
     await s.getState().fetch({ filters: [{ column: "done", op: "eq", value: false }] })
@@ -127,6 +129,7 @@ describe("defaultQueryFn", () => {
     // about which query this is — putting it through `resolveFetchOptions` would
     // make `isKeyable` false for all of them and the registry would stay empty.
     expect(s.getState().queries.size).toBe(2)
+
     for (const entry of s.getState().queries.values()) {
       expect(entry.isLoading).toBe(false)
       expect(entry.error).toBeNull()
@@ -136,18 +139,20 @@ describe("defaultQueryFn", () => {
   it("is overridden by a queryFn on the call", async () => {
     const fallback = vi.fn((builder: any) => builder)
     const s = createTableStore<any, Todo, any, any>({
+      defaultQueryFn: fallback,
       supabase,
       table: "todos",
-      defaultQueryFn: fallback,
     } as any)
 
     const rows = await s.getState().fetch({ queryFn: (builder: any) => builder.eq("rank", 1) })
+
     expect(fallback).not.toHaveBeenCalled()
     expect(rows.map((r) => r.id)).toEqual(["t2"])
   })
 
   it("registers no query entry when the queryFn came from the call", async () => {
     const s = createTableStore<any, Todo, any, any>({ supabase, table: "todos" } as any)
+
     await s.getState().fetch({ queryFn: (builder: any) => builder })
 
     // An opaque function cannot go in a value-based key, so the query reads the

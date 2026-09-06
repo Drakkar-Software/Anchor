@@ -1,15 +1,16 @@
 "use client"
 
+import type { SupabaseClient } from "@supabase/supabase-js"
 import { useEffect, useRef, useState } from "react"
 import type { StoreApi } from "zustand"
-import type { SupabaseClient } from "@supabase/supabase-js"
-import type { AuthStore } from "../types.js"
+
 import {
-  createSessionFromUrl,
-  resolveAuthRedirect,
   type AuthCallbackResult,
   type AuthCallbackRoutes,
+  createSessionFromUrl,
+  resolveAuthRedirect,
 } from "../auth/authCallbacks.js"
+import type { AuthStore } from "../types.js"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -27,6 +28,12 @@ export type UseAuthCallbackOptions = {
   getUrl: () => string | null | undefined
 
   /**
+   * Called when the URL contains an auth error, or when session
+   * establishment fails.
+   */
+  onError?: (error: Error) => void
+
+  /**
    * Called once when a session is successfully established from the URL.
    * Use this callback to navigate the user to the appropriate screen.
    *
@@ -42,10 +49,15 @@ export type UseAuthCallbackOptions = {
   onSuccess?: (result: AuthCallbackResult) => void
 
   /**
-   * Called when the URL contains an auth error, or when session
-   * establishment fails.
+   * Navigation primitive called with the resolved route path.
+   *
+   * Optional on web (defaults to `window.location.replace`).
+   * Required on native — pass your router's `replace` or `push` function.
+   *
+   * @example
+   * redirect: (path) => router.replace(path)
    */
-  onError?: (error: Error) => void
+  redirect?: (path: string) => void
 
   /**
    * Declarative type-to-route map. When set, the hook automatically navigates
@@ -64,24 +76,14 @@ export type UseAuthCallbackOptions = {
    * }
    */
   routes?: AuthCallbackRoutes
-
-  /**
-   * Navigation primitive called with the resolved route path.
-   *
-   * Optional on web (defaults to `window.location.replace`).
-   * Required on native — pass your router's `replace` or `push` function.
-   *
-   * @example
-   * redirect: (path) => router.replace(path)
-   */
-  redirect?: (path: string) => void
 }
 
 export type UseAuthCallbackResult = {
-  /** `true` while the URL is being parsed and the session is being established */
-  isProcessing: boolean
   /** Set when an error occurs during callback processing; `null` otherwise */
   error: Error | null
+
+  /** `true` while the URL is being parsed and the session is being established */
+  isProcessing: boolean
 }
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
@@ -138,7 +140,7 @@ export function useAuthCallback(
   const url = options.getUrl()
 
   useEffect(() => {
-    if (processed.current || !url) return
+    if (processed.current || !url) {return}
 
     processed.current = true
     setIsProcessing(true)
@@ -148,15 +150,15 @@ export function useAuthCallback(
       .then((result) => {
         setIsProcessing(false)
 
-        if (!result) return // URL had no auth params — nothing to do
+        if (!result) {return} // URL had no auth params — nothing to do
 
         // Update anchor auth store immediately (onAuthStateChange reconciles claims async)
         authStore.setState({
+          claims: {},
+          error: null,
+          isLoading: false,
           session: result.session,
           user: result.session.user,
-          isLoading: false,
-          error: null,
-          claims: {},
         })
 
         options.onSuccess?.(result)
@@ -164,12 +166,14 @@ export function useAuthCallback(
         // Declarative routing: resolve route from `routes` map and navigate.
         // `onSuccess` fires first so analytics/state updates run before navigation.
         const path = resolveAuthRedirect(result.type, options.routes)
+
         if (path) {
           const redirect =
             options.redirect ??
-            (typeof window !== "undefined"
-              ? (p: string) => window.location.replace(p)
-              : undefined)
+            (typeof globalThis === "undefined"
+              ? undefined
+              : (p: string) => { globalThis.location.replace(p); })
+
           if (redirect) {
             redirect(path)
           } else {
@@ -180,16 +184,18 @@ export function useAuthCallback(
           }
         }
       })
-      .catch((err: unknown) => {
-        const wrapped = err instanceof Error ? err : new Error(String(err))
+      .catch((error_: unknown) => {
+        const wrapped = error_ instanceof Error ? error_ : new Error(String(error_))
+
         setError(wrapped)
         setIsProcessing(false)
         options.onError?.(wrapped)
       })
+
     // url and supabase/authStore are the only reactive deps;
     // options callbacks are intentionally excluded to avoid churn on inline functions.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url, supabase, authStore])
 
-  return { isProcessing, error }
+  return { error, isProcessing }
 }

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
+
 import { fromSupabaseError } from "../errors.js"
 
 export type AggregateFunction = "sum" | "avg" | "min" | "max" | "count"
@@ -6,6 +7,58 @@ export type AggregateFunction = "sum" | "avg" | "min" | "max" | "count"
 export type AggregateResult<T = number> = {
   data: T | null
   error: Error | null
+}
+
+/**
+ * Compute aggregations locally on an array of records.
+ * Works on data already in the store — no network call.
+ *
+ * @example
+ * ```typescript
+ * const records = store.getState().order.map(id => store.getState().records.get(id)!)
+ * const total = aggregateLocal(records, 'price', 'sum')  // 150.50
+ * const avg = aggregateLocal(records, 'price', 'avg')    // 30.10
+ * ```
+ */
+export function aggregateLocal<Row extends Record<string, unknown>>(
+  records: Row[],
+  column: string & keyof Row,
+  fn: AggregateFunction,
+): number | null {
+  if (records.length === 0) {return fn === "count" ? 0 : null}
+
+  if (fn === "count") {return records.length}
+
+  const values: number[] = []
+
+  for (const r of records) {
+    const v = r[column]
+
+    if (typeof v === "number" && !Number.isNaN(v)) {
+      values.push(v)
+    }
+  }
+
+  if (values.length === 0) {return null}
+
+  switch (fn) {
+    case "avg": {
+      return values.reduce((acc, v) => acc + v, 0) / values.length
+    }
+    case "max": {
+      return Math.max(...values)
+    }
+    case "min": {
+      return Math.min(...values)
+    }
+    case "sum": {
+      return values.reduce((acc, v) => acc + v, 0)
+    }
+
+    default: {
+      return null
+    }
+  }
 }
 
 /**
@@ -34,50 +87,8 @@ export async function aggregateRpc<T = number>(
 ): Promise<AggregateResult<T>> {
   const functionName = rpcName ?? `zs_${fn}_${table}_${column}`
   const { data, error } = await supabase.rpc(functionName)
-  if (error) return { data: null, error: fromSupabaseError(error) }
+
+  if (error) {return { data: null, error: fromSupabaseError(error) }}
+
   return { data: data as T, error: null }
-}
-
-/**
- * Compute aggregations locally on an array of records.
- * Works on data already in the store — no network call.
- *
- * @example
- * ```typescript
- * const records = store.getState().order.map(id => store.getState().records.get(id)!)
- * const total = aggregateLocal(records, 'price', 'sum')  // 150.50
- * const avg = aggregateLocal(records, 'price', 'avg')    // 30.10
- * ```
- */
-export function aggregateLocal<Row extends Record<string, unknown>>(
-  records: Row[],
-  column: string & keyof Row,
-  fn: AggregateFunction,
-): number | null {
-  if (records.length === 0) return fn === "count" ? 0 : null
-
-  if (fn === "count") return records.length
-
-  const values: number[] = []
-  for (const r of records) {
-    const v = r[column]
-    if (typeof v === "number" && !isNaN(v)) {
-      values.push(v)
-    }
-  }
-
-  if (values.length === 0) return null
-
-  switch (fn) {
-    case "sum":
-      return values.reduce((acc, v) => acc + v, 0)
-    case "avg":
-      return values.reduce((acc, v) => acc + v, 0) / values.length
-    case "min":
-      return Math.min(...values)
-    case "max":
-      return Math.max(...values)
-    default:
-      return null
-  }
 }

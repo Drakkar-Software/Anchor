@@ -1,13 +1,13 @@
 "use client"
 
-import { useStore } from "zustand"
-import type { StoreApi } from "zustand"
+import { type StoreApi , useStore } from "zustand"
+
 import type { TableStore, TrackedRow } from "../types.js"
 
 export type PendingChange<Row = Record<string, unknown>> = {
   id: string | number
-  row: TrackedRow<Row>
   mutationType: "insert" | "update" | "delete"
+  row: TrackedRow<Row>
 }
 
 /**
@@ -24,10 +24,12 @@ export function usePendingChanges<Row extends Record<string, unknown>>(
   const records = useStore(store, (s) => s.records)
 
   const pending: PendingChange<Row>[] = []
+
   for (const [id, row] of records.entries()) {
     if (row._anchor_pending) {
-      pending.push({ id, row, mutationType: row._anchor_pending })
+      pending.push({ id, mutationType: row._anchor_pending, row })
     }
   }
+
   return pending
 }

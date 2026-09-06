@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
-import { describe, it, expect, beforeEach, vi, afterEach } from "vitest"
+import { afterEach,beforeEach, describe, expect, it, vi } from "vitest"
+
 import { LocalStorageAdapter } from "./localStorageAdapter.js"
 
 /**
@@ -30,9 +31,11 @@ describe("LocalStorageAdapter", () => {
 
   it("returns null rather than throwing when the stored value is not JSON", async () => {
     localStorage.setItem("anchor:corrupt", "{not json")
+
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
 
     expect(await adapter.getItem("anchor:corrupt")).toBeNull()
+
     // A silent null would be indistinguishable from an empty store.
     expect(warn).toHaveBeenCalledOnce()
   })
@@ -72,6 +75,7 @@ describe("LocalStorageAdapter", () => {
     await adapter.clear()
 
     expect(await adapter.getItem("anchor:a")).toBeNull()
+
     // The paired positive: a clear that wiped everything would also pass the
     // assertion above, and would sign the user out.
     expect(localStorage.getItem("session-token")).toBe("keep me")
@@ -83,7 +87,7 @@ describe("LocalStorageAdapter", () => {
     })
 
     await expect(adapter.setItem("anchor:big", [1, 2, 3])).rejects.toThrow(
-      /anchor:big.*IndexedDBAdapter/s,
+      /anchor:big.*IndexedDBAdapter/sv,
     )
   })
 })

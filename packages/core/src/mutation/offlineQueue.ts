@@ -1,17 +1,15 @@
-import type {
-  QueuedMutation,
-  MutationId,
-  PersistenceAdapter,
-  NetworkStatusAdapter,
-  SyncLogger,
-} from "../types.js"
-import { noopLogger } from "../types.js"
+import {
+  type MutationId,
+  type NetworkStatusAdapter,
+ noopLogger,  type PersistenceAdapter,
+  type QueuedMutation,
+  type SyncLogger } from "../types.js"
 
 export type FlushResult = {
-  succeeded: MutationId[]
+  complete: boolean
   failed: MutationId[]
   rolledBack: MutationId[]
-  complete: boolean
+  succeeded: MutationId[]
 }
 
 export type MutationExecutor = (
@@ -21,18 +19,19 @@ export type MutationExecutor = (
 
 type OfflineQueueOptions = {
   adapter?: PersistenceAdapter
-  network?: NetworkStatusAdapter
-  maxRetries?: number
   flushDebounceMs?: number
-  /** Base delay for exponential backoff in ms (default: 1000) */
-  retryBaseDelay?: number
   logger?: SyncLogger
+  maxRetries?: number
+  network?: NetworkStatusAdapter
   onRollback?: (mutation: QueuedMutation) => void
   onTempIdResolved?: (
     tempId: string,
     realId: unknown,
     table: string,
   ) => void
+
+  /** Base delay for exponential backoff in ms (default: 1000) */
+  retryBaseDelay?: number
 }
 
 const QUEUE_KEY = "anchor:__mutation_queue"
@@ -43,28 +42,45 @@ const TEMP_ID_MAP_KEY = "anchor:__temp_id_map"
  */
 export class OfflineQueue {
   private queue: QueuedMutation[] = []
-  private executors = new Map<string, MutationExecutor>()
+
+  private readonly executors = new Map<string, MutationExecutor>()
+
   private flushing = false
+
+
   /**
    * A flush was asked for while one was already running, and the work it was
    * asked for is not in the batch that is running — `pending` is captured
    * before the first `await`. See the re-arm in `flush`'s `finally`.
    */
   private flushRequestedWhileRunning = false
+
   private flushTimer: ReturnType<typeof setTimeout> | null = null
+
   private unsubNetwork: (() => void) | null = null
+
+
   /** Persisted temp ID → real ID mappings that survive across flushes */
   private persistedTempIdMap = new Map<string, unknown>()
+
+
   /** Current user ID for mutation attribution and isolation */
   private currentUserId: string | undefined
 
   private readonly adapter?: PersistenceAdapter
+
   private readonly network?: NetworkStatusAdapter
+
   private readonly maxRetries: number
+
   private readonly flushDebounceMs: number
+
   private readonly retryBaseDelay: number
+
   private readonly logger: SyncLogger
+
   private readonly onRollback?: (mutation: QueuedMutation) => void
+
   private readonly onTempIdResolved?: (
     tempId: string,
     realId: unknown,
@@ -112,41 +128,8 @@ export class OfflineQueue {
     this.executors.set(table, executor)
   }
 
-  // ── Hydration ────────────────────────────────────────────────────
-
-  async hydrate(): Promise<void> {
-    if (!this.adapter) return
-    const data = await this.adapter.getItem<QueuedMutation[]>(QUEUE_KEY)
-    if (data && Array.isArray(data)) {
-      this.queue = data.filter(
-        (m) => m.status === "pending" || m.status === "failed",
-      )
-    }
-    // Restore persisted temp ID mappings from previous flushes
-    const tempIdData = await this.adapter.getItem<[string, unknown][]>(TEMP_ID_MAP_KEY)
-    if (tempIdData && Array.isArray(tempIdData)) {
-      this.persistedTempIdMap = new Map(tempIdData)
-    }
-  }
-
-  // ── Enqueue ──────────────────────────────────────────────────────
-
-  async enqueue(mutation: QueuedMutation): Promise<void> {
-    if (!this.executors.has(mutation.table)) {
-      console.warn(`[anchor:queue] No executor registered for table "${mutation.table}" — mutation may not flush`)
-    }
-    // Tag with current user for multi-user isolation
-    if (this.currentUserId && !mutation.userId) {
-      mutation.userId = this.currentUserId
-    }
-    this.queue.push(mutation)
-    await this.persist()
-    this.scheduleFlush()
-  }
-
   // ── Coalescing ───────────────────────────────────────────────────
-
-  compact(): void {
+compact(): void {
     const compacted: QueuedMutation[] = []
     const seen = new Map<string, number>() // row key → index in compacted
     // Which mutation absorbed each one that coalescing removes, so a third
@@ -162,6 +145,7 @@ export class OfflineQueue {
     for (const mutation of this.queue) {
       if (mutation.status !== "pending") {
         compacted.push(mutation)
+
         continue
       }
 
@@ -179,6 +163,7 @@ export class OfflineQueue {
       if (existingIdx == null) {
         seen.set(rowKey, compacted.length)
         compacted.push(mutation)
+
         continue
       }
 
@@ -191,6 +176,7 @@ export class OfflineQueue {
       ) {
         existing.payload = { ...existing.payload, ...mutation.payload }
         absorbedBy.set(mutation.id, existing.id)
+
         continue
       }
 
@@ -200,13 +186,17 @@ export class OfflineQueue {
         mutation.operation === "DELETE"
       ) {
         compacted.splice(existingIdx, 1)
+
+
         // Fix indices in seen map
         for (const [key, idx] of seen) {
-          if (idx > existingIdx) seen.set(key, idx - 1)
+          if (idx > existingIdx) {seen.set(key, idx - 1)}
         }
+
         seen.delete(rowKey)
         absorbedBy.set(existing.id, undefined)
         absorbedBy.set(mutation.id, undefined)
+
         continue
       }
 
@@ -217,6 +207,7 @@ export class OfflineQueue {
       ) {
         existing.payload = { ...existing.payload, ...mutation.payload }
         absorbedBy.set(mutation.id, existing.id)
+
         continue
       }
 
@@ -230,6 +221,7 @@ export class OfflineQueue {
           rollbackSnapshot: existing.rollbackSnapshot,
         }
         absorbedBy.set(existing.id, mutation.id)
+
         continue
       }
 
@@ -244,17 +236,134 @@ export class OfflineQueue {
     // `UPDATE + DELETE` produces — depends on nothing.
     for (const mutation of compacted) {
       let target = mutation.dependsOn
+
       for (let hops = 0; target != null && absorbedBy.has(target); hops++) {
-        if (hops > absorbedBy.size) { target = undefined; break }
+        if (hops > absorbedBy.size) { target = undefined;
+
+ break }
+
         target = absorbedBy.get(target)
       }
+
       mutation.dependsOn = target === mutation.id ? undefined : target
     }
 
     this.queue = compacted
   }
 
-  // ── Flush ────────────────────────────────────────────────────────
+/** Calculate exponential backoff delay with jitter */
+private getRetryDelay(attempt: number): number {
+    const exponential = this.retryBaseDelay * 2**attempt
+    const jitter = Math.random() * this.retryBaseDelay
+
+    return exponential + jitter
+  }
+
+// ── Auto-flush ───────────────────────────────────────────────────
+scheduleFlush(retryAttempt?: number): void {
+    if (this.flushTimer) {clearTimeout(this.flushTimer)}
+
+    const delay = retryAttempt == null
+      ? this.flushDebounceMs
+      : this.getRetryDelay(retryAttempt)
+
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null
+      this.flush().catch((error: unknown) => {
+        this.logger.mutationError("__queue", "FLUSH" as any, error instanceof Error ? error.message : String(error))
+      })
+    }, delay)
+  }
+
+cancelFlush(): void {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer)
+      this.flushTimer = null
+    }
+  }
+
+startAutoFlush(): void {
+    if (!this.network) {return}
+
+    this.unsubNetwork = this.network.subscribe((online) => {
+      if (online && this.isDirty) {
+        this.scheduleFlush()
+      }
+    })
+  }
+
+// ── Hydration ────────────────────────────────────────────────────
+
+  async hydrate(): Promise<void> {
+    if (!this.adapter) {return}
+
+    const data = await this.adapter.getItem<QueuedMutation[]>(QUEUE_KEY)
+
+    if (data && Array.isArray(data)) {
+      this.queue = data.filter(
+        (m) => m.status === "pending" || m.status === "failed",
+      )
+    }
+
+
+    // Restore persisted temp ID mappings from previous flushes
+    const tempIdData = await this.adapter.getItem<[string, unknown][]>(TEMP_ID_MAP_KEY)
+
+    if (tempIdData && Array.isArray(tempIdData)) {
+      this.persistedTempIdMap = new Map(tempIdData)
+    }
+  }
+
+  
+
+
+
+
+
+
+
+
+
+stopAutoFlush(): void {
+    this.unsubNetwork?.()
+    this.unsubNetwork = null
+    this.cancelFlush()
+  }
+// ── Enqueue ──────────────────────────────────────────────────────
+
+  async enqueue(mutation: QueuedMutation): Promise<void> {
+    if (!this.executors.has(mutation.table)) {
+      console.warn(`[anchor:queue] No executor registered for table "${mutation.table}" — mutation may not flush`)
+    }
+
+
+    // Tag with current user for multi-user isolation
+    if (this.currentUserId && !mutation.userId) {
+      mutation.userId = this.currentUserId
+    }
+
+    this.queue.push(mutation)
+    await this.persist()
+    this.scheduleFlush()
+  }
+
+  
+
+  
+
+  
+
+
+
+
+
+
+
+
+
+
+
+// ── Flush ────────────────────────────────────────────────────────
 
   async flush(): Promise<FlushResult> {
     if (this.flushing) {
@@ -266,11 +375,12 @@ export class OfflineQueue {
       // sitting on wifi with a signed-in user will produce. Re-armed in
       // `finally`.
       this.flushRequestedWhileRunning = true
-      return { succeeded: [], failed: [], rolledBack: [], complete: false }
+
+      return { complete: false, failed: [], rolledBack: [], succeeded: [] }
     }
 
     if (this.network && !this.network.isOnline()) {
-      return { succeeded: [], failed: [], rolledBack: [], complete: false }
+      return { complete: false, failed: [], rolledBack: [], succeeded: [] }
     }
 
     this.flushing = true
@@ -281,6 +391,7 @@ export class OfflineQueue {
       const pending = this.queue.filter(
         (m) =>
           (m.status === "pending" || m.status === "failed") &&
+
           // Skip mutations belonging to a different user — and to no current
           // user at all, which is a signed-out session, not a wildcard. See
           // `setUserId`.
@@ -288,16 +399,16 @@ export class OfflineQueue {
       )
 
       if (pending.length === 0) {
-        return { succeeded: [], failed: [], rolledBack: [], complete: true }
+        return { complete: true, failed: [], rolledBack: [], succeeded: [] }
       }
 
       this.logger.queueFlushStart(pending.length)
 
       const result: FlushResult = {
-        succeeded: [],
+        complete: false,
         failed: [],
         rolledBack: [],
-        complete: false,
+        succeeded: [],
       }
 
       // Seed with persisted mappings from previous flushes, then add new ones
@@ -315,8 +426,10 @@ export class OfflineQueue {
             result.rolledBack.push(mutation.id)
             rolledBackIds.add(mutation.id)
             this.onRollback?.(mutation)
+
             continue
           }
+
           if (!succeededIds.has(mutation.dependsOn)) {
             // Dependency hasn't succeeded in this flush — skip for next flush
             continue
@@ -324,16 +437,20 @@ export class OfflineQueue {
         }
 
         const executor = this.executors.get(mutation.table)
+
         if (!executor) {
           result.failed.push(mutation.id)
           mutation.status = "failed"
           mutation.lastError = `No executor registered for table: ${mutation.table}`
+
           continue
         }
 
         mutation.status = "in_flight"
 
         try {
+          // Mutations must run in order so dependsOn + temp-id remaps stay correct.
+          // react-doctor-disable-next-line react-doctor/async-await-in-loop
           const { serverId } = await executor(mutation, tempIdMap)
 
           // Track temp ID resolution for all PK columns (supports composite keys).
@@ -373,12 +490,14 @@ export class OfflineQueue {
           // flush. Stranded silently: no error, no rollback, `pendingCount`
           // simply never reaching zero.
           for (const other of this.queue) {
-            if (other.dependsOn === mutation.id) other.dependsOn = undefined
+            if (other.dependsOn === mutation.id) {other.dependsOn = undefined}
           }
-        } catch (err) {
+        } catch (error) {
           mutation.retryCount++
+
           const errorMessage =
-            err instanceof Error ? err.message : String(err)
+            error instanceof Error ? error.message : String(error)
+
           mutation.lastError = errorMessage
 
           if (mutation.retryCount > this.maxRetries) {
@@ -389,6 +508,8 @@ export class OfflineQueue {
           } else {
             mutation.status = "failed"
             result.failed.push(mutation.id)
+
+
             // Stop on first failure
             break
           }
@@ -397,7 +518,8 @@ export class OfflineQueue {
 
       // Prune succeeded and rolled-back mutations in-place to avoid
       // losing mutations enqueued during flush (race condition fix)
-      const pruneStatuses = new Set(["succeeded", "rolled_back"])
+      const pruneStatuses = new Set(["rolled_back", "succeeded"])
+
       for (let i = this.queue.length - 1; i >= 0; i--) {
         if (pruneStatuses.has(this.queue[i]!.status)) {
           this.queue.splice(i, 1)
@@ -415,72 +537,46 @@ export class OfflineQueue {
 
       // Schedule retry with backoff if there are failed mutations
       if (result.failed.length > 0) {
-        const maxAttempt = Math.max(
-          ...this.queue
-            .filter((m) => m.status === "failed")
-            .map((m) => m.retryCount),
-          0,
-        )
+        let maxAttempt = 0
+
+        for (const m of this.queue) {
+          if (m.status === "failed" && m.retryCount > maxAttempt) {
+            maxAttempt = m.retryCount
+          }
+        }
+
         this.scheduleFlush(maxAttempt)
       }
 
       return result
     } finally {
       this.flushing = false
+
       if (this.flushRequestedWhileRunning) {
         this.flushRequestedWhileRunning = false
+
+
         // `!this.flushTimer` keeps the retry backoff scheduled above: a plain
         // `scheduleFlush()` here would clear that timer and replace an
         // exponential delay with the debounce, which is how a queue full of
         // failing writes turns into a tight retry loop.
-        if (this.isDirty && !this.flushTimer) this.scheduleFlush()
+        if (this.isDirty && !this.flushTimer) {this.scheduleFlush()}
       }
     }
   }
 
-  // ── Auto-flush ───────────────────────────────────────────────────
+  
 
-  /** Calculate exponential backoff delay with jitter */
-  private getRetryDelay(attempt: number): number {
-    const exponential = this.retryBaseDelay * Math.pow(2, attempt)
-    const jitter = Math.random() * this.retryBaseDelay
-    return exponential + jitter
-  }
+  
+  
 
-  scheduleFlush(retryAttempt?: number): void {
-    if (this.flushTimer) clearTimeout(this.flushTimer)
-    const delay = retryAttempt != null
-      ? this.getRetryDelay(retryAttempt)
-      : this.flushDebounceMs
-    this.flushTimer = setTimeout(() => {
-      this.flushTimer = null
-      this.flush().catch((err) => {
-        this.logger.mutationError("__queue", "FLUSH" as any, err instanceof Error ? err.message : String(err))
-      })
-    }, delay)
-  }
+  
 
-  cancelFlush(): void {
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer)
-      this.flushTimer = null
-    }
-  }
+  
 
-  startAutoFlush(): void {
-    if (!this.network) return
-    this.unsubNetwork = this.network.subscribe((online) => {
-      if (online && this.isDirty) {
-        this.scheduleFlush()
-      }
-    })
-  }
+  
 
-  stopAutoFlush(): void {
-    this.unsubNetwork?.()
-    this.unsubNetwork = null
-    this.cancelFlush()
-  }
+  
 
   // ── Accessors ────────────────────────────────────────────────────
 
@@ -500,30 +596,37 @@ export class OfflineQueue {
     )
   }
 
-  // ── Persistence ──────────────────────────────────────────────────
+  destroy(): void {
+    this.stopAutoFlush()
+    this.queue = []
+  }
+
+// ── Persistence ──────────────────────────────────────────────────
 
   private async persist(): Promise<void> {
-    if (!this.adapter) return
+    if (!this.adapter) {return}
+
     try {
       await this.adapter.setItem(QUEUE_KEY, this.queue)
-    } catch (err) {
+    } catch (error) {
       this.logger.mutationError(
         "__queue",
         "PERSIST" as any,
-        `Failed to persist queue: ${err instanceof Error ? err.message : String(err)}`,
+        `Failed to persist queue: ${error instanceof Error ? error.message : String(error)}`,
       )
     }
   }
 
   private async persistTempIdMap(): Promise<void> {
-    if (!this.adapter || this.persistedTempIdMap.size === 0) return
+    if (!this.adapter || this.persistedTempIdMap.size === 0) {return}
+
     try {
-      await this.adapter.setItem(TEMP_ID_MAP_KEY, [...this.persistedTempIdMap.entries()])
-    } catch (err) {
+      await this.adapter.setItem(TEMP_ID_MAP_KEY, Array.from(this.persistedTempIdMap.entries()))
+    } catch (error) {
       this.logger.mutationError(
         "__queue",
         "PERSIST" as any,
-        `Failed to persist temp ID map: ${err instanceof Error ? err.message : String(err)}`,
+        `Failed to persist temp ID map: ${error instanceof Error ? error.message : String(error)}`,
       )
     }
   }
@@ -541,8 +644,5 @@ export class OfflineQueue {
     await this.persistTempIdMap()
   }
 
-  destroy(): void {
-    this.stopAutoFlush()
-    this.queue = []
-  }
+  
 }

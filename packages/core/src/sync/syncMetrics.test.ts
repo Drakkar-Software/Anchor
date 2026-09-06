@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, vi } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+
 import { SyncMetrics } from "./syncMetrics.js"
 
 describe("SyncMetrics", () => {
@@ -13,6 +14,7 @@ describe("SyncMetrics", () => {
     metrics.fetchSuccess("todos", 3, 80)
 
     const snap = metrics.getMetrics()
+
     expect(snap.fetchCount).toBe(2)
     expect(snap.fetchLatencyP50).toBe(80)
   })
@@ -22,6 +24,7 @@ describe("SyncMetrics", () => {
     metrics.fetchError("todos", "network")
 
     const snap = metrics.getMetrics()
+
     expect(snap.fetchErrorCount).toBe(2)
   })
 
@@ -30,6 +33,7 @@ describe("SyncMetrics", () => {
     metrics.mutationSuccess("todos", "UPDATE", 30)
 
     const snap = metrics.getMetrics()
+
     expect(snap.mutationCount).toBe(2)
     expect(snap.mutationLatencyP50).toBe(30)
   })
@@ -39,6 +43,7 @@ describe("SyncMetrics", () => {
     metrics.mutationError("todos", "DELETE", "rls")
 
     const snap = metrics.getMetrics()
+
     expect(snap.mutationErrorCount).toBe(2)
   })
 
@@ -49,6 +54,7 @@ describe("SyncMetrics", () => {
     }
 
     const snap = metrics.getMetrics()
+
     expect(snap.fetchCount).toBe(100)
     expect(snap.fetchLatencyP50).toBe(50)
     expect(snap.fetchLatencyP95).toBe(95)
@@ -57,6 +63,7 @@ describe("SyncMetrics", () => {
 
   it("getMetrics() returns 0 for latencies when no data", () => {
     const snap = metrics.getMetrics()
+
     expect(snap.fetchLatencyP50).toBe(0)
     expect(snap.fetchLatencyP95).toBe(0)
     expect(snap.fetchLatencyP99).toBe(0)
@@ -75,6 +82,7 @@ describe("SyncMetrics", () => {
     metrics.realtimeEvent("todos", "INSERT")
 
     metrics.resetMetrics()
+
     const snap = metrics.getMetrics()
 
     expect(snap.fetchCount).toBe(0)
@@ -90,6 +98,7 @@ describe("SyncMetrics", () => {
 
   it("onMetricsUpdate callback fires on each event", () => {
     const cb = vi.fn()
+
     metrics.onMetricsUpdate(cb)
 
     metrics.fetchSuccess("todos", 1, 10)
@@ -108,6 +117,7 @@ describe("SyncMetrics", () => {
   it("multiple subscribers receive updates", () => {
     const cb1 = vi.fn()
     const cb2 = vi.fn()
+
     metrics.onMetricsUpdate(cb1)
     metrics.onMetricsUpdate(cb2)
 
@@ -137,6 +147,7 @@ describe("SyncMetrics", () => {
     metrics.queueFlushSuccess(2, 0)
 
     const snap = metrics.getMetrics()
+
     expect(snap.queueFlushCount).toBe(2)
   })
 
@@ -146,6 +157,7 @@ describe("SyncMetrics", () => {
     metrics.conflict("users", 3)
 
     const snap = metrics.getMetrics()
+
     expect(snap.conflictCount).toBe(3)
   })
 
@@ -155,11 +167,13 @@ describe("SyncMetrics", () => {
     metrics.realtimeEvent("todos", "DELETE")
 
     const snap = metrics.getMetrics()
+
     expect(snap.realtimeEventCount).toBe(3)
   })
 
   it("fetchStart does not notify (no state change)", () => {
     const cb = vi.fn()
+
     metrics.onMetricsUpdate(cb)
     metrics.fetchStart("todos")
     expect(cb).not.toHaveBeenCalled()
@@ -167,6 +181,7 @@ describe("SyncMetrics", () => {
 
   it("mutationStart does not notify (no state change)", () => {
     const cb = vi.fn()
+
     metrics.onMetricsUpdate(cb)
     metrics.mutationStart("todos", "INSERT")
     expect(cb).not.toHaveBeenCalled()
@@ -174,6 +189,7 @@ describe("SyncMetrics", () => {
 
   it("queueFlushStart does not notify (no state change)", () => {
     const cb = vi.fn()
+
     metrics.onMetricsUpdate(cb)
     metrics.queueFlushStart(5)
     expect(cb).not.toHaveBeenCalled()

@@ -6,21 +6,27 @@ import type { AppLifecycleAdapter } from "@drakkar.software/anchor"
  * SSR-safe: returns no-op cleanup when `document` is unavailable.
  */
 export class WebAppLifecycle implements AppLifecycleAdapter {
-  onForeground(cb: () => void): () => void {
-    if (typeof document === "undefined") return () => {}
+  onForeground(callback: () => void): () => void {
+    if (typeof document === "undefined") {return () => {}}
+
     const handler = () => {
-      if (document.visibilityState === "visible") cb()
+      if (document.visibilityState === "visible") {callback()}
     }
+
     document.addEventListener("visibilitychange", handler)
-    return () => document.removeEventListener("visibilitychange", handler)
+
+    return () => { document.removeEventListener("visibilitychange", handler); }
   }
 
-  onBackground(cb: () => void): () => void {
-    if (typeof document === "undefined") return () => {}
+  onBackground(callback: () => void): () => void {
+    if (typeof document === "undefined") {return () => {}}
+
     const handler = () => {
-      if (document.visibilityState === "hidden") cb()
+      if (document.visibilityState === "hidden") {callback()}
     }
+
     document.addEventListener("visibilitychange", handler)
-    return () => document.removeEventListener("visibilitychange", handler)
+
+    return () => { document.removeEventListener("visibilitychange", handler); }
   }
 }

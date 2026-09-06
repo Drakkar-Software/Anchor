@@ -1,25 +1,28 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 import type { StoreApi } from "zustand"
+
+import { resolveConflict } from "../mutation/conflictResolution.js"
 import type {
-  TableStore,
-  TrackedRow,
   ConflictConfig,
   ConflictContext,
+  TableStore,
+  TrackedRow,
 } from "../types.js"
-import { resolveConflict } from "../mutation/conflictResolution.js"
 import { buildPkFilter } from "../utils/compositeKey.js"
 
 export type MultiDeviceSyncOptions = {
-  /** Unique device identifier (auto-generated if not provided) */
-  deviceId?: string
   /** Realtime channel name (default: "anchor:device-sync") */
   channelName?: string
+
   /** Conflict resolution config */
   conflict?: ConflictConfig
+
   /** Debounce outgoing broadcasts in ms (default: 1000) */
   debounceMs?: number
-  /** Subset of table names to sync (default: all) */
-  tables?: string[]
+
+  /** Unique device identifier (auto-generated if not provided) */
+  deviceId?: string
+
   /**
    * Each synced table's real primary key, by table name — needed to build a
    * correct `ConflictContext.primaryKey` when `conflict` is set. A table not
@@ -29,13 +32,16 @@ export type MultiDeviceSyncOptions = {
    * store was configured with a different `primaryKey`.
    */
   primaryKeys?: Record<string, string | string[]>
+
+  /** Subset of table names to sync (default: all) */
+  tables?: string[]
 }
 
 type BroadcastPayload = {
   deviceId: string
-  table: string
-  records: [string | number, Record<string, unknown>][]
   order: (string | number)[]
+  records: [string | number, Record<string, unknown>][]
+  table: string
   timestamp: number
 }
 
@@ -62,51 +68,60 @@ export function setupMultiDeviceSync(
   const channel = supabase.channel(channelName)
   const timers = new Map<string, ReturnType<typeof setTimeout>>()
   const unsubscribers: (() => void)[] = []
+
   let receiving = false
+
+
   // Track previous snapshots per table for delta computation
   const prevSnapshots = new Map<string, Map<string | number, Record<string, unknown>>>()
 
   // Handle incoming broadcasts
   channel.on("broadcast", { event: "sync" }, (payload: { payload: BroadcastPayload }) => {
     const data = payload.payload
-    if (data.deviceId === deviceId) return // Ignore own broadcasts
+
+    if (data.deviceId === deviceId) {return} // Ignore own broadcasts
 
     const tableName = data.table
     const store = stores[tableName]
-    if (!store) return
-    if (syncTables && !syncTables.has(tableName)) return
+
+    if (!store) {return}
+
+    if (syncTables && !syncTables.has(tableName)) {return}
 
     receiving = true
+
     try {
       store.setState((prev: any) => {
-        const records = new Map(prev.records)
-        const order = [...prev.order] as (string | number)[]
+        const records = new Map(prev.records) as Map<string | number, TrackedRow<any>>
+        const order = Array.from(prev.order) as (string | number)[]
         const orderSet = new Set(order)
-        const idsToRemove: (string | number)[] = []
+        const idsToRemove = new Set<string | number>()
 
         for (const [id, remoteRow] of data.records) {
-          const existing = records.get(id) as TrackedRow<any> | undefined
+          const existing = records.get(id)
 
           // Don't overwrite pending mutations
-          if (existing?._anchor_pending) continue
+          if (existing?._anchor_pending) {continue}
 
           if (existing && options?.conflict) {
             const context: ConflictContext = {
-              table: tableName,
-              primaryKey: buildPkFilter(options?.primaryKeys?.[tableName] ?? "id", id),
               hasPendingMutations: false,
               pendingMutations: [],
+              primaryKey: buildPkFilter(options.primaryKeys?.[tableName] ?? "id", id),
+              table: tableName,
             }
             const resolved = resolveConflict(existing, remoteRow as any, options.conflict, context)
+
             if (resolved === null) {
               records.delete(id)
-              idsToRemove.push(id)
+              idsToRemove.add(id)
               orderSet.delete(id)
             } else {
               records.set(id, resolved as any)
             }
           } else {
             records.set(id, remoteRow as any)
+
             if (!orderSet.has(id)) {
               order.push(id)
               orderSet.add(id)
@@ -114,12 +129,12 @@ export function setupMultiDeviceSync(
           }
         }
 
-        // Batch-filter removed IDs from order (avoids O(n) indexOf per deletion)
-        const finalOrder = idsToRemove.length > 0
-          ? order.filter((id) => !idsToRemove.includes(id))
+        // Batch-filter removed IDs from order (avoids O(n) includes per deletion)
+        const finalOrder = idsToRemove.size > 0
+          ? order.filter((id) => !idsToRemove.has(id))
           : order
 
-        return { ...prev, records, order: finalOrder }
+        return { ...prev, order: finalOrder, records }
       })
     } finally {
       receiving = false
@@ -130,28 +145,31 @@ export function setupMultiDeviceSync(
 
   // Watch for store changes and broadcast only the delta
   for (const [tableName, store] of Object.entries(stores)) {
-    if (syncTables && !syncTables.has(tableName)) continue
+    if (syncTables && !syncTables.has(tableName)) {continue}
 
     // Initialize snapshot
     prevSnapshots.set(tableName, new Map(store.getState().records as Map<string | number, Record<string, unknown>>))
 
     const unsub = store.subscribe(() => {
-      if (receiving) return // Don't broadcast received changes
+      if (receiving) {return} // Don't broadcast received changes
 
       // Debounce per table
       const existing = timers.get(tableName)
-      if (existing) clearTimeout(existing)
+
+      if (existing) {clearTimeout(existing)}
 
       timers.set(
         tableName,
         setTimeout(() => {
           timers.delete(tableName)
+
           const state = store.getState()
           const currentRecords = state.records as Map<string | number, Record<string, unknown>>
           const prev = prevSnapshots.get(tableName) ?? new Map()
 
           // Compute delta: only changed or new records
           const delta: [string | number, Record<string, unknown>][] = []
+
           for (const [id, row] of currentRecords) {
             if (prev.get(id) !== row) {
               delta.push([id, row])
@@ -161,20 +179,22 @@ export function setupMultiDeviceSync(
           // Skip broadcast if nothing changed
           if (delta.length === 0) {
             prevSnapshots.set(tableName, new Map(currentRecords))
+
             return
           }
 
           const payload: BroadcastPayload = {
             deviceId,
-            table: tableName,
-            records: delta,
             order: state.order,
+            records: delta,
+            table: tableName,
             timestamp: Date.now(),
           }
-          channel.send({
-            type: "broadcast",
+
+          void channel.send({
             event: "sync",
             payload,
+            type: "broadcast",
           })
 
           prevSnapshots.set(tableName, new Map(currentRecords))
@@ -186,9 +206,11 @@ export function setupMultiDeviceSync(
   }
 
   return () => {
-    for (const unsub of unsubscribers) unsub()
-    for (const timer of timers.values()) clearTimeout(timer)
+    for (const unsub of unsubscribers) {unsub()}
+
+    for (const timer of timers.values()) {clearTimeout(timer)}
+
     timers.clear()
-    supabase.removeChannel(channel)
+    void supabase.removeChannel(channel)
   }
 }

@@ -1,4 +1,44 @@
-import type { FilterDescriptor, SortDescriptor, FetchOptions, FilterOperator } from "../types.js"
+import type { FetchOptions, FilterDescriptor, FilterOperator,SortDescriptor } from "../types.js"
+
+/**
+ * Column-specific filter chain.
+ */
+class ColumnFilter<Row extends Record<string, unknown>, K extends string & keyof Row> {
+  constructor(
+    private readonly builder: QueryBuilder<Row>,
+    private readonly column: K,
+  ) {}
+
+  private add(op: FilterOperator, value: unknown): QueryBuilder<Row> {
+    return this.builder._addFilter({ column: this.column, op, value })
+  }
+
+  eq(value: Row[K]): QueryBuilder<Row> { return this.add("eq", value) }
+
+  neq(value: Row[K]): QueryBuilder<Row> { return this.add("neq", value) }
+
+  gt(value: Row[K]): QueryBuilder<Row> { return this.add("gt", value) }
+
+  gte(value: Row[K]): QueryBuilder<Row> { return this.add("gte", value) }
+
+  lt(value: Row[K]): QueryBuilder<Row> { return this.add("lt", value) }
+
+  lte(value: Row[K]): QueryBuilder<Row> { return this.add("lte", value) }
+
+  like(pattern: string): QueryBuilder<Row> { return this.add("like", pattern) }
+
+  ilike(pattern: string): QueryBuilder<Row> { return this.add("ilike", pattern) }
+
+  is(value: null | boolean): QueryBuilder<Row> { return this.add("is", value) }
+
+  in(values: Row[K][]): QueryBuilder<Row> { return this.add("in", values) }
+
+  contains(value: unknown): QueryBuilder<Row> { return this.add("contains", value) }
+
+  containedBy(value: unknown): QueryBuilder<Row> { return this.add("containedBy", value) }
+
+  overlaps(value: unknown): QueryBuilder<Row> { return this.add("overlaps", value) }
+}
 
 /**
  * Fluent query builder that produces FetchOptions.
@@ -14,102 +54,110 @@ import type { FilterDescriptor, SortDescriptor, FetchOptions, FilterOperator } f
  * ```
  */
 export class QueryBuilder<Row extends Record<string, unknown> = Record<string, unknown>> {
-  private filters: FilterDescriptor<Row>[] = []
-  private sorts: SortDescriptor<Row>[] = []
-  private _limit?: number
-  private _offset?: number
-  private _select?: string
-  private _count?: "exact" | "planned" | "estimated"
+  private readonly filters: FilterDescriptor<Row>[] = []
+
+  private readonly sorts: SortDescriptor<Row>[] = []
 
   /** Start a filter chain on a column */
-  where<K extends string & keyof Row>(column: K): ColumnFilter<Row, K> {
+where<K extends string & keyof Row>(column: K): ColumnFilter<Row, K> {
     return new ColumnFilter(this, column)
   }
 
-  /** Add a raw filter */
-  filter(descriptor: FilterDescriptor<Row>): this {
+/** Add a raw filter */
+filter(descriptor: FilterDescriptor<Row>): this {
     this.filters.push(descriptor)
+
     return this
   }
 
-  /** Add sort */
-  orderBy(column: string & keyof Row, direction: "asc" | "desc" = "asc"): this {
+/** Add sort */
+orderBy(column: string & keyof Row, direction: "asc" | "desc" = "asc"): this {
     this.sorts.push({
-      column,
       ascending: direction === "asc",
+      column,
     })
+
     return this
   }
 
-  /** Set result limit */
-  limit(n: number): this {
+/** Set result limit */
+limit(n: number): this {
     this._limit = n
+
     return this
   }
 
-  /** Set result offset */
-  offset(n: number): this {
+/** Set result offset */
+offset(n: number): this {
     this._offset = n
+
     return this
   }
 
-  /** Set select columns */
-  select(columns: string): this {
+/** Set select columns */
+select(columns: string): this {
     this._select = columns
+
     return this
   }
 
-  /** Enable count */
-  count(mode: "exact" | "planned" | "estimated" = "exact"): this {
+/** Enable count */
+count(mode: "exact" | "planned" | "estimated" = "exact"): this {
     this._count = mode
+
     return this
   }
 
-  /** Build the final FetchOptions */
-  build(): FetchOptions<Row> {
+/** Build the final FetchOptions */
+build(): FetchOptions<Row> {
     return {
+      count: this._count,
       filters: this.filters.length > 0 ? this.filters : undefined,
-      sort: this.sorts.length > 0 ? this.sorts : undefined,
       limit: this._limit,
       offset: this._offset,
       select: this._select,
-      count: this._count,
+      sort: this.sorts.length > 0 ? this.sorts : undefined,
     }
   }
+
+private _limit?: number
+
+  private _offset?: number
+
+  private _select?: string
+
+  private _count?: "exact" | "planned" | "estimated"
+
+  
+  
+
+  
+  
+
+  
+  
+
+  
+  
+
+  
+  
+
+  
+  
+
+  
+  
+
+  
+  
 
   /** @internal - used by ColumnFilter to add filters */
   _addFilter(filter: FilterDescriptor<Row>): this {
     this.filters.push(filter)
+
     return this
   }
-}
-
-/**
- * Column-specific filter chain.
- */
-class ColumnFilter<Row extends Record<string, unknown>, K extends string & keyof Row> {
-  constructor(
-    private builder: QueryBuilder<Row>,
-    private column: K,
-  ) {}
-
-  private add(op: FilterOperator, value: unknown): QueryBuilder<Row> {
-    return this.builder._addFilter({ column: this.column, op, value })
-  }
-
-  eq(value: Row[K]): QueryBuilder<Row> { return this.add("eq", value) }
-  neq(value: Row[K]): QueryBuilder<Row> { return this.add("neq", value) }
-  gt(value: Row[K]): QueryBuilder<Row> { return this.add("gt", value) }
-  gte(value: Row[K]): QueryBuilder<Row> { return this.add("gte", value) }
-  lt(value: Row[K]): QueryBuilder<Row> { return this.add("lt", value) }
-  lte(value: Row[K]): QueryBuilder<Row> { return this.add("lte", value) }
-  like(pattern: string): QueryBuilder<Row> { return this.add("like", pattern) }
-  ilike(pattern: string): QueryBuilder<Row> { return this.add("ilike", pattern) }
-  is(value: null | boolean): QueryBuilder<Row> { return this.add("is", value) }
-  in(values: Row[K][]): QueryBuilder<Row> { return this.add("in", values) }
-  contains(value: unknown): QueryBuilder<Row> { return this.add("contains", value) }
-  containedBy(value: unknown): QueryBuilder<Row> { return this.add("containedBy", value) }
-  overlaps(value: unknown): QueryBuilder<Row> { return this.add("overlaps", value) }
 }
 
 /**

@@ -1,21 +1,23 @@
-import { describe, it, expect, vi } from "vitest"
-import { updateMany, removeMany } from "./batchOperations.js"
-import { createTableStore } from "../createTableStore.js"
-import { createMockSupabase } from "../__tests__/mockSupabase.js"
+import { describe, expect,it } from "vitest"
 
-type Todo = { id: number; title: string; completed: boolean; updated_at?: string }
+import { createMockSupabase } from "../__tests__/mockSupabase.js"
+import { createTableStore } from "../createTableStore.js"
+import { removeMany,updateMany } from "./batchOperations.js"
+
+type Todo = { completed: boolean; id: number; title: string; updated_at?: string }
 
 describe("updateMany", () => {
   it("updates matching rows optimistically then confirms", async () => {
     const supabase = createMockSupabase({
       todos: [
-        { id: 1, title: "A", completed: false },
-        { id: 2, title: "B", completed: false },
-        { id: 3, title: "C", completed: true },
+        { completed: false, id: 1, title: "A" },
+        { completed: false, id: 2, title: "B" },
+        { completed: true, id: 3, title: "C" },
       ],
     })
 
     const store = createTableStore<any, Todo, any, any>({ supabase, table: "todos" })
+
     await store.getState().fetch()
 
     const result = await updateMany(
@@ -39,13 +41,14 @@ describe("removeMany", () => {
   it("removes matching rows optimistically then confirms", async () => {
     const supabase = createMockSupabase({
       todos: [
-        { id: 1, title: "A", completed: true },
-        { id: 2, title: "B", completed: false },
-        { id: 3, title: "C", completed: true },
+        { completed: true, id: 1, title: "A" },
+        { completed: false, id: 2, title: "B" },
+        { completed: true, id: 3, title: "C" },
       ],
     })
 
     const store = createTableStore<any, Todo, any, any>({ supabase, table: "todos" })
+
     await store.getState().fetch()
 
     expect(store.getState().records.size).toBe(3)
@@ -64,20 +67,24 @@ describe("removeMany", () => {
 
   it("rolls back on error", async () => {
     const supabase = createMockSupabase({
-      todos: [{ id: 1, title: "A", completed: true }],
+      todos: [{ completed: true, id: 1, title: "A" }],
     })
 
     const store = createTableStore<any, Todo, any, any>({ supabase, table: "todos" })
+
     await store.getState().fetch()
 
     // Mock a failing delete
     const origFrom = supabase.from.bind(supabase)
+
     supabase.from = (table: string) => {
       const builder = origFrom(table)
+
       builder.delete = () => ({
         eq: () => ({ then: (r: any) => r({ error: { message: "Permission denied" } }) }),
         then: (r: any) => r({ error: { message: "Permission denied" } }),
       })
+
       return builder
     }
 
@@ -97,10 +104,11 @@ describe("batch operations carry the Postgres error code", () => {
   // there was no way to fail a batch from the read/write path.
 
   it("updateMany surfaces the code, not just the message", async () => {
-    const supabase = createMockSupabase({ todos: [{ id: 1, title: "A", completed: false }] })
+    const supabase = createMockSupabase({ todos: [{ completed: false, id: 1, title: "A" }] })
     const store = createTableStore<any, Todo, any, any>({ supabase, table: "todos" })
+
     await store.getState().fetch()
-    supabase._setError("todos", "update", { message: "new row violates row-level security policy", code: "42501" })
+    supabase._setError("todos", "update", { code: "42501", message: "new row violates row-level security policy" })
 
     await expect(
       updateMany(supabase, "todos", "id", store, [{ column: "completed", op: "eq", value: false }], {
@@ -110,10 +118,11 @@ describe("batch operations carry the Postgres error code", () => {
   })
 
   it("removeMany surfaces the code too", async () => {
-    const supabase = createMockSupabase({ todos: [{ id: 1, title: "A", completed: true }] })
+    const supabase = createMockSupabase({ todos: [{ completed: true, id: 1, title: "A" }] })
     const store = createTableStore<any, Todo, any, any>({ supabase, table: "todos" })
+
     await store.getState().fetch()
-    supabase._setError("todos", "delete", { message: "update or delete violates foreign key constraint", code: "23503" })
+    supabase._setError("todos", "delete", { code: "23503", message: "update or delete violates foreign key constraint" })
 
     await expect(
       removeMany(supabase, "todos", "id", store, [{ column: "completed", op: "eq", value: true }]),
@@ -123,8 +132,9 @@ describe("batch operations carry the Postgres error code", () => {
   it("still succeeds and rolls nothing back when there is no error", async () => {
     // The paired positive: `rejects` assertions alone would also pass against a
     // batch that always throws.
-    const supabase = createMockSupabase({ todos: [{ id: 1, title: "A", completed: false }] })
+    const supabase = createMockSupabase({ todos: [{ completed: false, id: 1, title: "A" }] })
     const store = createTableStore<any, Todo, any, any>({ supabase, table: "todos" })
+
     await store.getState().fetch()
 
     const result = await updateMany(

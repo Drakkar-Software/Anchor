@@ -1,9 +1,9 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useCallback,useEffect, useState } from "react"
+
+import { StorageQuotaManager,type StorageUsage  } from "../persistence/storageQuota.js"
 import type { PersistenceAdapter } from "../types.js"
-import { StorageQuotaManager } from "../persistence/storageQuota.js"
-import type { StorageUsage } from "../persistence/storageQuota.js"
 
 export type UseStorageQuotaResult = StorageUsage & {
   isLoading: boolean
@@ -27,12 +27,13 @@ export function useStorageQuota(
 
   const refresh = useCallback(() => {
     const manager = new StorageQuotaManager()
+
     setIsLoading(true)
     manager
       .getUsage(adapter, prefix)
       .then(setUsage)
       .catch(() => {})
-      .finally(() => setIsLoading(false))
+      .finally(() => { setIsLoading(false); })
   }, [adapter, prefix])
 
   useEffect(() => {
@@ -40,9 +41,11 @@ export function useStorageQuota(
   }, [refresh])
 
   useEffect(() => {
-    if (!refreshInterval) return
+    if (!refreshInterval) {return}
+
     const id = setInterval(refresh, refreshInterval)
-    return () => clearInterval(id)
+
+    return () => { clearInterval(id); }
   }, [refresh, refreshInterval])
 
   return { ...usage, isLoading, refresh }

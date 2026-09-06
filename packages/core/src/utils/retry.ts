@@ -1,12 +1,15 @@
 export type RetryOptions = {
-  /** Maximum number of retry attempts (default: 3) */
-  maxAttempts?: number
   /** Base delay in ms for exponential backoff (default: 1000) */
   baseDelay?: number
-  /** Whether to add random jitter to backoff (default: true) */
-  jitter?: boolean
+
   /** Predicate to decide if the error is retryable (default: all errors) */
   isRetryable?: (error: unknown) => boolean
+
+  /** Whether to add random jitter to backoff (default: true) */
+  jitter?: boolean
+
+  /** Maximum number of retry attempts (default: 3) */
+  maxAttempts?: number
 }
 
 /**
@@ -25,27 +28,32 @@ export async function withRetry<T>(
   options?: RetryOptions,
 ): Promise<T> {
   const {
-    maxAttempts = 3,
     baseDelay = 1000,
-    jitter = true,
     isRetryable = () => true,
+    jitter = true,
+    maxAttempts = 3,
   } = options ?? {}
 
   let lastError: unknown
+
   for (let attempt = 0; attempt <= maxAttempts; attempt++) {
     try {
       return await fn()
-    } catch (err) {
-      lastError = err
-      if (attempt >= maxAttempts || !isRetryable(err)) {
-        throw err
+    } catch (error) {
+      lastError = error
+
+      if (attempt >= maxAttempts || !isRetryable(error)) {
+        throw error
       }
-      const exponential = baseDelay * Math.pow(2, attempt)
+
+      const exponential = baseDelay * 2**attempt
       const delay = jitter
         ? exponential + Math.random() * baseDelay
         : exponential
+
       await new Promise((resolve) => setTimeout(resolve, delay))
     }
   }
+
   throw lastError
 }

@@ -3,8 +3,8 @@ import type { PersistenceAdapter } from "../types.js"
 const SCHEMA_VERSION_KEY = "anchor:__schema_version"
 
 export type SchemaVersionResult = {
-  versionChanged: boolean
   previousVersion: number | null
+  versionChanged: boolean
 }
 
 /**
@@ -19,16 +19,21 @@ export async function checkSchemaVersion(
   const stored = await adapter.getItem<number>(SCHEMA_VERSION_KEY)
 
   if (stored === currentVersion) {
-    return { versionChanged: false, previousVersion: stored }
+    return { previousVersion: stored, versionChanged: false }
   }
 
   // Version mismatch — clear all zs: prefixed keys
   if (adapter.keys && adapter.clear) {
     const allKeys = await adapter.keys("anchor:")
+    const removals: Promise<void>[] = []
+
     for (const key of allKeys) {
-      if (key === SCHEMA_VERSION_KEY) continue
-      await adapter.removeItem(key)
+      if (key === SCHEMA_VERSION_KEY) {continue}
+
+      removals.push(adapter.removeItem(key))
     }
+
+    await Promise.all(removals)
   } else if (adapter.clear) {
     await adapter.clear()
   }
@@ -36,7 +41,7 @@ export async function checkSchemaVersion(
   // Store the new version
   await adapter.setItem(SCHEMA_VERSION_KEY, currentVersion)
 
-  return { versionChanged: true, previousVersion: stored }
+  return { previousVersion: stored, versionChanged: true }
 }
 
 /**
@@ -45,7 +50,7 @@ export async function checkSchemaVersion(
 export async function getSchemaVersion(
   adapter: PersistenceAdapter,
 ): Promise<number | null> {
-  return adapter.getItem<number>(SCHEMA_VERSION_KEY)
+  return await adapter.getItem<number>(SCHEMA_VERSION_KEY)
 }
 
 /**

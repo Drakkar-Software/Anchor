@@ -1,22 +1,45 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 import type { StoreApi } from "zustand"
+
+import { buildCursorQuery, type CursorPaginationOptions, type PaginationState , processCursorResults } from "../query/pagination.js"
 import type {
-  TableStore,
-  FilterDescriptor,
   ConflictConfig,
+  FilterDescriptor,
+  TableStore,
 } from "../types.js"
-import { incrementalSync } from "./incrementalSync.js"
-import type { IncrementalSyncOptions } from "./incrementalSync.js"
-import { buildCursorQuery, processCursorResults } from "../query/pagination.js"
-import type { CursorPaginationOptions, PaginationState } from "../query/pagination.js"
+import { incrementalSync,type IncrementalSyncOptions  } from "./incrementalSync.js"
+
+export type PrioritizedStore = {
+  priority: number
+  store: StoreApi<TableStore<any, any, any>>
+}
 
 export type SelectiveSyncOptions<Row = Record<string, unknown>> =
   IncrementalSyncOptions & {
-    /** Additional filters to narrow the sync scope */
-    filters?: FilterDescriptor<Row>[]
     /** Conflict resolution config */
     conflict?: ConflictConfig<Row>
+
+    /** Additional filters to narrow the sync scope */
+    filters?: FilterDescriptor<Row>[]
   }
+
+/**
+ * Fetch a single page of data using cursor-based pagination.
+ * Wraps buildCursorQuery + processCursorResults for convenience.
+ */
+export async function fetchPage<
+  Row extends Record<string, unknown>,
+  InsertRow extends Record<string, unknown>,
+  UpdateRow extends Record<string, unknown>,
+>(
+  store: StoreApi<TableStore<Row, InsertRow, UpdateRow>>,
+  options: CursorPaginationOptions<Row>,
+): Promise<{ data: Row[]; pagination: PaginationState }> {
+  const { filters, limit, sort } = buildCursorQuery(options)
+  const rows = await store.getState().fetch({ filters, limit, sort })
+
+  return processCursorResults(rows as Row[], options)
+}
 
 /**
  * Incremental sync with additional user-defined filters.
@@ -34,17 +57,12 @@ export async function selectiveSync<
   options?: SelectiveSyncOptions<Row>,
 ): Promise<{ fetchedCount: number; mergedCount: number }> {
   // selectiveSync delegates to incrementalSync with filters applied via queryFn
-  return incrementalSync(supabase, table, primaryKey, store, {
-    timestampColumn: options?.timestampColumn,
-    schema: options?.schema,
+  return await incrementalSync(supabase, table, primaryKey, store, {
     conflict: options?.conflict,
     filters: options?.filters,
+    schema: options?.schema,
+    timestampColumn: options?.timestampColumn,
   })
-}
-
-export type PrioritizedStore = {
-  store: StoreApi<TableStore<any, any, any>>
-  priority: number
 }
 
 /**
@@ -54,25 +72,11 @@ export type PrioritizedStore = {
 export async function syncAllByPriority(
   stores: PrioritizedStore[],
 ): Promise<void> {
-  const sorted = [...stores].sort((a, b) => a.priority - b.priority)
+  const sorted = Array.from(stores).sort((a, b) => a.priority - b.priority)
+
   for (const { store } of sorted) {
+    // Sequential by design — see docstring (avoid saturating the server).
+    // react-doctor-disable-next-line react-doctor/async-await-in-loop
     await store.getState().fetch().catch(() => {})
   }
-}
-
-/**
- * Fetch a single page of data using cursor-based pagination.
- * Wraps buildCursorQuery + processCursorResults for convenience.
- */
-export async function fetchPage<
-  Row extends Record<string, unknown>,
-  InsertRow extends Record<string, unknown>,
-  UpdateRow extends Record<string, unknown>,
->(
-  store: StoreApi<TableStore<Row, InsertRow, UpdateRow>>,
-  options: CursorPaginationOptions<Row>,
-): Promise<{ data: Row[]; pagination: PaginationState }> {
-  const { filters, sort, limit } = buildCursorQuery(options)
-  const rows = await store.getState().fetch({ filters, sort, limit })
-  return processCursorResults(rows as Row[], options)
 }

@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach } from "vitest"
-import { createAuthStore } from "./authStore.js"
+import { beforeEach,describe, expect, it } from "vitest"
+
 import { createMockSupabase } from "../__tests__/mockSupabase.js"
+import { createAuthStore } from "./authStore.js"
 
 describe("createAuthStore", () => {
   let supabase: any
@@ -22,6 +23,7 @@ describe("createAuthStore", () => {
   describe("initialize", () => {
     it("initializes with no session", async () => {
       const store = createAuthStore({ supabase })
+
       await store.getState().initialize()
 
       expect(store.getState().isLoading).toBe(false)
@@ -30,10 +32,12 @@ describe("createAuthStore", () => {
     })
 
     it("initializes with existing session", async () => {
-      const session = { access_token: "token", user: { id: "u1", email: "a@b.com" } }
+      const session = { access_token: "token", user: { email: "a@b.com", id: "u1" } }
+
       supabase._setSession(session)
 
       const store = createAuthStore({ supabase })
+
       await store.getState().initialize()
 
       expect(store.getState().session).toEqual(session)
@@ -45,6 +49,7 @@ describe("createAuthStore", () => {
   describe("signIn", () => {
     it("signs in with email and password", async () => {
       const store = createAuthStore({ supabase })
+
       await store.getState().signIn({ email: "test@test.com", password: "pass" })
 
       expect(store.getState().user).toBeDefined()
@@ -57,6 +62,7 @@ describe("createAuthStore", () => {
   describe("signUp", () => {
     it("signs up with email and password", async () => {
       const store = createAuthStore({ supabase })
+
       await store.getState().signUp({ email: "new@test.com", password: "pass" })
 
       expect(store.getState().user).toBeDefined()
@@ -67,6 +73,7 @@ describe("createAuthStore", () => {
   describe("signOut", () => {
     it("clears session on sign out", async () => {
       const store = createAuthStore({ supabase })
+
       await store.getState().signIn({ email: "test@test.com", password: "pass" })
 
       expect(store.getState().session).not.toBeNull()
@@ -82,16 +89,19 @@ describe("createAuthStore", () => {
   describe("claims", () => {
     it("starts with empty claims", () => {
       const store = createAuthStore({ supabase })
+
       expect(store.getState().claims).toEqual({})
     })
 
     it("parses JWT claims on sign-in", async () => {
       // Create a mock JWT with custom claims
-      const payload = { sub: "user-1", role: "admin", org_id: "org-123" }
+      const payload = { org_id: "org-123", role: "admin", sub: "user-1" }
       const fakeJwt = `header.${btoa(JSON.stringify(payload))}.signature`
-      supabase._setSession({ access_token: fakeJwt, user: { id: "user-1", email: "a@b.com" } })
+
+      supabase._setSession({ access_token: fakeJwt, user: { email: "a@b.com", id: "user-1" } })
 
       const store = createAuthStore({ supabase })
+
       await store.getState().initialize()
 
       expect(store.getState().claims.role).toBe("admin")
@@ -99,11 +109,13 @@ describe("createAuthStore", () => {
     })
 
     it("getClaim returns specific claim value", async () => {
-      const payload = { sub: "user-1", role: "editor" }
+      const payload = { role: "editor", sub: "user-1" }
       const fakeJwt = `header.${btoa(JSON.stringify(payload))}.signature`
-      supabase._setSession({ access_token: fakeJwt, user: { id: "user-1", email: "a@b.com" } })
+
+      supabase._setSession({ access_token: fakeJwt, user: { email: "a@b.com", id: "user-1" } })
 
       const store = createAuthStore({ supabase })
+
       await store.getState().initialize()
 
       expect(store.getState().getClaim("role")).toBe("editor")
@@ -112,6 +124,7 @@ describe("createAuthStore", () => {
 
     it("clears claims on sign-out", async () => {
       const store = createAuthStore({ supabase })
+
       await store.getState().signIn({ email: "a@b.com", password: "x" })
       await store.getState().signOut()
 
@@ -132,6 +145,7 @@ describe("createAuthStore", () => {
 
     it("updates store when auth state changes", async () => {
       const store = createAuthStore({ supabase })
+
       store.getState().onAuthStateChange()
 
       // Sign in triggers auth state change
@@ -149,35 +163,41 @@ describe("getVerifiedClaims", () => {
 
   it("returns the verified claims", async () => {
     const supabase = createMockSupabase()
+
     supabase.auth.getClaims = vi.fn().mockResolvedValue({
-      data: { claims: { sub: "user-1", role: "authenticated" }, headers: {}, signature: new Uint8Array() },
+      data: { claims: { role: "authenticated", sub: "user-1" }, headers: {}, signature: new Uint8Array() },
       error: null,
     })
+
     const store = createAuthStore({ supabase })
 
     const { claims, error } = await store.getState().getVerifiedClaims()
 
     expect(error).toBeNull()
-    expect(claims).toEqual({ sub: "user-1", role: "authenticated" })
+    expect(claims).toEqual({ role: "authenticated", sub: "user-1" })
   })
 
   it("reports a rejected token as an error rather than as empty claims", async () => {
     const supabase = createMockSupabase()
+
     supabase.auth.getClaims = vi.fn().mockResolvedValue({
       data: null,
-      error: { message: "invalid signature", code: "bad_jwt" },
+      error: { code: "bad_jwt", message: "invalid signature" },
     })
+
     const store = createAuthStore({ supabase })
 
     const { claims, error } = await store.getState().getVerifiedClaims()
 
     expect(claims).toBeNull()
-    expect((error as { code?: string })?.code).toBe("bad_jwt")
+    expect((error as { code?: string }).code).toBe("bad_jwt")
   })
 
   it("returns null claims, not an error, when there is no session", async () => {
     const supabase = createMockSupabase()
+
     supabase.auth.getClaims = vi.fn().mockResolvedValue({ data: null, error: null })
+
     const store = createAuthStore({ supabase })
 
     const { claims, error } = await store.getState().getVerifiedClaims()

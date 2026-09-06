@@ -173,6 +173,7 @@
     "dev": "tsup --watch",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint --ext .ts,.tsx,.js,.cjs,.mjs .",
     "test": "vitest run",
     "test:watch": "vitest"
   },

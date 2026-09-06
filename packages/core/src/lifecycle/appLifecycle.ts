@@ -1,28 +1,34 @@
 import type { StoreApi } from "zustand"
-import type {
-  TableStore,
-  AuthStore,
-  AppLifecycleAdapter,
-  NetworkStatusAdapter,
-} from "../types.js"
+
 import { isStale } from "../cache/cacheTtl.js"
+import type {
+  AppLifecycleAdapter,
+  AuthStore,
+  NetworkStatusAdapter,
+  TableStore,
+} from "../types.js"
 
 export type AppLifecycleOptions = {
   adapter: AppLifecycleAdapter
-  stores?: StoreApi<TableStore<any, any, any>>[]
   authStore?: StoreApi<AuthStore>
-  queue?: { flush(): Promise<unknown> }
-  network?: NetworkStatusAdapter
-  /** Refresh auth session on foreground (default: true) */
-  refreshAuthOnForeground?: boolean
+
   /** Flush offline queue on foreground (default: true) */
   flushQueueOnForeground?: boolean
+  network?: NetworkStatusAdapter
+
   /** Unsubscribe realtime on background, resubscribe on foreground (default: false) */
   pauseRealtimeOnBackground?: boolean
+  queue?: { flush: () => Promise<unknown> }
+
+  /** Refresh auth session on foreground (default: true) */
+  refreshAuthOnForeground?: boolean
+
   /** Revalidate stale stores on foreground (default: true) */
   revalidateOnForeground?: boolean
+
   /** Stale threshold in ms (default: 5 minutes) */
   staleTTL?: number
+  stores?: StoreApi<TableStore<any, any, any>>[]
 }
 
 /**
@@ -32,15 +38,15 @@ export type AppLifecycleOptions = {
 export function setupAppLifecycle(options: AppLifecycleOptions): () => void {
   const {
     adapter,
-    stores = [],
     authStore,
-    queue,
-    network,
-    refreshAuthOnForeground = true,
     flushQueueOnForeground = true,
+    network,
     pauseRealtimeOnBackground = false,
+    queue,
+    refreshAuthOnForeground = true,
     revalidateOnForeground = true,
     staleTTL = 5 * 60 * 1000,
+    stores = [],
   } = options
 
   // Track realtime cleanup functions for pause/resume
@@ -54,8 +60,10 @@ export function setupAppLifecycle(options: AppLifecycleOptions): () => void {
     if (pauseRealtimeOnBackground) {
       for (const store of stores) {
         const state = store.getState()
+
         if (state.realtimeStatus === "disconnected") {
           const unsub = state.subscribe()
+
           realtimeCleanups.push(unsub)
         }
       }
@@ -86,6 +94,8 @@ export function setupAppLifecycle(options: AppLifecycleOptions): () => void {
       for (const store of stores) {
         store.getState().unsubscribe()
       }
+
+
       // Clear tracked cleanups since we manually unsubscribed
       realtimeCleanups.length = 0
     }
@@ -94,6 +104,7 @@ export function setupAppLifecycle(options: AppLifecycleOptions): () => void {
   return () => {
     unsubForeground()
     unsubBackground()
-    for (const cleanup of realtimeCleanups) cleanup()
+
+    for (const cleanup of realtimeCleanups) {cleanup()}
   }
 }

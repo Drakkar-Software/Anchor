@@ -1,6 +1,6 @@
 import type { PersistenceAdapter } from "@drakkar.software/anchor/persistence"
 
-type SQLiteModule = {
+interface SQLiteModule {
   openDatabaseSync: (name: string) => any
 }
 
@@ -16,10 +16,10 @@ type SQLiteModule = {
  * new ExpoSqliteAdapter(SQLite, 'anchor-kv')
  */
 export class ExpoSqliteAdapter implements PersistenceAdapter {
-  private db: any // SQLiteDatabase
+  private readonly db: any // SQLiteDatabase
 
-  constructor(SQLite: SQLiteModule, dbName = "anchor") {
-    this.db = SQLite.openDatabaseSync(dbName)
+  constructor(SQLite: SQLiteModule, databaseName = "anchor") {
+    this.db = SQLite.openDatabaseSync(databaseName)
     this.db.execSync(
       "CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)",
     )
@@ -30,11 +30,14 @@ export class ExpoSqliteAdapter implements PersistenceAdapter {
       "SELECT value FROM kv WHERE key = ?",
       [key],
     )
-    if (!row?.value) return null
+
+    if (!row?.value) {return null}
+
     try {
       return JSON.parse(row.value) as T
-    } catch (err) {
-      console.warn(`[anchor:expoSqlite] Failed to parse data for key "${key}":`, err)
+    } catch (error) {
+      console.warn(`[anchor:expoSqlite] Failed to parse data for key "${key}":`, error)
+
       return null
     }
   }
@@ -67,6 +70,7 @@ export class ExpoSqliteAdapter implements PersistenceAdapter {
           `${prefix}%`,
         ])
       : this.db.getAllSync("SELECT key FROM kv")
+
     return rows.map((r: any) => r.key as string)
   }
 

@@ -1,13 +1,15 @@
-export type CircuitBreakerState = "closed" | "open" | "half-open"
-
 export type CircuitBreakerOptions = {
-  /** Number of consecutive failures to trip the circuit (default: 5) */
-  failureThreshold?: number
   /** Time in ms before allowing a probe request when open (default: 30000) */
   cooldownMs?: number
+
+  /** Number of consecutive failures to trip the circuit (default: 5) */
+  failureThreshold?: number
+
   /** Callback when state changes */
   onStateChange?: (state: CircuitBreakerState) => void
 }
+
+export type CircuitBreakerState = "closed" | "open" | "half-open"
 
 /**
  * Circuit breaker that prevents hammering failing endpoints.
@@ -30,11 +32,15 @@ export type CircuitBreakerOptions = {
  */
 export class CircuitBreaker {
   private state: CircuitBreakerState = "closed"
+
   private failureCount = 0
+
   private lastFailureTime = 0
 
   private readonly failureThreshold: number
+
   private readonly cooldownMs: number
+
   private readonly onStateChange?: (state: CircuitBreakerState) => void
 
   constructor(options: CircuitBreakerOptions = {}) {
@@ -43,7 +49,48 @@ export class CircuitBreaker {
     this.onStateChange = options.onStateChange
   }
 
-  /**
+  private onSuccess(): void {
+    this.failureCount = 0
+
+    if (this.state !== "closed") {
+      this.transition("closed")
+    }
+  }
+
+
+private onFailure(): void {
+    this.failureCount++
+    this.lastFailureTime = Date.now()
+
+    if (this.state === "half-open" || this.failureCount >= this.failureThreshold) {
+      this.transition("open")
+    }
+  }
+
+
+private transition(newState: CircuitBreakerState): void {
+    if (this.state !== newState) {
+      this.state = newState
+      this.onStateChange?.(newState)
+    }
+  }
+
+
+/** Reset the circuit breaker to closed state. */
+reset(): void {
+    this.failureCount = 0
+    this.lastFailureTime = 0
+    this.transition("closed")
+  }
+
+
+/** Get current circuit state. */
+getState(): CircuitBreakerState {
+    return this.state
+  }
+
+
+/**
    * Execute a function through the circuit breaker.
    * Throws CircuitOpenError if the circuit is open and cooldown hasn't elapsed.
    */
@@ -60,48 +107,28 @@ export class CircuitBreaker {
 
     try {
       const result = await fn()
+
       this.onSuccess()
+
       return result
-    } catch (err) {
+    } catch (error) {
       this.onFailure()
-      throw err
+
+      throw error
     }
   }
 
-  private onSuccess(): void {
-    this.failureCount = 0
-    if (this.state !== "closed") {
-      this.transition("closed")
-    }
-  }
+  
 
-  private onFailure(): void {
-    this.failureCount++
-    this.lastFailureTime = Date.now()
+  
 
-    if (this.state === "half-open" || this.failureCount >= this.failureThreshold) {
-      this.transition("open")
-    }
-  }
+  
 
-  private transition(newState: CircuitBreakerState): void {
-    if (this.state !== newState) {
-      this.state = newState
-      this.onStateChange?.(newState)
-    }
-  }
+  
+  
 
-  /** Reset the circuit breaker to closed state. */
-  reset(): void {
-    this.failureCount = 0
-    this.lastFailureTime = 0
-    this.transition("closed")
-  }
-
-  /** Get current circuit state. */
-  getState(): CircuitBreakerState {
-    return this.state
-  }
+  
+  
 }
 
 export class CircuitOpenError extends Error {

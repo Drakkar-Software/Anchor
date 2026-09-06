@@ -1,34 +1,47 @@
-import { describe, it, expect, vi } from "vitest"
+import { describe, expect, it, vi } from "vitest"
+
+import { createMockSupabase } from "../__tests__/mockSupabase.js"
+import { createSupabaseStores } from "../createSupabaseStores.js"
+import { createTableStore } from "../createTableStore.js"
 import { bindRealtimeToStore } from "./realtimeBindings.js"
 import { RealtimeManager } from "./realtimeManager.js"
-import { createTableStore } from "../createTableStore.js"
-import { createSupabaseStores } from "../createSupabaseStores.js"
-import { createMockSupabase } from "../__tests__/mockSupabase.js"
 
-type Todo = { id: number; title: string; completed: boolean }
-
-function createTestStore() {
-  const supabase = createMockSupabase({})
-  return createTableStore<any, Todo, any, any>({ supabase, table: "todos" })
-}
+type Todo = { completed: boolean; id: number; title: string; }
 
 function createTestManager() {
   const channels: any[] = []
   const supabase = {
-    channel(name: string) {
+    _channels: channels,
+
+    channel(_name: string) {
       const listeners: any[] = []
       const ch = {
-        on(_e: string, _f: any, cb: any) { listeners.push(cb); return ch },
-        subscribe(cb?: any) { if (cb) cb("SUBSCRIBED"); return ch },
-        _fire: (payload: any) => { for (const l of listeners) l(payload) },
+        _fire: (payload: any) => { for (const l of listeners) {l(payload)} },
+
+        on(_e: string, _f: any, cb: any) { listeners.push(cb);
+
+ return ch },
+
+        subscribe(cb?: any) { if (cb) {cb("SUBSCRIBED");}
+
+ return ch },
       }
+
       channels.push(ch)
+
       return ch
     },
+
     removeChannel: vi.fn(),
-    _channels: channels,
   } as any
+
   return { manager: new RealtimeManager({ supabase }), supabase }
+}
+
+function createTestStore() {
+  const supabase = createMockSupabase({})
+
+  return createTableStore<any, Todo, any, any>({ supabase, table: "todos" })
 }
 
 describe("bindRealtimeToStore", () => {
@@ -36,10 +49,11 @@ describe("bindRealtimeToStore", () => {
     const store = createTestStore()
     const { manager, supabase } = createTestManager()
 
-    bindRealtimeToStore(manager, store, { table: "todos", primaryKey: "id" })
+    bindRealtimeToStore(manager, store, { primaryKey: "id", table: "todos" })
 
     const channel = supabase._channels[0]
-    channel._fire({ eventType: "INSERT", new: { id: 1, title: "New", completed: false }, old: {} })
+
+    channel._fire({ eventType: "INSERT", new: { completed: false, id: 1, title: "New" }, old: {} })
 
     expect(store.getState().records.has(1)).toBe(true)
     expect(store.getState().records.get(1)?.title).toBe("New")
@@ -47,25 +61,31 @@ describe("bindRealtimeToStore", () => {
 
   it("updates existing records on UPDATE events", () => {
     const store = createTestStore()
-    store.getState().setRecord(1, { id: 1, title: "Old", completed: false })
+
+    store.getState().setRecord(1, { completed: false, id: 1, title: "Old" })
 
     const { manager, supabase } = createTestManager()
-    bindRealtimeToStore(manager, store, { table: "todos", primaryKey: "id" })
+
+    bindRealtimeToStore(manager, store, { primaryKey: "id", table: "todos" })
 
     const channel = supabase._channels[0]
-    channel._fire({ eventType: "UPDATE", new: { id: 1, title: "Updated", completed: true }, old: {} })
+
+    channel._fire({ eventType: "UPDATE", new: { completed: true, id: 1, title: "Updated" }, old: {} })
 
     expect(store.getState().records.get(1)?.title).toBe("Updated")
   })
 
   it("removes records on DELETE events", () => {
     const store = createTestStore()
-    store.getState().setRecord(1, { id: 1, title: "A", completed: false })
+
+    store.getState().setRecord(1, { completed: false, id: 1, title: "A" })
 
     const { manager, supabase } = createTestManager()
-    bindRealtimeToStore(manager, store, { table: "todos", primaryKey: "id" })
+
+    bindRealtimeToStore(manager, store, { primaryKey: "id", table: "todos" })
 
     const channel = supabase._channels[0]
+
     channel._fire({ eventType: "DELETE", new: {}, old: { id: 1 } })
 
     expect(store.getState().records.has(1)).toBe(false)
@@ -73,16 +93,19 @@ describe("bindRealtimeToStore", () => {
 
   it("does NOT overwrite pending INSERT on realtime INSERT", () => {
     const store = createTestStore()
+
     store.getState().setRecord(1, {
-      id: 1, title: "Pending", completed: false,
-      _anchor_pending: "insert",
+      _anchor_pending: "insert", completed: false, id: 1,
+      title: "Pending",
     } as any)
 
     const { manager, supabase } = createTestManager()
-    bindRealtimeToStore(manager, store, { table: "todos", primaryKey: "id" })
+
+    bindRealtimeToStore(manager, store, { primaryKey: "id", table: "todos" })
 
     const channel = supabase._channels[0]
-    channel._fire({ eventType: "INSERT", new: { id: 1, title: "Remote", completed: true }, old: {} })
+
+    channel._fire({ eventType: "INSERT", new: { completed: true, id: 1, title: "Remote" }, old: {} })
 
     // Pending record should NOT be overwritten
     expect(store.getState().records.get(1)?.title).toBe("Pending")
@@ -90,31 +113,37 @@ describe("bindRealtimeToStore", () => {
 
   it("does NOT overwrite pending UPDATE on realtime UPDATE", () => {
     const store = createTestStore()
+
     store.getState().setRecord(1, {
-      id: 1, title: "Pending update", completed: false,
-      _anchor_pending: "update",
+      _anchor_pending: "update", completed: false, id: 1,
+      title: "Pending update",
     } as any)
 
     const { manager, supabase } = createTestManager()
-    bindRealtimeToStore(manager, store, { table: "todos", primaryKey: "id" })
+
+    bindRealtimeToStore(manager, store, { primaryKey: "id", table: "todos" })
 
     const channel = supabase._channels[0]
-    channel._fire({ eventType: "UPDATE", new: { id: 1, title: "Remote", completed: true }, old: {} })
+
+    channel._fire({ eventType: "UPDATE", new: { completed: true, id: 1, title: "Remote" }, old: {} })
 
     expect(store.getState().records.get(1)?.title).toBe("Pending update")
   })
 
   it("does NOT delete pending record on realtime DELETE", () => {
     const store = createTestStore()
+
     store.getState().setRecord(1, {
-      id: 1, title: "Pending", completed: false,
-      _anchor_pending: "update",
+      _anchor_pending: "update", completed: false, id: 1,
+      title: "Pending",
     } as any)
 
     const { manager, supabase } = createTestManager()
-    bindRealtimeToStore(manager, store, { table: "todos", primaryKey: "id" })
+
+    bindRealtimeToStore(manager, store, { primaryKey: "id", table: "todos" })
 
     const channel = supabase._channels[0]
+
     channel._fire({ eventType: "DELETE", new: {}, old: { id: 1 } })
 
     // Pending record should NOT be deleted
@@ -125,7 +154,8 @@ describe("bindRealtimeToStore", () => {
     const store = createTestStore()
     const { manager, supabase } = createTestManager()
 
-    const cleanup = bindRealtimeToStore(manager, store, { table: "todos", primaryKey: "id" })
+    const cleanup = bindRealtimeToStore(manager, store, { primaryKey: "id", table: "todos" })
+
     expect(typeof cleanup).toBe("function")
 
     cleanup()
@@ -143,15 +173,16 @@ describe("store.subscribe() is no longer a no-op", () => {
   it("opens a channel and applies an INSERT to the store", () => {
     const supabase = createMockSupabase({ todos: [] })
     const stores = createSupabaseStores<any>({
-      supabase,
-      tables: ["todos"],
       auth: false,
       fetchRemoteOnBoot: false,
+      supabase,
+      tables: ["todos"],
     })
 
     stores.todos.getState().subscribe()
 
     const channel = supabase.getChannels()[0]
+
     expect(channel).toBeDefined()
     channel._fireEvent("postgres_changes", { eventType: "INSERT", new: { id: 1, title: "live" } })
 
@@ -161,13 +192,14 @@ describe("store.subscribe() is no longer a no-op", () => {
   it("stops applying events after unsubscribe()", () => {
     const supabase = createMockSupabase({ todos: [] })
     const stores = createSupabaseStores<any>({
-      supabase,
-      tables: ["todos"],
       auth: false,
       fetchRemoteOnBoot: false,
+      supabase,
+      tables: ["todos"],
     })
 
     stores.todos.getState().subscribe()
+
     const channel = supabase.getChannels()[0]
 
     stores.todos.getState().unsubscribe()
@@ -179,11 +211,12 @@ describe("store.subscribe() is no longer a no-op", () => {
   it("returns a cleanup that also stops it", () => {
     const supabase = createMockSupabase({ todos: [] })
     const stores = createSupabaseStores<any>({
-      supabase, tables: ["todos"], auth: false, fetchRemoteOnBoot: false,
+      auth: false, fetchRemoteOnBoot: false, supabase, tables: ["todos"],
     })
 
     const cleanup = stores.todos.getState().subscribe()
     const channel = supabase.getChannels()[0]
+
     cleanup()
 
     channel._fireEvent("postgres_changes", { eventType: "INSERT", new: { id: 1 } })
@@ -193,7 +226,7 @@ describe("store.subscribe() is no longer a no-op", () => {
   it("replaces the previous subscription rather than orphaning a channel", () => {
     const supabase = createMockSupabase({ todos: [] })
     const stores = createSupabaseStores<any>({
-      supabase, tables: ["todos"], auth: false, fetchRemoteOnBoot: false,
+      auth: false, fetchRemoteOnBoot: false, supabase, tables: ["todos"],
     })
 
     stores.todos.getState().subscribe()
@@ -209,6 +242,6 @@ describe("store.subscribe() is no longer a no-op", () => {
 
     // A caller who asked for realtime and silently got none has no way to find
     // out, which is the bug this replaces.
-    expect(() => store.getState().subscribe()).toThrow(/createSupabaseStores/)
+    expect(() => store.getState().subscribe()).toThrow(/createSupabaseStores/v)
   })
 })

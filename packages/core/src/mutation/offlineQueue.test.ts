@@ -1,22 +1,23 @@
-import { describe, it, expect, beforeEach, vi } from "vitest"
-import { OfflineQueue } from "./offlineQueue.js"
-import type { QueuedMutation } from "../types.js"
-import { MemoryAdapter } from "../persistence/persistenceAdapter.js"
+import { describe, expect, it, vi } from "vitest"
+
 import { ManualNetworkStatus } from "../network/onlineManager.js"
+import { MemoryAdapter } from "../persistence/persistenceAdapter.js"
+import type { QueuedMutation } from "../types.js"
+import { OfflineQueue } from "./offlineQueue.js"
 
 function createMutation(
   overrides: Partial<QueuedMutation> = {},
 ): QueuedMutation {
   return {
+    createdAt: Date.now(),
     id: crypto.randomUUID(),
-    table: "todos",
     operation: "INSERT",
     payload: { title: "Test" },
     primaryKey: { id: 1 },
-    createdAt: Date.now(),
-    status: "pending",
     retryCount: 0,
     rollbackSnapshot: null,
+    status: "pending",
+    table: "todos",
     ...overrides,
   }
 }
@@ -42,6 +43,7 @@ describe("OfflineQueue", () => {
       const persisted = await adapter.getItem<QueuedMutation[]>(
         "anchor:__mutation_queue",
       )
+
       expect(persisted).toHaveLength(1)
     })
   })
@@ -70,7 +72,9 @@ describe("OfflineQueue", () => {
       queue.compact()
 
       expect(queue.pendingCount).toBe(1)
+
       const pending = queue.pendingMutations
+
       expect(pending[0]!.operation).toBe("INSERT")
       expect(pending[0]!.payload).toEqual({ id: 1, title: "Updated" })
     })
@@ -89,8 +93,8 @@ describe("OfflineQueue", () => {
         createMutation({
           id: "m2",
           operation: "DELETE",
-          primaryKey: { id: 1 },
           payload: null,
+          primaryKey: { id: 1 },
         }),
       )
 
@@ -123,8 +127,8 @@ describe("OfflineQueue", () => {
 
       expect(queue.pendingCount).toBe(1)
       expect(queue.pendingMutations[0]!.payload).toEqual({
-        title: "First",
         completed: true,
+        title: "First",
       })
     })
 
@@ -144,8 +148,8 @@ describe("OfflineQueue", () => {
         createMutation({
           id: "m2",
           operation: "DELETE",
-          primaryKey: { id: 1 },
           payload: null,
+          primaryKey: { id: 1 },
         }),
       )
 
@@ -153,6 +157,7 @@ describe("OfflineQueue", () => {
 
       expect(queue.pendingCount).toBe(1)
       expect(queue.pendingMutations[0]!.operation).toBe("DELETE")
+
       // Should keep the original rollback snapshot
       expect(queue.pendingMutations[0]!.rollbackSnapshot).toEqual({
         id: 1,
@@ -191,6 +196,7 @@ describe("OfflineQueue", () => {
       // in. Two people on one device is the whole reason mutations are tagged.
       const queue = new OfflineQueue()
       const executor = vi.fn().mockResolvedValue({})
+
       queue.registerExecutor("todos", executor)
 
       queue.setUserId("user-A")
@@ -230,6 +236,7 @@ describe("OfflineQueue", () => {
       queue.registerExecutor("todos", executor)
 
       await queue.enqueue(createMutation())
+
       const result = await queue.flush()
 
       expect(executor).toHaveBeenCalledTimes(1)
@@ -275,9 +282,11 @@ describe("OfflineQueue", () => {
 
     it("does not flush when already flushing", async () => {
       const queue = new OfflineQueue()
+
       let resolveExecutor: () => void
+
       const executor = vi.fn().mockImplementation(
-        () => new Promise<{}>((resolve) => {
+        async () => await new Promise<{}>((resolve) => {
           resolveExecutor = () => resolve({})
         }),
       )
@@ -287,10 +296,12 @@ describe("OfflineQueue", () => {
 
       // Start first flush
       const flush1 = queue.flush()
+
       // Try second flush immediately
       const flush2 = queue.flush()
 
       const result2 = await flush2
+
       expect(result2.complete).toBe(false) // Skipped because already flushing
 
       resolveExecutor!()
@@ -309,19 +320,25 @@ describe("OfflineQueue", () => {
       // produces neither, so the write waited for a relaunch. Same stranding
       // 2.2.2 fixed at boot, one layer along.
       const queue = new OfflineQueue({ flushDebounceMs: 1 })
+
       let release!: () => void
+
       const gate = new Promise<void>((r) => { release = r })
       const executor = vi.fn(async (m: QueuedMutation) => {
-        if (m.id === "m1") await gate
+        if (m.id === "m1") {await gate}
+
         return {}
       })
+
       queue.registerExecutor("todos", executor as never)
 
       await queue.enqueue(createMutation({ id: "m1", primaryKey: { id: 1 } }))
+
       // Let the debounced flush start and park on the gate.
       await new Promise((r) => setTimeout(r, 20))
 
       await queue.enqueue(createMutation({ id: "m2", primaryKey: { id: 2 } }))
+
       // Its own debounced flush fires here and finds one already running.
       await new Promise((r) => setTimeout(r, 20))
 
@@ -339,10 +356,12 @@ describe("OfflineQueue", () => {
 
     it("does not flush when offline", async () => {
       const network = new ManualNetworkStatus()
+
       network.setOnline(false)
 
       const queue = new OfflineQueue({ network })
       const executor = vi.fn().mockResolvedValue({})
+
       queue.registerExecutor("todos", executor)
 
       await queue.enqueue(createMutation())
@@ -357,6 +376,7 @@ describe("OfflineQueue", () => {
   describe("hydrate", () => {
     it("loads queue from persistence", async () => {
       const adapter = new MemoryAdapter()
+
       await adapter.setItem("anchor:__mutation_queue", [
         createMutation({ id: "persisted-1", status: "pending" }),
         createMutation({ id: "persisted-2", status: "failed" }),
@@ -364,6 +384,7 @@ describe("OfflineQueue", () => {
       ])
 
       const queue = new OfflineQueue({ adapter })
+
       await queue.hydrate()
 
       expect(queue.pendingCount).toBe(2)
@@ -374,6 +395,7 @@ describe("OfflineQueue", () => {
     it("clears all mutations and persisted state", async () => {
       const adapter = new MemoryAdapter()
       const queue = new OfflineQueue({ adapter })
+
       await queue.enqueue(createMutation({ id: "m1" }))
       await queue.enqueue(createMutation({ id: "m2" }))
 
@@ -382,8 +404,11 @@ describe("OfflineQueue", () => {
       await queue.clearQueue()
 
       expect(queue.pendingCount).toBe(0)
+
+
       // Verify persistence was also cleared
       const persisted = await adapter.getItem<any[]>("anchor:__mutation_queue")
+
       expect(persisted).toEqual([])
     })
   })
@@ -391,11 +416,15 @@ describe("OfflineQueue", () => {
   describe("user isolation", () => {
     it("tags enqueued mutations with current userId", async () => {
       const queue = new OfflineQueue()
+
       queue.setUserId("user-A")
+
       const executor = vi.fn().mockResolvedValue({})
+
       queue.registerExecutor("todos", executor)
 
       const mutation = createMutation({ id: "m1" })
+
       await queue.enqueue(mutation)
 
       expect(mutation.userId).toBe("user-A")
@@ -404,6 +433,7 @@ describe("OfflineQueue", () => {
     it("skips mutations from a different user on flush", async () => {
       const queue = new OfflineQueue()
       const executor = vi.fn().mockResolvedValue({})
+
       queue.registerExecutor("todos", executor)
 
       // Enqueue as user-A
@@ -412,11 +442,13 @@ describe("OfflineQueue", () => {
 
       // Switch to user-B
       queue.setUserId("user-B")
+
       const result = await queue.flush()
 
       // user-A's mutation should be skipped
       expect(executor).not.toHaveBeenCalled()
       expect(result.succeeded).toHaveLength(0)
+
       // mutation still pending
       expect(queue.pendingCount).toBe(1)
     })
@@ -424,6 +456,7 @@ describe("OfflineQueue", () => {
     it("flushes untagged mutations regardless of current user", async () => {
       const queue = new OfflineQueue()
       const executor = vi.fn().mockResolvedValue({})
+
       queue.registerExecutor("todos", executor)
 
       // Enqueue without userId
@@ -431,6 +464,7 @@ describe("OfflineQueue", () => {
 
       // Set user context
       queue.setUserId("user-A")
+
       const result = await queue.flush()
 
       // Untagged mutation should flush for any user
@@ -450,12 +484,14 @@ describe("OfflineQueue", () => {
       // the queue also declines to run it.
       const queue = new OfflineQueue()
       const executor = vi.fn().mockResolvedValue({})
+
       queue.registerExecutor("todos", executor)
 
       queue.setUserId("user-A")
       await queue.enqueue(createMutation({ id: "m1" }))
 
       queue.setUserId(undefined)
+
       const result = await queue.flush()
 
       expect(executor).not.toHaveBeenCalled()
@@ -467,6 +503,7 @@ describe("OfflineQueue", () => {
       // The other half: holding it forever would be its own kind of data loss.
       const queue = new OfflineQueue()
       const executor = vi.fn().mockResolvedValue({})
+
       queue.registerExecutor("todos", executor)
 
       queue.setUserId("user-A")
@@ -475,6 +512,7 @@ describe("OfflineQueue", () => {
       await queue.flush()
 
       queue.setUserId("user-A")
+
       const result = await queue.flush()
 
       expect(executor).toHaveBeenCalledTimes(1)
@@ -486,10 +524,12 @@ describe("OfflineQueue", () => {
   describe("auto-flush on reconnect", () => {
     it("schedules flush when coming online", async () => {
       const network = new ManualNetworkStatus()
+
       network.setOnline(false)
 
-      const queue = new OfflineQueue({ network, flushDebounceMs: 10 })
+      const queue = new OfflineQueue({ flushDebounceMs: 10, network })
       const executor = vi.fn().mockResolvedValue({})
+
       queue.registerExecutor("todos", executor)
 
       await queue.enqueue(createMutation())

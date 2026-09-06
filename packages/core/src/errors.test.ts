@@ -1,4 +1,8 @@
-import { describe, it, expect } from "vitest"
+import { describe, expect,it } from "vitest"
+
+import { createMockSupabase } from "./__tests__/mockSupabase.js"
+import { isRlsError } from "./auth/authGate.js"
+import { createTableStore } from "./createTableStore.js"
 import {
   AnchorError,
   fromSupabaseError,
@@ -6,14 +10,12 @@ import {
   PG_INSUFFICIENT_PRIVILEGE,
   PG_UNIQUE_VIOLATION,
 } from "./errors.js"
-import { isRlsError } from "./auth/authGate.js"
-import { createMockSupabase } from "./__tests__/mockSupabase.js"
 import { executeQueryOne } from "./query/queryExecutor.js"
-import { createTableStore } from "./createTableStore.js"
 
 describe("AnchorError", () => {
   it("is an Error, so every existing catch and instanceof keeps working", () => {
     const e = new AnchorError("nope", { code: PG_UNIQUE_VIOLATION })
+
     expect(e).toBeInstanceOf(Error)
     expect(e.message).toBe("nope")
     expect(e.name).toBe("AnchorError")
@@ -26,6 +28,7 @@ describe("AnchorError", () => {
       hint: "check the policy",
       status: 403,
     })
+
     expect(e.code).toBe("42501")
     expect(e.details).toBe("row-level security")
     expect(e.hint).toBe("check the policy")
@@ -36,20 +39,23 @@ describe("AnchorError", () => {
 describe("fromSupabaseError", () => {
   it("keeps the structured fields a bare Error would have dropped", () => {
     const e = fromSupabaseError({
-      message: "duplicate key value violates unique constraint",
       code: "23505",
       details: "Key (email)=(a@b.c) already exists.",
       hint: null,
+      message: "duplicate key value violates unique constraint",
     })
+
     expect(e.message).toBe("duplicate key value violates unique constraint")
     expect(e.code).toBe("23505")
     expect(e.details).toBe("Key (email)=(a@b.c) already exists.")
+
     // `hint: null` is not a string, so it stays undefined rather than "null".
     expect(e.hint).toBeUndefined()
   })
 
   it("passes an AnchorError through, so a double wrap does not nest", () => {
     const original = new AnchorError("denied", { code: "42501" })
+
     expect(fromSupabaseError(original)).toBe(original)
   })
 
@@ -64,6 +70,7 @@ describe("isRlsError", () => {
   it("reads the code rather than the message text", () => {
     // No RLS wording anywhere in the message — only the code says so.
     const e = new AnchorError("request failed", { code: PG_INSUFFICIENT_PRIVILEGE })
+
     expect(isRlsError(e)).toBe(true)
   })
 
@@ -87,6 +94,7 @@ describe("isRlsError", () => {
 describe("the mutation boundary preserves the code", () => {
   function failingSupabase(error: Record<string, unknown>) {
     const result = { then: (resolve: (v: unknown) => void) => resolve({ data: null, error }) }
+
     return {
       from() {
         return { insert: () => ({ select: () => ({ single: () => result }) }) }
@@ -97,11 +105,12 @@ describe("the mutation boundary preserves the code", () => {
   it("surfaces 42501 on the thrown error and in store state", async () => {
     const store = createTableStore<any, { title: string }, any, any>({
       supabase: failingSupabase({
-        message: "new row violates row-level security policy for table \"todos\"",
         code: "42501",
         details: null,
         hint: null,
+        message: "new row violates row-level security policy for table \"todos\"",
       }) as never,
+
       table: "todos",
     })
 
@@ -109,22 +118,24 @@ describe("the mutation boundary preserves the code", () => {
       .getState()
       .insert({ title: "refused" })
       .then(() => null)
-      .catch((e: unknown) => e)
+      .catch((error: unknown) => error)
 
     expect(thrown).toBeInstanceOf(AnchorError)
     expect((thrown as AnchorError).code).toBe(PG_INSUFFICIENT_PRIVILEGE)
     expect(isRlsError(thrown as Error)).toBe(true)
 
     const stateError = store.getState().error
+
     expect((stateError as AnchorError | null)?.code).toBe(PG_INSUFFICIENT_PRIVILEGE)
   })
 
   it("distinguishes a unique violation from an RLS refusal", async () => {
     const store = createTableStore<any, { title: string }, any, any>({
       supabase: failingSupabase({
-        message: "duplicate key value violates unique constraint \"todos_title_key\"",
         code: "23505",
+        message: "duplicate key value violates unique constraint \"todos_title_key\"",
       }) as never,
+
       table: "todos",
     })
 
@@ -132,7 +143,7 @@ describe("the mutation boundary preserves the code", () => {
       .getState()
       .insert({ title: "dup" })
       .then(() => null)
-      .catch((e: unknown) => e)
+      .catch((error: unknown) => error)
 
     expect((thrown as AnchorError).code).toBe(PG_UNIQUE_VIOLATION)
     expect(isRlsError(thrown as Error)).toBe(false)
@@ -142,10 +153,12 @@ describe("the mutation boundary preserves the code", () => {
 describe("the query boundary preserves the code", () => {
   it("hands PGRST116 through from a missing row", async () => {
     const supabase = createMockSupabase({ todos: [{ id: 1, title: "a" }] })
+
     // `.maybeSingle()` resolves `{data: null, error: null}` for a miss, so drive
     // the failing branch through the mock's `.single()` path instead.
     const { error } = await supabase.from("todos").select("*").eq("id", 999).single()
     const wrapped = fromSupabaseError(error)
+
     expect(wrapped.code).toBe("PGRST116")
   })
 
@@ -157,6 +170,7 @@ describe("the query boundary preserves the code", () => {
       "id",
       999,
     )
+
     expect(data).toBeNull()
     expect(error).toBeNull()
   })
@@ -169,10 +183,10 @@ describe("the query boundary preserves the code", () => {
  */
 describe("telling a dead network from a refusal", () => {
   const transport = {
-    message: "TypeError: Network request failed",
+    code: "",
     details: "",
     hint: "",
-    code: "",
+    message: "TypeError: Network request failed",
   }
 
   it("recognises the shape postgrest-js gives a request that never arrived", () => {
@@ -180,7 +194,7 @@ describe("telling a dead network from a refusal", () => {
   })
 
   it("does not mistake a policy refusal for one", () => {
-    expect(isTransportError({ message: "denied", code: "42501" }, 403)).toBe(false)
+    expect(isTransportError({ code: "42501", message: "denied" }, 403)).toBe(false)
   })
 
   it("does not mistake a server error with no code for one", () => {
@@ -201,10 +215,10 @@ describe("an empty code is no code", () => {
   it("reads postgrest's `code: \"\"` as absent", () => {
     // A consumer branching on `err.code` must see a fetch failure the same way
     // it sees a thrown TypeError: without one.
-    expect(fromSupabaseError({ message: "boom", code: "" }).code).toBeUndefined()
+    expect(fromSupabaseError({ code: "", message: "boom" }).code).toBeUndefined()
   })
 
   it("still keeps a real code", () => {
-    expect(fromSupabaseError({ message: "denied", code: "42501" }).code).toBe("42501")
+    expect(fromSupabaseError({ code: "42501", message: "denied" }).code).toBe("42501")
   })
 })

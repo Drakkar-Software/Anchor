@@ -6,10 +6,11 @@ export type { PersistenceAdapter }
  * In-memory persistence adapter for testing.
  */
 export class MemoryAdapter implements PersistenceAdapter {
-  private store = new Map<string, unknown>()
+  private readonly store = new Map<string, unknown>()
 
   async getItem<T>(key: string): Promise<T | null> {
     const value = this.store.get(key)
+
     return (value as T) ?? null
   }
 
@@ -28,8 +29,10 @@ export class MemoryAdapter implements PersistenceAdapter {
   }
 
   async keys(prefix?: string): Promise<string[]> {
-    const allKeys = [...this.store.keys()]
-    if (!prefix) return allKeys
+    const allKeys = Array.from(this.store.keys())
+
+    if (!prefix) {return allKeys}
+
     return allKeys.filter((k) => k.startsWith(prefix))
   }
 

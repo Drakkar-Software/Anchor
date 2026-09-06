@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest"
-import { queryKey, isKeyable, EMPTY_QUERY_KEY } from "./queryKey.js"
+import { describe, expect,it } from "vitest"
+
+import { EMPTY_QUERY_KEY,isKeyable, queryKey } from "./queryKey.js"
 
 describe("queryKey", () => {
   it("gives one key to no options and to empty options", () => {
@@ -11,6 +12,7 @@ describe("queryKey", () => {
   it("separates two different filter sets", () => {
     const a = queryKey({ filters: [{ column: "done", op: "eq", value: true }] })
     const b = queryKey({ filters: [{ column: "done", op: "eq", value: false }] })
+
     expect(a).not.toBe(b)
     expect(a).not.toBe(EMPTY_QUERY_KEY)
   })
@@ -28,17 +30,21 @@ describe("queryKey", () => {
         { column: "done", op: "eq", value: true },
       ],
     })
+
     expect(a).toBe(b)
   })
 
   it("ignores the key order INSIDE a descriptor", () => {
     const a = queryKey({ filters: [{ column: "done", op: "eq", value: true }] })
-    const b = queryKey({ filters: [{ value: true, op: "eq", column: "done" } as never] })
+    const b = queryKey({ filters: [{ column: "done", op: "eq", value: true } as never] })
+
     expect(a).toBe(b)
   })
 
   it("is value-based, so a fresh object every render is the same key", () => {
     const build = () => queryKey({ filters: [{ column: "journey_id", op: "eq", value: "j1" }] })
+
+
     // The failure this prevents is not a wrong result: with an identity-based
     // key and the key as an effect dependency, it is an infinite fetch loop.
     expect(build()).toBe(build())
@@ -47,22 +53,23 @@ describe("queryKey", () => {
   it("respects the ORDER of sorts, because they are positional", () => {
     const a = queryKey({
       sort: [
-        { column: "date", ascending: true },
-        { column: "id", ascending: true },
+        { ascending: true, column: "date" },
+        { ascending: true, column: "id" },
       ],
     })
     const b = queryKey({
       sort: [
-        { column: "id", ascending: true },
-        { column: "date", ascending: true },
+        { ascending: true, column: "id" },
+        { ascending: true, column: "date" },
       ],
     })
+
     expect(a).not.toBe(b)
   })
 
   it("separates ascending from descending, and nullsFirst from not", () => {
-    expect(queryKey({ sort: [{ column: "d", ascending: true }] })).not.toBe(
-      queryKey({ sort: [{ column: "d", ascending: false }] }),
+    expect(queryKey({ sort: [{ ascending: true, column: "d" }] })).not.toBe(
+      queryKey({ sort: [{ ascending: false, column: "d" }] }),
     )
     expect(queryKey({ sort: [{ column: "d", nullsFirst: true }] })).not.toBe(
       queryKey({ sort: [{ column: "d" }] }),
@@ -77,7 +84,9 @@ describe("queryKey", () => {
 
   it("EXCLUDES count and cacheStrategy — same rows, different bookkeeping", () => {
     const base = { filters: [{ column: "done", op: "eq" as const, value: true }] }
+
     expect(queryKey({ ...base, count: "exact" })).toBe(queryKey(base))
+
     // `clearAndFetch` forces cacheStrategy: "replace", so a fork here would
     // split one logical query into two entries and two requests in practice.
     expect(queryKey({ ...base, cacheStrategy: "replace" })).toBe(
@@ -99,15 +108,18 @@ describe("queryKey", () => {
     expect(queryKey({ filters: [{ column: "at", op: "is", value: null }] })).not.toBe(
       queryKey({ filters: [{ column: "at", op: "is", value: "null" }] }),
     )
+
     const d = new Date("2026-08-12T00:00:00.000Z")
+
     expect(queryKey({ filters: [{ column: "at", op: "gte", value: d }] })).toBe(
       queryKey({ filters: [{ column: "at", op: "gte", value: new Date(d) }] }),
     )
+
     // Object values (textSearch's config) are order-insensitive too.
     expect(
       queryKey({ filters: [{ column: "t", op: "textSearch", value: { query: "a", type: "plain" } }] }),
     ).toBe(
-      queryKey({ filters: [{ column: "t", op: "textSearch", value: { type: "plain", query: "a" } }] }),
+      queryKey({ filters: [{ column: "t", op: "textSearch", value: { query: "a", type: "plain" } }] }),
     )
   })
 })

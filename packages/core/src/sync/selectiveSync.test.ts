@@ -1,28 +1,32 @@
-import { describe, it, expect, vi } from "vitest"
-import { syncAllByPriority } from "./selectiveSync.js"
-import type { PrioritizedStore } from "./selectiveSync.js"
+import { describe, expect, it, vi } from "vitest"
+
+import { type PrioritizedStore , syncAllByPriority } from "./selectiveSync.js"
 
 function createMockStore(name: string, fetchOrder: string[]) {
   const fetch = vi.fn().mockImplementation(async () => {
     fetchOrder.push(name)
+
     return []
   })
+
   return {
+    getInitialState: vi.fn(),
+
     getState: () => ({
-      records: new Map(),
-      order: [],
-      isLoading: false,
       error: null,
+      fetch,
       isHydrated: true,
+      isLoading: false,
       isRestoring: false,
       lastFetchedAt: null,
+      order: [],
       realtimeStatus: "disconnected" as const,
-      fetch,
+      records: new Map(),
       refetch: fetch,
     }),
+
     setState: vi.fn(),
     subscribe: vi.fn(() => () => {}),
-    getInitialState: vi.fn(),
   } as any
 }
 
@@ -34,9 +38,9 @@ describe("syncAllByPriority", () => {
     const storeC = createMockStore("c", fetchOrder)
 
     const stores: PrioritizedStore[] = [
-      { store: storeC, priority: 3 },
-      { store: storeA, priority: 1 },
-      { store: storeB, priority: 2 },
+      { priority: 3, store: storeC },
+      { priority: 1, store: storeA },
+      { priority: 2, store: storeB },
     ]
 
     await syncAllByPriority(stores)
@@ -50,8 +54,8 @@ describe("syncAllByPriority", () => {
     const storeB = createMockStore("b", fetchOrder)
 
     const stores: PrioritizedStore[] = [
-      { store: storeA, priority: 1 },
-      { store: storeB, priority: 1 },
+      { priority: 1, store: storeA },
+      { priority: 1, store: storeB },
     ]
 
     await syncAllByPriority(stores)
@@ -67,11 +71,12 @@ describe("syncAllByPriority", () => {
     storeA.getState().fetch.mockRejectedValueOnce(new Error("fail"))
 
     const stores: PrioritizedStore[] = [
-      { store: storeA, priority: 1 },
-      { store: storeB, priority: 2 },
+      { priority: 1, store: storeA },
+      { priority: 2, store: storeB },
     ]
 
     await syncAllByPriority(stores)
+
     // storeB should still be fetched even though storeA failed
     expect(fetchOrder).toContain("b")
   })
@@ -83,11 +88,12 @@ describe("syncAllByPriority", () => {
   it("does not mutate the input array", async () => {
     const fetchOrder: string[] = []
     const stores: PrioritizedStore[] = [
-      { store: createMockStore("c", fetchOrder), priority: 3 },
-      { store: createMockStore("a", fetchOrder), priority: 1 },
+      { priority: 3, store: createMockStore("c", fetchOrder) },
+      { priority: 1, store: createMockStore("a", fetchOrder) },
     ]
 
-    const original = [...stores]
+    const original = Array.from(stores)
+
     await syncAllByPriority(stores)
 
     expect(stores[0]!.priority).toBe(original[0]!.priority)

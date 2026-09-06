@@ -22,7 +22,42 @@
  */
 
 import type { Session, SupabaseClient, User } from "@supabase/supabase-js"
-import { AnchorError, fromSupabaseError } from "../errors.js"
+
+import { type AnchorError, fromSupabaseError } from "../errors.js";
+
+/** Which unconfirmed flow to send again, by the identifier it arrives on. */
+export type ResendOtpParams =
+  | {
+      email: string
+      options?: { captchaToken?: string; emailRedirectTo?: string; }
+      type: "signup" | "email_change"
+    }
+  | {
+      options?: { captchaToken?: string }
+      phone: string
+      type: "sms" | "phone_change"
+    }
+
+/** Options a sign-up can carry — all optional, all supabase-js's own. */
+export interface SignUpOptions {
+  captchaToken?: string
+
+  /** Written to `auth.users.raw_user_meta_data`, and readable from the JWT. */
+  data?: Record<string, unknown>
+
+  /** Where the confirmation link should land. Must be allow-listed in the project. */
+  emailRedirectTo?: string
+}
+
+/** What `updateUser` may change. Every field is optional and independent. */
+export interface UpdateUserAttributes {
+  /** Merged into `raw_user_meta_data`; keys absent here are left alone. */
+  data?: Record<string, unknown>
+  email?: string
+  nonce?: string
+  password?: string
+  phone?: string
+}
 
 /**
  * The session as supabase-js currently holds it.
@@ -33,10 +68,12 @@ import { AnchorError, fromSupabaseError } from "../errors.js"
  */
 export async function getSession(
   supabase: SupabaseClient,
-): Promise<{ session: Session | null; error: AnchorError | null }> {
+): Promise<{ error: AnchorError | null; session: Session | null; }> {
   const { data, error } = await supabase.auth.getSession()
-  if (error) return { session: null, error: fromSupabaseError(error) }
-  return { session: data?.session ?? null, error: null }
+
+  if (error) {return { error: fromSupabaseError(error), session: null }}
+
+  return { error: null, session: data.session ?? null }
 }
 
 /**
@@ -48,101 +85,13 @@ export async function getSession(
  */
 export async function getUser(
   supabase: SupabaseClient,
-): Promise<{ user: User | null; error: AnchorError | null }> {
+): Promise<{ error: AnchorError | null; user: User | null; }> {
   const { data, error } = await supabase.auth.getUser()
-  if (error) return { user: null, error: fromSupabaseError(error) }
-  return { user: data?.user ?? null, error: null }
-}
 
-/** Options a sign-up can carry — all optional, all supabase-js's own. */
-export interface SignUpOptions {
-  /** Where the confirmation link should land. Must be allow-listed in the project. */
-  emailRedirectTo?: string
-  /** Written to `auth.users.raw_user_meta_data`, and readable from the JWT. */
-  data?: Record<string, unknown>
-  captchaToken?: string
-}
+  if (error) {return { error: fromSupabaseError(error), user: null }}
 
-/**
- * Create an account with an email and a password.
- *
- * `session` is null when the project requires email confirmation — which is not
- * an error, and is the case worth branching on: the account exists and the code
- * is in the inbox. Verify it with `verifyOtp`.
- */
-export async function signUpWithPassword(
-  supabase: SupabaseClient,
-  credentials: { email: string; password: string; options?: SignUpOptions },
-): Promise<{ session: Session | null; user: User | null; error: AnchorError | null }> {
-  const { data, error } = await supabase.auth.signUp({
-    email: credentials.email,
-    password: credentials.password,
-    options: credentials.options,
-  })
-  // Error first: on failure `data` still carries a `{session: null, user: null}`
-  // pair, and reading it first reports a refusal as a confirmation-pending
-  // sign-up — the one state that legitimately has no session.
-  if (error) return { session: null, user: null, error: fromSupabaseError(error) }
-  return { session: data?.session ?? null, user: data?.user ?? null, error: null }
+  return { error: null, user: data.user ?? null }
 }
-
-/**
- * Sign in with an email and a password, without touching the auth store.
- *
- * This is the re-authentication step in front of a destructive account change
- * ("confirm your current password"), which is why it exists beside the store's
- * own `signIn` rather than inside it. supabase-js still writes the returned
- * session to its storage, so the caller is confirming the password of the user
- * who is already signed in, not switching accounts.
- */
-export async function signInWithPassword(
-  supabase: SupabaseClient,
-  credentials: { email: string; password: string },
-): Promise<{ session: Session | null; user: User | null; error: AnchorError | null }> {
-  const { data, error } = await supabase.auth.signInWithPassword(credentials)
-  if (error) return { session: null, user: null, error: fromSupabaseError(error) }
-  return { session: data?.session ?? null, user: data?.user ?? null, error: null }
-}
-
-/** What `updateUser` may change. Every field is optional and independent. */
-export interface UpdateUserAttributes {
-  email?: string
-  password?: string
-  phone?: string
-  /** Merged into `raw_user_meta_data`; keys absent here are left alone. */
-  data?: Record<string, unknown>
-  nonce?: string
-}
-
-/**
- * Change the signed-in user's password, email, phone or metadata.
- *
- * The password path is the one with a trap: it requires a live session, so it
- * works both after an ordinary sign-in and after a recovery OTP has been
- * verified — those are the same state as far as this call is concerned, which
- * is exactly why a recovery flow ends here rather than at a special endpoint.
- */
-export async function updateUser(
-  supabase: SupabaseClient,
-  attributes: UpdateUserAttributes,
-): Promise<{ user: User | null; error: AnchorError | null }> {
-  const { data, error } = await supabase.auth.updateUser(attributes)
-  if (error) return { user: null, error: fromSupabaseError(error) }
-  return { user: data?.user ?? null, error: null }
-}
-
-/** Which unconfirmed flow to send again, by the identifier it arrives on. */
-export type ResendOtpParams =
-  | {
-      type: "signup" | "email_change"
-      email: string
-      options?: { emailRedirectTo?: string; captchaToken?: string }
-    }
-  | {
-      type: "sms" | "phone_change"
-      phone: string
-      options?: { captchaToken?: string }
-    }
 
 /**
  * Send an unconfirmed sign-up or change-of-address code again.
@@ -158,5 +107,71 @@ export async function resendOtp(
   params: ResendOtpParams,
 ): Promise<{ error: AnchorError | null }> {
   const { error } = await supabase.auth.resend(params as never)
+
   return { error: error ? fromSupabaseError(error) : null }
+}
+
+/**
+ * Sign in with an email and a password, without touching the auth store.
+ *
+ * This is the re-authentication step in front of a destructive account change
+ * ("confirm your current password"), which is why it exists beside the store's
+ * own `signIn` rather than inside it. supabase-js still writes the returned
+ * session to its storage, so the caller is confirming the password of the user
+ * who is already signed in, not switching accounts.
+ */
+export async function signInWithPassword(
+  supabase: SupabaseClient,
+  credentials: { email: string; password: string },
+): Promise<{ error: AnchorError | null; session: Session | null; user: User | null; }> {
+  const { data, error } = await supabase.auth.signInWithPassword(credentials)
+
+  if (error) {return { error: fromSupabaseError(error), session: null, user: null }}
+
+  return { error: null, session: data.session ?? null, user: data.user ?? null }
+}
+
+/**
+ * Create an account with an email and a password.
+ *
+ * `session` is null when the project requires email confirmation — which is not
+ * an error, and is the case worth branching on: the account exists and the code
+ * is in the inbox. Verify it with `verifyOtp`.
+ */
+export async function signUpWithPassword(
+  supabase: SupabaseClient,
+  credentials: { email: string; options?: SignUpOptions; password: string; },
+): Promise<{ error: AnchorError | null; session: Session | null; user: User | null; }> {
+  const { data, error } = await supabase.auth.signUp({
+    email: credentials.email,
+    options: credentials.options,
+    password: credentials.password,
+  })
+
+
+  // Error first: on failure `data` still carries a `{session: null, user: null}`
+  // pair, and reading it first reports a refusal as a confirmation-pending
+  // sign-up — the one state that legitimately has no session.
+  if (error) {return { error: fromSupabaseError(error), session: null, user: null }}
+
+  return { error: null, session: data.session ?? null, user: data.user ?? null }
+}
+
+/**
+ * Change the signed-in user's password, email, phone or metadata.
+ *
+ * The password path is the one with a trap: it requires a live session, so it
+ * works both after an ordinary sign-in and after a recovery OTP has been
+ * verified — those are the same state as far as this call is concerned, which
+ * is exactly why a recovery flow ends here rather than at a special endpoint.
+ */
+export async function updateUser(
+  supabase: SupabaseClient,
+  attributes: UpdateUserAttributes,
+): Promise<{ error: AnchorError | null; user: User | null; }> {
+  const { data, error } = await supabase.auth.updateUser(attributes)
+
+  if (error) {return { error: fromSupabaseError(error), user: null }}
+
+  return { error: null, user: data.user ?? null }
 }

@@ -1,111 +1,112 @@
 // ─── Core Types ──────────────────────────────────────────────────────
 export type {
+  // Lifecycle & Background
+  AppLifecycleAdapter,
+  AuthActions,
+  // Auth
+  AuthState,
+  AuthStore,
+  BackgroundTaskAdapter,
+  // Cache
+  CacheStrategy,
+  ConflictConfig,
+  ConflictContext,
+  ConflictResolver,
+  // Conflict
+  ConflictStrategy,
+  CreateSupabaseStoresOptions,
+  // Factory options
+  CreateTableStoreOptions,
+  DatabaseEnum,
   // Schema extraction
   ExtractSchema,
-  TableNames,
-  TableRow,
-  TableInsert,
-  TableUpdate,
-  ViewNames,
-  ViewRow,
-  FunctionNames,
-  RpcArgs,
-  RpcReturns,
-  DatabaseEnum,
-  // Record tracking
-  RecordMeta,
-  TrackedRow,
+  FetchOptions,
+  FilterDescriptor,
   // Filter & Query
   FilterOperator,
-  FilterDescriptor,
-  SortDescriptor,
-  FetchOptions,
-  UpsertOptions,
-  // Store
-  TableStoreState,
-  QueryEntry,
-  TableStoreActions,
-  TableStore,
-  RealtimeStatus,
-  RealtimeEvent,
+  FunctionNames,
+  // Hydration
+  HydrationPhase,
   // Mutation queue
   MutationId,
   MutationOperation,
   MutationStatus,
-  QueuedMutation,
+  NetworkStatusAdapter,
   // Persistence
   PersistenceAdapter,
-  NetworkStatusAdapter,
-  // Cache
-  CacheStrategy,
-  // Conflict
-  ConflictStrategy,
-  ConflictResolver,
-  ConflictContext,
-  ConflictConfig,
-  // Auth
-  AuthState,
-  AuthActions,
-  AuthStore,
-  // Hydration
-  HydrationPhase,
+  PrimaryKeyValue,
+  QueryEntry,
+  QueuedMutation,
+  RealtimeEvent,
+  RealtimeStatus,
+  // Record tracking
+  RecordMeta,
+  RpcArgs,
+  RpcReturns,
+  SortDescriptor,
+  SupabaseStores,
   // Logger
   SyncLogger,
-  // Lifecycle & Background
-  AppLifecycleAdapter,
-  BackgroundTaskAdapter,
-  // Factory options
-  CreateTableStoreOptions,
-  CreateSupabaseStoresOptions,
-  SupabaseStores,
+  TableInsert,
+  TableNames,
+  TableRow,
+  TableStore,
+  TableStoreActions,
+  // Store
+  TableStoreState,
+  TableUpdate,
+  TrackedRow,
+  UpsertOptions,
+  ViewNames,
+  ViewRow,
 } from "./types.js"
 
 // ─── Runtime Exports ─────────────────────────────────────────────────
 export {
-  TEMP_ID_PREFIX,
-  createTempId,
-  isTempId,
-  isPending,
-  getPendingStatus,
-  noopLogger,
   consoleLogger,
+  createTempId,
+  getPendingStatus,
+  isPending,
+  isTempId,
+  noopLogger,
+  TEMP_ID_PREFIX,
 } from "./types.js"
 
 // ─── Client ──────────────────────────────────────────────────────────
-export { createAnchorClient } from "./client/createClient.js"
 export type {
   AnchorClient,
-  SupabaseClient,
-  SupabaseClientOptions,
-  Session,
-  User,
   AuthChangeEvent,
   AuthError,
   PostgrestError,
+  Session,
+  SupabaseClient,
+  SupabaseClientOptions,
+  User,
 } from "./client/createClient.js"
+export { createAnchorClient } from "./client/createClient.js"
 
 // ─── Store Factories ─────────────────────────────────────────────────
-export { createTableStore } from "./createTableStore.js"
 export { createSupabaseStores } from "./createSupabaseStores.js"
+export { createTableStore } from "./createTableStore.js"
 
 // ─── Query ───────────────────────────────────────────────────────────
+export type { AggregateFunction, AggregateResult } from "./query/aggregation.js"
+export { aggregateLocal,aggregateRpc } from "./query/aggregation.js"
 export {
-  eq, neq, gt, gte, lt, lte,
-  like, ilike, is, inValues,
-  contains, containedBy, overlaps, textSearch,
-  match, asc, desc,
+asc, containedBy,   contains, desc,
+  eq, gt, gte, ilike, inValues,
+is,   like, lt, lte,
+  match, neq, overlaps, textSearch,
 } from "./query/filters.js"
+export { matchRow } from "./query/matchRow.js"
+export type { CursorPaginationOptions, PaginationState } from "./query/pagination.js"
+export { buildCursorQuery, processCursorResults } from "./query/pagination.js"
+export { query,QueryBuilder } from "./query/queryBuilder.js"
 export {
   applyFilters, applySort,
   executeQuery, executeQueryOne, fromTable,
 } from "./query/queryExecutor.js"
-export { QueryBuilder, query } from "./query/queryBuilder.js"
-export { buildCursorQuery, processCursorResults } from "./query/pagination.js"
-export type { CursorPaginationOptions, PaginationState } from "./query/pagination.js"
-export { aggregateRpc, aggregateLocal } from "./query/aggregation.js"
-export type { AggregateFunction, AggregateResult } from "./query/aggregation.js"
-export { queryKey, isKeyable, EMPTY_QUERY_KEY } from "./query/queryKey.js"
-export { matchRow } from "./query/matchRow.js"
+export { EMPTY_QUERY_KEY,isKeyable, queryKey } from "./query/queryKey.js"
 export { selectAllRows, selectQueryRows, sortRows } from "./query/selectRows.js"
 
 // ─── Errors ──────────────────────────────────────────────────────────
@@ -113,166 +114,166 @@ export {
   AnchorError,
   fromSupabaseError,
   isTransportError,
+  PG_FOREIGN_KEY_VIOLATION,
   PG_INSUFFICIENT_PRIVILEGE,
   PG_UNIQUE_VIOLATION,
-  PG_FOREIGN_KEY_VIOLATION,
   PGRST_NO_ROWS,
 } from "./errors.js"
 
 // ─── Mutation ────────────────────────────────────────────────────────
-export { OfflineQueue } from "./mutation/offlineQueue.js"
-export type { FlushResult, MutationExecutor } from "./mutation/offlineQueue.js"
-export { executeRemoteMutation, createMutationExecutor } from "./mutation/mutationPipeline.js"
-export { remoteWins, localWins, lastWriteWins, fieldLevelMerge, resolveConflict } from "./mutation/conflictResolution.js"
-export { ValidationError, zodValidator, runValidation } from "./mutation/validation.js"
-export type { Validator, ValidationConfig } from "./mutation/validation.js"
-export { updateMany, removeMany } from "./mutation/batchOperations.js"
-export { ConflictAuditLog } from "./mutation/conflictAudit.js"
+export { removeMany,updateMany } from "./mutation/batchOperations.js"
 export type { ConflictAuditEntry } from "./mutation/conflictAudit.js"
+export { ConflictAuditLog } from "./mutation/conflictAudit.js"
+export { fieldLevelMerge, lastWriteWins, localWins, remoteWins, resolveConflict } from "./mutation/conflictResolution.js"
+export { createMutationExecutor,executeRemoteMutation } from "./mutation/mutationPipeline.js"
+export type { FlushResult, MutationExecutor } from "./mutation/offlineQueue.js"
+export { OfflineQueue } from "./mutation/offlineQueue.js"
+export type { ValidationConfig,Validator } from "./mutation/validation.js"
+export { runValidation,ValidationError, zodValidator } from "./mutation/validation.js"
 
 // ─── Realtime ────────────────────────────────────────────────────────
-export { RealtimeManager } from "./realtime/realtimeManager.js"
 export { bindRealtimeToStore } from "./realtime/realtimeBindings.js"
+export { RealtimeManager } from "./realtime/realtimeManager.js"
 
 // ─── Auth ────────────────────────────────────────────────────────────
-export { createAuthStore } from "./auth/authStore.js"
-export { setupAuthGate, isRlsError } from "./auth/authGate.js"
-export {
-  parseAuthCallbackUrl,
-  hasAuthCallbackParams,
-  createSessionFromUrl,
-  getWebAuthRedirectTo,
-  sendPasswordRecovery,
-  verifyRecoveryOTP,
-  verifyOtp,
-  resolveAuthRedirect,
-} from "./auth/authCallbacks.js"
 export type {
-  AuthCallbackType,
-  ParsedAuthCallback,
-  AuthCallbackResult,
-  AuthCallbackRoutes,
-  VerifyOtpParams,
-} from "./auth/authCallbacks.js"
+  ResendOtpParams,
+  SignUpOptions,
+  UpdateUserAttributes,
+} from "./auth/authActions.js"
 export {
   getSession,
   getUser,
-  signUpWithPassword,
-  signInWithPassword,
-  updateUser,
   resendOtp,
+  signInWithPassword,
+  signUpWithPassword,
+  updateUser,
 } from "./auth/authActions.js"
 export type {
-  SignUpOptions,
-  UpdateUserAttributes,
-  ResendOtpParams,
-} from "./auth/authActions.js"
+  AuthCallbackResult,
+  AuthCallbackRoutes,
+  AuthCallbackType,
+  ParsedAuthCallback,
+  VerifyOtpParams,
+} from "./auth/authCallbacks.js"
+export {
+  createSessionFromUrl,
+  getWebAuthRedirectTo,
+  hasAuthCallbackParams,
+  parseAuthCallbackUrl,
+  resolveAuthRedirect,
+  sendPasswordRecovery,
+  verifyOtp,
+  verifyRecoveryOTP,
+} from "./auth/authCallbacks.js"
+export { isRlsError,setupAuthGate } from "./auth/authGate.js"
+export { createAuthStore } from "./auth/authStore.js"
 
 // ─── Persistence ─────────────────────────────────────────────────────
-export { MemoryAdapter } from "./persistence/persistenceAdapter.js"
-export { EncryptedAdapter, createWebCryptoEncryption } from "./persistence/encryptedAdapter.js"
 export type { EncryptionFunctions } from "./persistence/encryptedAdapter.js"
-export { StorageQuotaManager } from "./persistence/storageQuota.js"
-export type { StorageUsage, EvictionOptions } from "./persistence/storageQuota.js"
-export { checkSchemaVersion, getSchemaVersion, setSchemaVersion } from "./persistence/schemaVersion.js"
+export { createWebCryptoEncryption,EncryptedAdapter } from "./persistence/encryptedAdapter.js"
+export { MemoryAdapter } from "./persistence/persistenceAdapter.js"
 export type { SchemaVersionResult } from "./persistence/schemaVersion.js"
+export { checkSchemaVersion, getSchemaVersion, setSchemaVersion } from "./persistence/schemaVersion.js"
+export type { EvictionOptions,StorageUsage } from "./persistence/storageQuota.js"
+export { StorageQuotaManager } from "./persistence/storageQuota.js"
 
 // ─── Network ─────────────────────────────────────────────────────────
 export { ManualNetworkStatus } from "./network/onlineManager.js"
 
 // ─── Views ───────────────────────────────────────────────────────────
+export type { CreateViewStoreOptions,ViewStore } from "./createViewStore.js"
 export { createViewStore } from "./createViewStore.js"
-export type { ViewStore, CreateViewStoreOptions } from "./createViewStore.js"
 
 // ─── RPC ─────────────────────────────────────────────────────────────
+export type { RpcCacheOptions,RpcCallOptions, RpcResult } from "./rpc/rpcAction.js"
 export { callRpc, createRpcAction, createSchemaRpc, invalidateRpcCache } from "./rpc/rpcAction.js"
-export type { RpcResult, RpcCallOptions, RpcCacheOptions } from "./rpc/rpcAction.js"
 
 // ─── Edge Functions ──────────────────────────────────────────────────
-export { invokeEdgeFunction, createEdgeFunctionAction } from "./functions/edgeFunctions.js"
 export type { EdgeFunctionResult, InvokeOptions } from "./functions/edgeFunctions.js"
+export { createEdgeFunctionAction,invokeEdgeFunction } from "./functions/edgeFunctions.js"
 
 // ─── Storage ─────────────────────────────────────────────────────────
+export type { ListOptions, SignedUrlOptions,StorageResult, UploadOptions } from "./storage/storageActions.js"
 export {
-  uploadFile, downloadFile, getPublicUrl,
-  createSignedUrl, listFiles, removeFiles,
-  createStorageActions,
-} from "./storage/storageActions.js"
-export type { StorageResult, UploadOptions, ListOptions, SignedUrlOptions } from "./storage/storageActions.js"
+  createSignedUrl,   createStorageActions,
+downloadFile, getPublicUrl,
+listFiles, removeFiles,
+  uploadFile, } from "./storage/storageActions.js"
 
 // ─── Cross-Tab Sync ──────────────────────────────────────────────────
-export { setupCrossTabSync, setupBroadcastSync, setupStorageFallback } from "./sync/crossTabSync.js"
+export { setupBroadcastSync, setupCrossTabSync, setupStorageFallback } from "./sync/crossTabSync.js"
 
 // ─── Incremental Sync ────────────────────────────────────────────────
 export { incrementalSync } from "./sync/incrementalSync.js"
 
 // ─── Selective Sync ─────────────────────────────────────────────────
-export { selectiveSync, syncAllByPriority, fetchPage } from "./sync/selectiveSync.js"
-export type { SelectiveSyncOptions, PrioritizedStore } from "./sync/selectiveSync.js"
+export type { PrioritizedStore,SelectiveSyncOptions } from "./sync/selectiveSync.js"
+export { fetchPage,selectiveSync, syncAllByPriority } from "./sync/selectiveSync.js"
 
 // ─── Multi-Device Sync ──────────────────────────────────────────────
-export { setupMultiDeviceSync } from "./sync/multiDeviceSync.js"
 export type { MultiDeviceSyncOptions } from "./sync/multiDeviceSync.js"
+export { setupMultiDeviceSync } from "./sync/multiDeviceSync.js"
 
 // ─── Background Sync ────────────────────────────────────────────────
-export { setupBackgroundSync, isBackgroundSyncRegistered } from "./sync/backgroundSync.js"
 export type { BackgroundSyncOptions } from "./sync/backgroundSync.js"
+export { isBackgroundSyncRegistered,setupBackgroundSync } from "./sync/backgroundSync.js"
 
 // ─── App Lifecycle ──────────────────────────────────────────────────
-export { setupAppLifecycle } from "./lifecycle/appLifecycle.js"
 export type { AppLifecycleOptions } from "./lifecycle/appLifecycle.js"
+export { setupAppLifecycle } from "./lifecycle/appLifecycle.js"
 
 // ─── Sync Metrics ───────────────────────────────────────────────────
-export { SyncMetrics } from "./sync/syncMetrics.js"
 export type { MetricsSnapshot } from "./sync/syncMetrics.js"
+export { SyncMetrics } from "./sync/syncMetrics.js"
 
 // ─── Cache ───────────────────────────────────────────────────────────
-export { isStale, isExpired, fetchWithSwr, setupAutoRevalidation } from "./cache/cacheTtl.js"
 export type { CacheConfig } from "./cache/cacheTtl.js"
+export { fetchWithSwr, isExpired, isStale, setupAutoRevalidation } from "./cache/cacheTtl.js"
 
 // ─── Composite Keys ─────────────────────────────────────────────────
-export { encodeKey, buildPkFilter, applyPkFilters, normalizePk } from "./utils/compositeKey.js"
+export { applyPkFilters, buildPkFilter, encodeKey, normalizePk } from "./utils/compositeKey.js"
 
 // ─── Retry ──────────────────────────────────────────────────────────
-export { withRetry } from "./utils/retry.js"
 export type { RetryOptions } from "./utils/retry.js"
+export { withRetry } from "./utils/retry.js"
 
 // ─── Circuit Breaker ────────────────────────────────────────────────
+export type { CircuitBreakerOptions,CircuitBreakerState } from "./utils/circuitBreaker.js"
 export { CircuitBreaker, CircuitOpenError } from "./utils/circuitBreaker.js"
-export type { CircuitBreakerState, CircuitBreakerOptions } from "./utils/circuitBreaker.js"
 
 // ─── Rate Limiter ───────────────────────────────────────────────────
-export { RateLimiter } from "./utils/rateLimiter.js"
 export type { RateLimiterOptions } from "./utils/rateLimiter.js"
+export { RateLimiter } from "./utils/rateLimiter.js"
 
 // ─── Hooks ───────────────────────────────────────────────────────────
-export { createTableHook, useRecords, useRecord } from "./hooks/useTableStore.js"
-export { useQuery } from "./hooks/useQuery.js"
-export { useMutation } from "./hooks/useMutation.js"
+export { useAppLifecycle } from "./hooks/useAppLifecycle.js"
 export { useAuth } from "./hooks/useAuth.js"
+export type { UseAuthCallbackOptions, UseAuthCallbackResult } from "./hooks/useAuthCallback.js"
+export { useAuthCallback } from "./hooks/useAuthCallback.js"
+export { useConflictNotifications } from "./hooks/useConflictNotifications.js"
+export { useEdgeFunction } from "./hooks/useEdgeFunction.js"
+export type { UseInfiniteQueryOptions, UseInfiniteQueryResult } from "./hooks/useInfiniteQuery.js"
+export { useInfiniteQuery } from "./hooks/useInfiniteQuery.js"
+export type { UseLinkedQueryResult } from "./hooks/useLinkedQuery.js"
+export { useLinkedQuery } from "./hooks/useLinkedQuery.js"
+export { useMutation } from "./hooks/useMutation.js"
+export type { PendingChange } from "./hooks/usePendingChanges.js"
+export { usePendingChanges } from "./hooks/usePendingChanges.js"
+export { useQuery } from "./hooks/useQuery.js"
+export type { QueueStatusResult } from "./hooks/useQueueStatus.js"
+export { useQueueStatus } from "./hooks/useQueueStatus.js"
 export { useRealtime } from "./hooks/useRealtime.js"
 export { useRpc } from "./hooks/useRpc.js"
-export { useEdgeFunction } from "./hooks/useEdgeFunction.js"
 export { useStorage } from "./hooks/useStorage.js"
-export { useSuspenseQuery } from "./hooks/useSuspenseQuery.js"
-export { useAppLifecycle } from "./hooks/useAppLifecycle.js"
-export { useSyncMetrics } from "./hooks/useSyncMetrics.js"
-export { useConflictNotifications } from "./hooks/useConflictNotifications.js"
-export { useSyncStatus, computeSyncStatus } from "./hooks/useSyncStatus.js"
-export type { SyncStatus, SyncStatusResult } from "./hooks/useSyncStatus.js"
-export { useQueueStatus } from "./hooks/useQueueStatus.js"
-export type { QueueStatusResult } from "./hooks/useQueueStatus.js"
-export { usePendingChanges } from "./hooks/usePendingChanges.js"
-export type { PendingChange } from "./hooks/usePendingChanges.js"
-export { useStorageQuota } from "./hooks/useStorageQuota.js"
 export type { UseStorageQuotaResult } from "./hooks/useStorageQuota.js"
-export { useLinkedQuery } from "./hooks/useLinkedQuery.js"
-export type { UseLinkedQueryResult } from "./hooks/useLinkedQuery.js"
-export { useInfiniteQuery } from "./hooks/useInfiniteQuery.js"
-export type { UseInfiniteQueryOptions, UseInfiniteQueryResult } from "./hooks/useInfiniteQuery.js"
-export { useAuthCallback } from "./hooks/useAuthCallback.js"
-export type { UseAuthCallbackOptions, UseAuthCallbackResult } from "./hooks/useAuthCallback.js"
+export { useStorageQuota } from "./hooks/useStorageQuota.js"
+export { useSuspenseQuery } from "./hooks/useSuspenseQuery.js"
+export { useSyncMetrics } from "./hooks/useSyncMetrics.js"
+export type { SyncStatus, SyncStatusResult } from "./hooks/useSyncStatus.js"
+export { computeSyncStatus,useSyncStatus } from "./hooks/useSyncStatus.js"
+export { createTableHook, useRecord,useRecords } from "./hooks/useTableStore.js"
 
 // ─── Server ──────────────────────────────────────────────────────────
-export { prefetch, serializePrefetchResult, deserializePrefetchResult } from "./server/prefetch.js"
 export type { PrefetchResult } from "./server/prefetch.js"
+export { deserializePrefetchResult,prefetch, serializePrefetchResult } from "./server/prefetch.js"

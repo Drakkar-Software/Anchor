@@ -1,16 +1,32 @@
 /**
- * Encode a composite primary key into a single string for Map storage.
- * For single keys, returns the value as-is. For composite, uses JSON to
- * preserve types and avoid separator ambiguity.
+ * Apply primary key equality filters to a Supabase builder.
  */
-export function encodeKey(
-  row: Record<string, unknown>,
+export function applyPkFilters(
+  builder: any,
   primaryKey: string | string[],
-): string | number {
+  id: string | number,
+): any {
   if (typeof primaryKey === "string") {
-    return row[primaryKey] as string | number
+    return builder.eq(primaryKey, id)
   }
-  return JSON.stringify(primaryKey.map((k) => row[k]))
+
+  let values: unknown[]
+
+  try {
+    values = JSON.parse(String(id)) as unknown[]
+  } catch {
+    throw new Error(
+      `Failed to decode composite primary key from "${String(id)}". Expected JSON-encoded array for key [${primaryKey.join(", ")}].`,
+    )
+  }
+
+  let q = builder
+
+  for (const [i, element] of primaryKey.entries()) {
+    q = q.eq(element, values[i])
+  }
+
+  return q
 }
 
 /**
@@ -23,8 +39,11 @@ export function buildPkFilter(
   if (typeof primaryKey === "string") {
     return { [primaryKey]: id }
   }
+
+
   // Decode JSON-encoded composite key
   let values: unknown[]
+
   try {
     values = JSON.parse(String(id)) as unknown[]
   } catch {
@@ -32,37 +51,30 @@ export function buildPkFilter(
       `Failed to decode composite primary key from "${String(id)}". Expected JSON-encoded array for key [${primaryKey.join(", ")}].`,
     )
   }
+
   const filter: Record<string, unknown> = {}
-  for (let i = 0; i < primaryKey.length; i++) {
-    filter[primaryKey[i]!] = values[i]
+
+  for (const [i, element] of primaryKey.entries()) {
+    filter[element] = values[i]
   }
+
   return filter
 }
 
 /**
- * Apply primary key equality filters to a Supabase builder.
+ * Encode a composite primary key into a single string for Map storage.
+ * For single keys, returns the value as-is. For composite, uses JSON to
+ * preserve types and avoid separator ambiguity.
  */
-export function applyPkFilters(
-  builder: any,
+export function encodeKey(
+  row: Record<string, unknown>,
   primaryKey: string | string[],
-  id: string | number,
-): any {
+): string | number {
   if (typeof primaryKey === "string") {
-    return builder.eq(primaryKey, id)
+    return row[primaryKey] as string | number
   }
-  let values: unknown[]
-  try {
-    values = JSON.parse(String(id)) as unknown[]
-  } catch {
-    throw new Error(
-      `Failed to decode composite primary key from "${String(id)}". Expected JSON-encoded array for key [${primaryKey.join(", ")}].`,
-    )
-  }
-  let q = builder
-  for (let i = 0; i < primaryKey.length; i++) {
-    q = q.eq(primaryKey[i], values[i])
-  }
-  return q
+
+  return JSON.stringify(primaryKey.map((k) => row[k]))
 }
 
 /**

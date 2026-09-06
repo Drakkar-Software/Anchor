@@ -1,7 +1,8 @@
-import { describe, it, expect } from "vitest"
+import { describe, expect,it } from "vitest"
+
+import { createMockSupabase } from "./__tests__/mockSupabase.js"
 import { createTableStore } from "./createTableStore.js"
 import { createMutationExecutor } from "./mutation/mutationPipeline.js"
-import { createMockSupabase } from "./__tests__/mockSupabase.js"
 import { encodeKey } from "./utils/compositeKey.js"
 
 /**
@@ -11,39 +12,43 @@ import { encodeKey } from "./utils/compositeKey.js"
  * outright — see the deleted throw at the top of `createTableStore.ts`.
  */
 type Link = {
-  stay_id: string
-  service_id: string
   note?: string
+  service_id: string
+  stay_id: string
 }
 
 describe("createTableStore — composite primary keys", () => {
   function seedSupabase() {
     return createMockSupabase({
       stay_services: [
-        { stay_id: "s1", service_id: "svc1", note: "breakfast" },
-        { stay_id: "s1", service_id: "svc2", note: "spa" },
-        { stay_id: "s2", service_id: "svc1", note: "breakfast" },
+        { note: "breakfast", service_id: "svc1", stay_id: "s1" },
+        { note: "spa", service_id: "svc2", stay_id: "s1" },
+        { note: "breakfast", service_id: "svc1", stay_id: "s2" },
       ],
     })
   }
 
   function createStore(supabase: any) {
     return createTableStore<any, Link, Link, Partial<Link>>({
+      primaryKey: ["stay_id", "service_id"],
       supabase,
       table: "stay_services",
-      primaryKey: ["stay_id", "service_id"],
     })
   }
 
   it("keys records by the JSON-encoded composite key on fetch", async () => {
     const supabase = seedSupabase()
     const store = createStore(supabase)
+
     await store.getState().fetch()
 
     const state = store.getState()
+
     expect(state.records.size).toBe(3)
-    const key = encodeKey({ stay_id: "s1", service_id: "svc1" }, ["stay_id", "service_id"])
-    expect(state.records.get(key)).toMatchObject({ stay_id: "s1", service_id: "svc1", note: "breakfast" })
+
+    const key = encodeKey({ service_id: "svc1", stay_id: "s1" }, ["stay_id", "service_id"])
+
+    expect(state.records.get(key)).toMatchObject({ note: "breakfast", service_id: "svc1", stay_id: "s1" })
     expect(state.order).toContain(key)
   })
 
@@ -53,7 +58,7 @@ describe("createTableStore — composite primary keys", () => {
 
     await expect(
       store.getState().insert({ stay_id: "s3" } as Link),
-    ).rejects.toThrow(/requires every primary key column/)
+    ).rejects.toThrow(/requires every primary key column/v)
 
     // Nothing optimistically applied for the rejected insert.
     expect(store.getState().records.size).toBe(0)
@@ -63,46 +68,59 @@ describe("createTableStore — composite primary keys", () => {
     const supabase = seedSupabase()
     const store = createStore(supabase)
 
-    const row = await store.getState().insert({ stay_id: "s3", service_id: "svc9", note: "late checkout" })
+    const row = await store.getState().insert({ note: "late checkout", service_id: "svc9", stay_id: "s3" })
+
     expect(row.stay_id).toBe("s3")
     expect(row.service_id).toBe("svc9")
 
-    const key = encodeKey({ stay_id: "s3", service_id: "svc9" }, ["stay_id", "service_id"])
+    const key = encodeKey({ service_id: "svc9", stay_id: "s3" }, ["stay_id", "service_id"])
+
     expect(store.getState().records.get(key)).toMatchObject({ note: "late checkout" })
   })
 
   it("update accepts a plain { column: value } object and normalizes it to the encoded key", async () => {
     const supabase = seedSupabase()
     const store = createStore(supabase)
+
     await store.getState().fetch()
 
-    const updated = await store.getState().update({ stay_id: "s1", service_id: "svc2" }, { note: "premium spa" })
+    const updated = await store.getState().update({ service_id: "svc2", stay_id: "s1" }, { note: "premium spa" })
+
     expect(updated.note).toBe("premium spa")
 
-    const key = encodeKey({ stay_id: "s1", service_id: "svc2" }, ["stay_id", "service_id"])
+    const key = encodeKey({ service_id: "svc2", stay_id: "s1" }, ["stay_id", "service_id"])
+
     expect(store.getState().records.get(key)).toMatchObject({ note: "premium spa" })
   })
 
   it("remove accepts a plain object id and deletes the right row only", async () => {
     const supabase = seedSupabase()
     const store = createStore(supabase)
+
     await store.getState().fetch()
 
-    await store.getState().remove({ stay_id: "s1", service_id: "svc1" })
+    await store.getState().remove({ service_id: "svc1", stay_id: "s1" })
 
     const state = store.getState()
+
     expect(state.records.size).toBe(2)
-    const removedKey = encodeKey({ stay_id: "s1", service_id: "svc1" }, ["stay_id", "service_id"])
+
+    const removedKey = encodeKey({ service_id: "svc1", stay_id: "s1" }, ["stay_id", "service_id"])
+
     expect(state.records.has(removedKey)).toBe(false)
+
+
     // The other s1 row survives — a naive single-column .eq() would have
     // deleted every row for stay_id "s1".
-    const survivingKey = encodeKey({ stay_id: "s1", service_id: "svc2" }, ["stay_id", "service_id"])
+    const survivingKey = encodeKey({ service_id: "svc2", stay_id: "s1" }, ["stay_id", "service_id"])
+
     expect(state.records.has(survivingKey)).toBe(true)
   })
 
   it("upsert with ignoreDuplicates on a composite conflict target resolves without throwing", async () => {
     const supabase = seedSupabase()
     const store = createStore(supabase)
+
     await store.getState().fetch()
 
     // DO NOTHING: Postgres writes nothing and returns no row. The store
@@ -110,40 +128,44 @@ describe("createTableStore — composite primary keys", () => {
     // snapshot), cleared of its pending flags — the documented behavior for
     // an ignored conflict, matching the single-column-PK path exactly.
     const result = await store.getState().upsert(
-      { stay_id: "s1", service_id: "svc1", note: "ignored" },
-      { onConflict: "stay_id,service_id", ignoreDuplicates: true },
+      { note: "ignored", service_id: "svc1", stay_id: "s1" },
+      { ignoreDuplicates: true, onConflict: "stay_id,service_id" },
     )
+
     expect(result.note).toBe("ignored")
     expect(result._anchor_pending).toBeUndefined()
 
-    const key = encodeKey({ stay_id: "s1", service_id: "svc1" }, ["stay_id", "service_id"])
+    const key = encodeKey({ service_id: "svc1", stay_id: "s1" }, ["stay_id", "service_id"])
+
     expect(store.getState().records.get(key)?._anchor_pending).toBeUndefined()
   })
 
   it("subscribe() refuses a composite-key table rather than binding the wrong column", () => {
     const supabase = seedSupabase()
     const store = createTableStore<any, Link, Link, Partial<Link>>({
-      supabase,
-      table: "stay_services",
-      primaryKey: ["stay_id", "service_id"],
       // A fake manager, so the composite-key guard is what's under test here
       // rather than the (already-covered) "no manager at all" guard.
       _realtimeManager: {} as any,
+      primaryKey: ["stay_id", "service_id"],
+      supabase,
+      table: "stay_services",
     })
-    expect(() => store.getState().subscribe()).toThrow(/composite primary key/)
+
+    expect(() => store.getState().subscribe()).toThrow(/composite primary key/v)
   })
 })
 
 describe("createMutationExecutor — composite primary keys", () => {
   it("replays a queued UPDATE against the right composite row and rekeys the store on confirm", async () => {
     const supabase = createMockSupabase({
-      stay_services: [{ stay_id: "s1", service_id: "svc1", note: "breakfast" }],
+      stay_services: [{ note: "breakfast", service_id: "svc1", stay_id: "s1" }],
     })
     const store = createTableStore<any, Link, Link, Partial<Link>>({
+      primaryKey: ["stay_id", "service_id"],
       supabase,
       table: "stay_services",
-      primaryKey: ["stay_id", "service_id"],
     })
+
     await store.getState().fetch()
 
     const executor = createMutationExecutor(
@@ -153,18 +175,19 @@ describe("createMutationExecutor — composite primary keys", () => {
       store,
     )
 
-    const key = encodeKey({ stay_id: "s1", service_id: "svc1" }, ["stay_id", "service_id"])
+    const key = encodeKey({ service_id: "svc1", stay_id: "s1" }, ["stay_id", "service_id"])
+
     await executor(
       {
+        createdAt: Date.now(),
         id: "m1",
-        table: "stay_services",
         operation: "UPDATE",
         payload: { note: "premium breakfast" },
-        primaryKey: { stay_id: "s1", service_id: "svc1" },
-        createdAt: Date.now(),
-        status: "in_flight",
+        primaryKey: { service_id: "svc1", stay_id: "s1" },
         retryCount: 0,
         rollbackSnapshot: null,
+        status: "in_flight",
+        table: "stay_services",
       },
       new Map(),
     )

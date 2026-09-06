@@ -1,33 +1,47 @@
-import { describe, it, expect, vi } from "vitest"
+import { describe, expect, it, vi } from "vitest"
+
 import { RealtimeManager } from "./realtimeManager.js"
 
 function createMockSupabase() {
   const channels: any[] = []
+
   return {
-    channel(name: string) {
-      const listeners: Array<{ event: string; filter: any; callback: any }> = []
+    _channels: channels,
+
+    channel(_name: string) {
+      const listeners: { callback: any; event: string; filter: any; }[] = []
+
       let statusCallback: any = null
+
       const ch = {
+        _fireEvent: (payload: any) => {
+          for (const l of listeners) {l.callback(payload)}
+        },
+
+        _fireStatus: (s: string, err?: Error) => statusCallback?.(s, err),
+        _listeners: listeners,
+
         on(event: string, filter: any, callback: any) {
-          listeners.push({ event, filter, callback })
+          listeners.push({ callback, event, filter })
+
           return ch
         },
+
         subscribe(cb?: (status: string) => void) {
           statusCallback = cb
-          if (cb) cb("SUBSCRIBED")
+
+          if (cb) {cb("SUBSCRIBED")}
+
           return ch
         },
-        _listeners: listeners,
-        _fireStatus: (s: string, err?: Error) => statusCallback?.(s, err),
-        _fireEvent: (payload: any) => {
-          for (const l of listeners) l.callback(payload)
-        },
       }
+
       channels.push(ch)
+
       return ch
     },
+
     removeChannel: vi.fn(),
-    _channels: channels,
   } as any
 }
 
@@ -38,12 +52,12 @@ describe("RealtimeManager", () => {
     const onStatus = vi.fn()
 
     manager.subscribe({
-      table: "todos",
-      primaryKey: "id",
-      onInsert: vi.fn(),
-      onUpdate: vi.fn(),
       onDelete: vi.fn(),
+      onInsert: vi.fn(),
       onStatus,
+      onUpdate: vi.fn(),
+      primaryKey: "id",
+      table: "todos",
     })
 
     // Mock fires SUBSCRIBED synchronously
@@ -56,15 +70,16 @@ describe("RealtimeManager", () => {
     const manager = new RealtimeManager({ supabase })
 
     manager.subscribe({
-      table: "todos",
-      primaryKey: "id",
-      onInsert: vi.fn(),
-      onUpdate: vi.fn(),
       onDelete: vi.fn(),
+      onInsert: vi.fn(),
       onStatus: vi.fn(),
+      onUpdate: vi.fn(),
+      primaryKey: "id",
+      table: "todos",
     })
 
     const status = manager.getStatus()
+
     expect(status.get("todos")).toBe("connected")
   })
 
@@ -76,15 +91,16 @@ describe("RealtimeManager", () => {
     const onDelete = vi.fn()
 
     manager.subscribe({
-      table: "todos",
-      primaryKey: "id",
-      onInsert,
-      onUpdate,
       onDelete,
+      onInsert,
       onStatus: vi.fn(),
+      onUpdate,
+      primaryKey: "id",
+      table: "todos",
     })
 
     const channel = supabase._channels[0]
+
     channel._fireEvent({ eventType: "INSERT", new: { id: 1, title: "A" } })
     channel._fireEvent({ eventType: "UPDATE", new: { id: 1, title: "B" } })
     channel._fireEvent({ eventType: "DELETE", old: { id: 1 } })
@@ -100,12 +116,12 @@ describe("RealtimeManager", () => {
     const onStatus = vi.fn()
 
     const unsub = manager.subscribe({
-      table: "todos",
-      primaryKey: "id",
-      onInsert: vi.fn(),
-      onUpdate: vi.fn(),
       onDelete: vi.fn(),
+      onInsert: vi.fn(),
       onStatus,
+      onUpdate: vi.fn(),
+      primaryKey: "id",
+      table: "todos",
     })
 
     unsub()
@@ -120,21 +136,21 @@ describe("RealtimeManager", () => {
     const manager = new RealtimeManager({ supabase })
 
     manager.subscribe({
-      table: "todos",
-      primaryKey: "id",
-      onInsert: vi.fn(),
-      onUpdate: vi.fn(),
       onDelete: vi.fn(),
+      onInsert: vi.fn(),
       onStatus: vi.fn(),
+      onUpdate: vi.fn(),
+      primaryKey: "id",
+      table: "todos",
     })
 
     manager.subscribe({
-      table: "todos",
-      primaryKey: "id",
-      onInsert: vi.fn(),
-      onUpdate: vi.fn(),
       onDelete: vi.fn(),
+      onInsert: vi.fn(),
       onStatus: vi.fn(),
+      onUpdate: vi.fn(),
+      primaryKey: "id",
+      table: "todos",
     })
 
     // First channel should have been removed
@@ -146,8 +162,8 @@ describe("RealtimeManager", () => {
     const supabase = createMockSupabase()
     const manager = new RealtimeManager({ supabase })
 
-    manager.subscribe({ table: "a", primaryKey: "id", onInsert: vi.fn(), onUpdate: vi.fn(), onDelete: vi.fn(), onStatus: vi.fn() })
-    manager.subscribe({ table: "b", primaryKey: "id", onInsert: vi.fn(), onUpdate: vi.fn(), onDelete: vi.fn(), onStatus: vi.fn() })
+    manager.subscribe({ onDelete: vi.fn(), onInsert: vi.fn(), onStatus: vi.fn(), onUpdate: vi.fn(), primaryKey: "id", table: "a" })
+    manager.subscribe({ onDelete: vi.fn(), onInsert: vi.fn(), onStatus: vi.fn(), onUpdate: vi.fn(), primaryKey: "id", table: "b" })
 
     manager.destroy()
 
@@ -164,18 +180,21 @@ describe("RealtimeManager", () => {
     const manager = new RealtimeManager({ supabase })
 
     manager.subscribe({
-      table: "todos",
-      primaryKey: "id",
       events: ["INSERT", "UPDATE", "DELETE"],
-      onInsert: vi.fn(),
-      onUpdate: vi.fn(),
       onDelete: vi.fn(),
+      onInsert: vi.fn(),
       onStatus: vi.fn(),
+      onUpdate: vi.fn(),
+      primaryKey: "id",
+      table: "todos",
     })
 
     const channel = supabase._channels[0]
+
     expect(channel._listeners).toHaveLength(3)
+
     const events = channel._listeners.map((l: any) => l.filter.event)
+
     expect(new Set(events).size).toBe(3)
     expect(events.sort()).toEqual(["DELETE", "INSERT", "UPDATE"])
   })
@@ -185,16 +204,17 @@ describe("RealtimeManager", () => {
     const manager = new RealtimeManager({ supabase })
 
     manager.subscribe({
-      table: "todos",
+      onDelete: vi.fn(),
+      onInsert: vi.fn(),
+      onStatus: vi.fn(),
+      onUpdate: vi.fn(),
       primaryKey: "id",
       select: ["id", "title"],
-      onInsert: vi.fn(),
-      onUpdate: vi.fn(),
-      onDelete: vi.fn(),
-      onStatus: vi.fn(),
+      table: "todos",
     })
 
     const channel = supabase._channels[0]
+
     expect(channel._listeners[0].filter.select).toEqual(["id", "title"])
   })
 
@@ -204,15 +224,15 @@ describe("RealtimeManager", () => {
 
     expect(() =>
       manager.subscribe({
-        table: "todos",
+        onDelete: vi.fn(),
+        onInsert: vi.fn(),
+        onStatus: vi.fn(),
+        onUpdate: vi.fn(),
         primaryKey: "id",
         select: ["title"],
-        onInsert: vi.fn(),
-        onUpdate: vi.fn(),
-        onDelete: vi.fn(),
-        onStatus: vi.fn(),
+        table: "todos",
       }),
-    ).toThrow(/primary key/)
+    ).toThrow(/primary key/v)
   })
 
   it("converts a FilterDescriptor[] filter into a postgres_changes filter string", () => {
@@ -220,19 +240,21 @@ describe("RealtimeManager", () => {
     const manager = new RealtimeManager({ supabase })
 
     manager.subscribe({
-      table: "todos",
-      primaryKey: "id",
       filter: [
         { column: "status", op: "eq", value: "open" },
         { column: "priority", op: "gt", value: 2 },
       ],
-      onInsert: vi.fn(),
-      onUpdate: vi.fn(),
+
       onDelete: vi.fn(),
+      onInsert: vi.fn(),
       onStatus: vi.fn(),
+      onUpdate: vi.fn(),
+      primaryKey: "id",
+      table: "todos",
     })
 
     const channel = supabase._channels[0]
+
     expect(channel._listeners[0].filter.filter).toBe("status=eq.open,priority=gt.2")
   })
 
@@ -241,16 +263,17 @@ describe("RealtimeManager", () => {
     const manager = new RealtimeManager({ supabase })
 
     manager.subscribe({
-      table: "todos",
-      primaryKey: "id",
       filter: "status=eq.open",
-      onInsert: vi.fn(),
-      onUpdate: vi.fn(),
       onDelete: vi.fn(),
+      onInsert: vi.fn(),
       onStatus: vi.fn(),
+      onUpdate: vi.fn(),
+      primaryKey: "id",
+      table: "todos",
     })
 
     const channel = supabase._channels[0]
+
     expect(channel._listeners[0].filter.filter).toBe("status=eq.open")
   })
 
@@ -260,15 +283,15 @@ describe("RealtimeManager", () => {
 
     expect(() =>
       manager.subscribe({
-        table: "todos",
-        primaryKey: "id",
         filter: [{ column: "tags", op: "contains", value: ["a"] }],
-        onInsert: vi.fn(),
-        onUpdate: vi.fn(),
         onDelete: vi.fn(),
+        onInsert: vi.fn(),
         onStatus: vi.fn(),
+        onUpdate: vi.fn(),
+        primaryKey: "id",
+        table: "todos",
       }),
-    ).toThrow(/not supported/)
+    ).toThrow(/not supported/v)
   })
 
   it("does not map match to Realtime's regex match operator", () => {
@@ -280,34 +303,36 @@ describe("RealtimeManager", () => {
 
     expect(() =>
       manager.subscribe({
-        table: "todos",
-        primaryKey: "id",
         filter: [{ column: "title", op: "match", value: "^foo" }],
-        onInsert: vi.fn(),
-        onUpdate: vi.fn(),
         onDelete: vi.fn(),
+        onInsert: vi.fn(),
         onStatus: vi.fn(),
+        onUpdate: vi.fn(),
+        primaryKey: "id",
+        table: "todos",
       }),
-    ).toThrow(/not supported/)
+    ).toThrow(/not supported/v)
   })
 })
 
 describe("RealtimeManager status mapping", () => {
   function subscribeOne(supabase: any, onStatus = vi.fn(), logger?: any) {
-    const manager = new RealtimeManager({ supabase, logger })
+    const manager = new RealtimeManager({ logger, supabase })
+
     manager.subscribe({
-      table: "todos",
-      primaryKey: "id",
-      onInsert: vi.fn(),
-      onUpdate: vi.fn(),
       onDelete: vi.fn(),
+      onInsert: vi.fn(),
       onStatus,
+      onUpdate: vi.fn(),
+      primaryKey: "id",
+      table: "todos",
     })
-    return { manager, onStatus, channel: supabase._channels[0] }
+
+    return { channel: supabase._channels[0], manager, onStatus }
   }
 
   it("reports TIMED_OUT as an error, not as still connecting", () => {
-    const { onStatus, channel } = subscribeOne(createMockSupabase())
+    const { channel, onStatus } = subscribeOne(createMockSupabase())
 
     channel._fireStatus("TIMED_OUT")
 
@@ -318,7 +343,7 @@ describe("RealtimeManager status mapping", () => {
   it("still reports a genuinely in-flight status as connecting", () => {
     // The paired positive: mapping everything to "error" would also satisfy the
     // assertion above.
-    const { onStatus, channel } = subscribeOne(createMockSupabase())
+    const { channel, onStatus } = subscribeOne(createMockSupabase())
 
     channel._fireStatus("JOINING")
 
@@ -326,7 +351,7 @@ describe("RealtimeManager status mapping", () => {
   })
 
   it("keeps CHANNEL_ERROR, CLOSED and SUBSCRIBED where they were", () => {
-    const { onStatus, channel } = subscribeOne(createMockSupabase())
+    const { channel, onStatus } = subscribeOne(createMockSupabase())
 
     channel._fireStatus("CHANNEL_ERROR")
     expect(onStatus).toHaveBeenLastCalledWith("error")
@@ -360,20 +385,23 @@ describe("RealtimeManager pause and resume", () => {
   function subscribeOne(supabase: any) {
     const manager = new RealtimeManager({ supabase })
     const onStatus = vi.fn()
+
     manager.subscribe({
-      table: "todos",
-      primaryKey: "id",
-      onInsert: vi.fn(),
-      onUpdate: vi.fn(),
       onDelete: vi.fn(),
+      onInsert: vi.fn(),
       onStatus,
+      onUpdate: vi.fn(),
+      primaryKey: "id",
+      table: "todos",
     })
+
     return { manager, onStatus }
   }
 
   it("resume() resubscribes what pause() tore down", () => {
     const supabase = createMockSupabase()
     const { manager, onStatus } = subscribeOne(supabase)
+
     expect(supabase._channels).toHaveLength(1)
 
     manager.pause()

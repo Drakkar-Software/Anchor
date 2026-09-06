@@ -1,36 +1,36 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
+import { devtools,subscribeWithSelector } from "zustand/middleware"
 import { createStore, type StoreApi } from "zustand/vanilla"
-import { subscribeWithSelector, devtools } from "zustand/middleware"
-import type {
-  TableStore,
-  TableStoreState,
-  TableStoreActions,
-  TrackedRow,
-  CreateTableStoreOptions,
-  FilterDescriptor,
-  FetchOptions,
-  QueryEntry,
-  MutationOperation,
-  QueuedMutation,
-  UpsertOptions,
-} from "./types.js"
-import { noopLogger, createTempId, randomId } from "./types.js"
+
+import { AnchorError, fromSupabaseError, isTransportError } from "./errors.js"
 import type { OfflineQueue } from "./mutation/offlineQueue.js"
 import { runValidation } from "./mutation/validation.js"
-import { AnchorError, fromSupabaseError, isTransportError } from "./errors.js"
-import { queryKey, isKeyable } from "./query/queryKey.js"
+import { applyFilters,executeQuery, executeQueryOne, fromTable } from "./query/queryExecutor.js"
+import { isKeyable,queryKey } from "./query/queryKey.js"
 import { selectAllRows, selectQueryRows } from "./query/selectRows.js"
-import { executeQuery, executeQueryOne, fromTable, applyFilters } from "./query/queryExecutor.js"
-import type { RealtimeManager } from "./realtime/realtimeManager.js"
 import { bindRealtimeToStore } from "./realtime/realtimeBindings.js"
-import { encodeKey, applyPkFilters, buildPkFilter, normalizePk } from "./utils/compositeKey.js"
+import type { RealtimeManager } from "./realtime/realtimeManager.js"
+import {
+  type CreateTableStoreOptions,
+ createTempId,   type FetchOptions,
+  type FilterDescriptor,
+  type MutationOperation,
+noopLogger,   type QueryEntry,
+  type QueuedMutation,
+randomId,  type TableStore,
+  type TableStoreActions,
+  type TableStoreState,
+  type TrackedRow,
+  type UpsertOptions } from "./types.js"
+import { applyPkFilters, buildPkFilter, encodeKey, normalizePk } from "./utils/compositeKey.js"
+
+type StoreGet<Row, InsertRow, UpdateRow> = StoreApi<
+  TableStore<Row, InsertRow, UpdateRow>
+>["getState"]
 
 type StoreSet<Row, InsertRow, UpdateRow> = StoreApi<
   TableStore<Row, InsertRow, UpdateRow>
 >["setState"]
-type StoreGet<Row, InsertRow, UpdateRow> = StoreApi<
-  TableStore<Row, InsertRow, UpdateRow>
->["getState"]
 
 /**
  * Creates a Zustand store for a single Supabase table.
@@ -45,28 +45,28 @@ export function createTableStore<
   options: CreateTableStoreOptions<DB, Row, InsertRow, UpdateRow, Extensions>,
 ): StoreApi<TableStore<Row, InsertRow, UpdateRow> & Extensions> {
   const {
-    supabase,
-    table,
-    schema = "public",
-    primaryKey: rawPrimaryKey = "id",
-    defaultFilters,
-    defaultSort,
-    defaultSelect,
-    defaultQueryFn,
-    persistence,
-    offlineQueue: offlineQueueOpts,
-    network: networkOpts,
-    realtime: realtimeOpts,
-    conflict: conflictOpts,
-    logger = noopLogger,
-    isView = false,
-    immer: immerMiddleware,
-    devtools: devtoolsOption,
-    validate,
-    cacheStrategy: defaultCacheStrategy = "replace",
     _queue,
     _realtimeManager,
+    cacheStrategy: defaultCacheStrategy = "replace",
+    conflict: conflictOpts,
+    defaultFilters,
+    defaultQueryFn,
+    defaultSelect,
+    defaultSort,
+    devtools: devtoolsOption,
     extend,
+    immer: immerMiddleware,
+    isView = false,
+    logger = noopLogger,
+    network: networkOpts,
+    offlineQueue: offlineQueueOpts,
+    persistence,
+    primaryKey: rawPrimaryKey = "id",
+    realtime: realtimeOpts,
+    schema = "public",
+    supabase,
+    table,
+    validate,
   } = options
 
   // A composite primary key is stored as a single JSON-encoded string (via
@@ -87,12 +87,15 @@ export function createTableStore<
     if (realtimeOpts?.enabled) {
       console.warn(`[anchor:${table}] "realtime" option requires createSupabaseStores(). Use createSupabaseStores() or manually set up RealtimeManager + bindRealtimeToStore().`)
     }
+
     if (offlineQueueOpts?.enabled) {
       console.warn(`[anchor:${table}] "offlineQueue" option requires createSupabaseStores(). Use createSupabaseStores() or manually create an OfflineQueue.`)
     }
+
     if (conflictOpts) {
       console.warn(`[anchor:${table}] "conflict" option requires createSupabaseStores() with realtime enabled. Configure conflict resolution via bindRealtimeToStore().`)
     }
+
     if (networkOpts) {
       console.warn(`[anchor:${table}] "network" option requires createSupabaseStores(). Use createSupabaseStores() or manually wire NetworkStatusAdapter.`)
     }
@@ -111,11 +114,12 @@ export function createTableStore<
   // of them, every mutator behaves exactly as it did before this option existed
   // — which is also why the flag is checked here once rather than at eight call
   // sites that could each drift.
-  const queueWrites = !!offlineQueueOpts?.queueWrites && !!queue && !!networkOpts
+  const queueWrites = Boolean(offlineQueueOpts?.queueWrites) && Boolean(queue) && Boolean(networkOpts)
+
   if (offlineQueueOpts?.queueWrites && !queueWrites) {
     console.warn(
       `[anchor:${table}] "offlineQueue.queueWrites" needs both a queue and a "network" adapter — ` +
-      `writes will not be queued. Use createSupabaseStores() and pass "network".`,
+      "writes will not be queued. Use createSupabaseStores() and pass \"network\".",
     )
   }
 
@@ -136,8 +140,12 @@ export function createTableStore<
   const liveQueryOptions = new Map<string, FetchOptions<Row> | undefined>()
   const retainCounts = new Map<string, number>()
   const generations = new Map<string, number>()
+
   let generationTick = 0
+
   const inflight = new Map<string, Promise<TrackedRow<Row>[]>>()
+
+
   // Fetches that cannot be keyed (an opaque `queryFn`) get a private key so
   // they neither share nor poison a real query's entry.
   let unkeyedCounter = 0
@@ -155,7 +163,8 @@ export function createTableStore<
     function mergeFilters(
       custom?: FilterDescriptor<Row>[],
     ): FilterDescriptor<Row>[] | undefined {
-      if (!defaultFilters && !custom) return undefined
+      if (!defaultFilters && !custom) {return undefined}
+
       return [...(defaultFilters ?? []), ...(custom ?? [])]
     }
 
@@ -164,7 +173,7 @@ export function createTableStore<
       records: Map<string | number, TrackedRow<Row>>,
       order: (string | number)[],
     ): TrackedRow<Row>[] {
-      return selectAllRows<Row>({ records, order })
+      return selectAllRows<Row>({ order, records })
     }
 
     /**
@@ -184,14 +193,17 @@ export function createTableStore<
     function rowId(row: Row): string | number {
       const record = row as Record<string, unknown>
       const missing = pkColumns.filter((c) => record[c] == null)
+
       if (missing.length > 0) {
         const where = isView ? "viewOptions" : "tableOptions"
+
         throw new AnchorError(
           `${isView ? "View" : "Table"} "${table}" returned a row with no "${missing.join(", ")}". ` +
           `Set ${where}.${table}.primaryKey to a column that is present and unique, ` +
-          `and make sure defaultSelect includes it.`,
+          "and make sure defaultSelect includes it.",
         )
       }
+
       return encodeKey(record, primaryKeyArg)
     }
 
@@ -227,38 +239,46 @@ export function createTableStore<
      * row but cannot recognise it. The caller falls back to a temp id, and the
      * confirmation step below is what reconciles the two.
      */
-    function findByConflict(
+    function lookupByConflict(
       records: Map<string | number, TrackedRow<Row>>,
       row: unknown,
       onConflict: string | undefined,
     ): string | number | undefined {
-      if (!onConflict) return undefined
+      if (!onConflict) {return undefined}
+
       const columns = onConflict.split(",").map((c) => c.trim()).filter(Boolean)
-      if (columns.length === 0) return undefined
+
+      if (columns.length === 0) {return undefined}
 
       const target = row as Record<string, unknown>
-      if (columns.some((c) => target[c] == null)) return undefined
+
+      if (columns.some((c) => target[c] == null)) {return undefined}
 
       for (const [id, record] of records) {
         const candidate = record as Record<string, unknown>
+
         if (columns.every((c) => candidate[c] != null && candidate[c] === target[c])) {
           return id
         }
       }
+
       return undefined
     }
 
     function rowsToMap(
       rows: Row[],
-    ): { records: Map<string | number, TrackedRow<Row>>; order: (string | number)[] } {
+    ): { order: (string | number)[]; records: Map<string | number, TrackedRow<Row>>; } {
       const records = new Map<string | number, TrackedRow<Row>>()
       const order: (string | number)[] = []
+
       for (const row of rows) {
         const id = rowId(row)
+
         records.set(id, row as TrackedRow<Row>)
         order.push(id)
       }
-      return { records, order }
+
+      return { order, records }
     }
 
     const persistenceKey = persistence?.key ?? `anchor:${schema}:${table}`
@@ -267,16 +287,21 @@ export function createTableStore<
     let persistTimer: ReturnType<typeof setTimeout> | null = null
 
     function persistIfConfigured(): void {
-      if (!persistence) return
-      if (persistTimer) clearTimeout(persistTimer)
+      if (!persistence) {return}
+
+      if (persistTimer) {clearTimeout(persistTimer)}
+
       persistTimer = setTimeout(() => {
         persistTimer = null
+
         const state = get()
         const data = recordsToArray(state.records, state.order)
+
         persistence.adapter
           .setItem(persistenceKey, data)
-          .catch((err) => {
-            const msg = err instanceof Error ? err.message : String(err)
+          .catch((error: unknown) => {
+            const msg = error instanceof Error ? error.message : String(error)
+
             logger.mutationError(table, "PERSIST" as any, msg)
             set({ error: new Error(`Persistence failed: ${msg}`) } as Partial<
               TableStore<Row, InsertRow, UpdateRow>
@@ -286,7 +311,7 @@ export function createTableStore<
     }
 
     function assertNotView(): void {
-      if (isView) throw new Error(`Cannot mutate view "${table}"`)
+      if (isView) {throw new Error(`Cannot mutate view "${table}"`)}
     }
 
     // ── Offline write queuing ─────────────────────────────────────
@@ -314,7 +339,8 @@ export function createTableStore<
      * is what stops a write escaping the ordering altogether.
      */
     function mustQueue(id: string | number): boolean {
-      if (!queueWrites) return false
+      if (!queueWrites) {return false}
+
       return !networkOpts!.isOnline() || pendingFor(id).length > 0
     }
 
@@ -359,24 +385,28 @@ export function createTableStore<
     ): Promise<void> {
       const priorForRow = pendingFor(id)
       const inherited = priorForRow[0]
+
       if (inherited) {
         rollbackSnapshot = inherited.rollbackSnapshot as TrackedRow<Row> | undefined ?? undefined
       }
+
       const mutation: QueuedMutation = {
+        createdAt: Date.now(),
+        dependsOn: priorForRow.at(-1)?.id,
         id: randomId(),
-        table,
         operation,
         payload,
         primaryKey: buildPkFilter(primaryKeyArg, id),
-        dependsOn: priorForRow[priorForRow.length - 1]?.id,
-        createdAt: Date.now(),
-        status: "pending",
         retryCount: 0,
         rollbackSnapshot: (rollbackSnapshot as Record<string, unknown> | undefined) ?? null,
+        status: "pending",
+        table,
         upsertOptions,
       }
+
       await queue!.enqueue(mutation)
       logger.mutationQueued?.(table, operation)
+
       // The optimistic row has to survive a relaunch too. Persisting only on
       // success would leave the queue holding a mutation for a row the store no
       // longer has: the entry vanishes on restart and reappears when the drain
@@ -387,15 +417,15 @@ export function createTableStore<
     // ── Initial state ─────────────────────────────────────────────
 
     const initialState: TableStoreState<Row> = {
-      records: new Map(),
-      order: [],
-      queries: new Map(),
-      isLoading: false,
       error: null,
       isHydrated: false,
+      isLoading: false,
       isRestoring: false,
       lastFetchedAt: null,
+      order: [],
+      queries: new Map(),
       realtimeStatus: "disconnected",
+      records: new Map(),
     }
 
     /**
@@ -407,6 +437,7 @@ export function createTableStore<
     function forgetQueries(): void {
       generations.clear()
       inflight.clear()
+
       // `liveQueryOptions` is NOT cleared: it records what is mounted, and
       // clearing the store's contents does not unmount anything. Dropping it
       // on sign-out would make the next foreground `refetch()` fall back to
@@ -419,10 +450,11 @@ export function createTableStore<
         const queries = new Map(prev.queries)
         const existing = queries.get(key) ?? {
           count: null,
-          isLoading: false,
           error: null,
+          isLoading: false,
           lastFetchedAt: null,
         }
+
         queries.set(key, { ...existing, ...patch })
 
         // Bounded: a screen filtering on a free-text field would otherwise add
@@ -438,6 +470,7 @@ export function createTableStore<
             if (candidate !== key && !entry.isLoading && !retainCounts.has(candidate)) {
               queries.delete(candidate)
               generations.delete(candidate)
+
               break
             }
           }
@@ -452,31 +485,58 @@ export function createTableStore<
     const actions: TableStoreActions<Row, InsertRow, UpdateRow> = {
       // ── Query ─────────────────────────────────────────────────
 
-      retainQuery(fetchOptions) {
-        const key = queryKey(actions.resolveFetchOptions(fetchOptions))
-        retainCounts.set(key, (retainCounts.get(key) ?? 0) + 1)
-        liveQueryOptions.set(key, fetchOptions)
-        return key
+      clearAll() {
+        // Cancel any pending debounced persist to avoid re-persisting stale data
+        if (persistTimer) {
+          clearTimeout(persistTimer)
+          persistTimer = null
+        }
+
+        forgetQueries()
+        set({
+          error: null,
+          lastFetchedAt: null,
+          order: [],
+          queries: new Map(),
+          records: new Map(),
+        } as Partial<TableStore<Row, InsertRow, UpdateRow>>)
+
+        if (persistence) {
+          persistence.adapter
+            .removeItem(persistenceKey)
+            .catch((error: unknown) => {
+              logger.mutationError(table, "PERSIST" as any, error instanceof Error ? error.message : String(error))
+            })
+        }
       },
 
-      releaseQuery(fetchOptions) {
-        const key = queryKey(actions.resolveFetchOptions(fetchOptions))
-        const next = (retainCounts.get(key) ?? 0) - 1
-        if (next > 0) {
-          retainCounts.set(key, next)
-          return
+      async clearAndFetch(fetchOpts) {
+        // Clear records
+        if (persistTimer) {
+          clearTimeout(persistTimer)
+          persistTimer = null
         }
-        retainCounts.delete(key)
-        liveQueryOptions.delete(key)
-      },
 
-      resolveFetchOptions(fetchOptions) {
-        return {
-          ...fetchOptions,
-          filters: mergeFilters(fetchOptions?.filters),
-          sort: fetchOptions?.sort ?? defaultSort,
-          select: fetchOptions?.select ?? defaultSelect,
+        forgetQueries()
+        set({
+          error: null,
+          lastFetchedAt: null,
+          order: [],
+          queries: new Map(),
+          records: new Map(),
+        } as Partial<TableStore<Row, InsertRow, UpdateRow>>)
+
+        if (persistence) {
+          persistence.adapter
+            .removeItem(persistenceKey)
+            .catch((error: unknown) => {
+              logger.mutationError(table, "PERSIST" as any, error instanceof Error ? error.message : String(error))
+            })
         }
+
+
+        // Fetch with replace strategy forced
+        return await actions.fetch({ ...fetchOpts, cacheStrategy: "replace" })
       },
 
       async fetch(fetchOptions) {
@@ -493,7 +553,8 @@ export function createTableStore<
 
         // Deduplicate concurrent fetches of the SAME query only.
         const existing = inflight.get(key)
-        if (existing) return existing
+
+        if (existing) {return await existing}
 
         const doFetch = async (): Promise<TrackedRow<Row>[]> => {
           // Drawn from a counter that only ever goes up, per store. Deriving it
@@ -502,25 +563,32 @@ export function createTableStore<
           // number as its replacement, pass the staleness guard, and write the
           // previous account's rows into a store that was just cleared.
           const thisGeneration = ++generationTick
+
           generations.set(key, thisGeneration)
+
+
           // Stale-while-revalidate, judged per query: a table that already
           // holds another query's rows tells this one nothing. Counting the
           // whole table made a brand-new query report "not loading" while it
           // had nothing to show, so the screen rendered its empty state.
           const hasData = selectQueryRows<Row>(get(), opts.filters, opts.sort).length > 0
-          set({ isLoading: !hasData, error: null } as Partial<
+
+          set({ error: null, isLoading: !hasData } as Partial<
             TableStore<Row, InsertRow, UpdateRow>
           >)
-          if (keyable) setQueryEntry(key, { isLoading: !hasData, error: null })
+
+          if (keyable) {setQueryEntry(key, { error: null, isLoading: !hasData })}
 
           const start = Date.now()
+
           logger.fetchStart(table)
 
           try {
-            const { data, error, count } = await executeQuery<Row>(
+            const { count, data, error } = await executeQuery<Row>(
               supabase as SupabaseClient,
               table,
               schema,
+
               // Filled in AFTER the key: a store-level `queryFn` is the same
               // function for every query here, so it says nothing about which
               // query this is, and putting it in `resolveFetchOptions` would
@@ -531,17 +599,21 @@ export function createTableStore<
 
             if (error) {
               logger.fetchError(table, error.message)
+
               if (thisGeneration === generations.get(key)) {
-                set({ isLoading: false, error } as Partial<
+                set({ error, isLoading: false } as Partial<
                   TableStore<Row, InsertRow, UpdateRow>
                 >)
+
+
                 // The entry is written on failure too. Writing it only on
                 // success means a cold offline boot — hydrate fills `records`,
                 // the fetch rejects, no entry exists — reports a permanent
                 // spinner over rows that are already in memory, which is the
                 // case this library exists to serve.
-                if (keyable) setQueryEntry(key, { isLoading: false, error })
+                if (keyable) {setQueryEntry(key, { error, isLoading: false })}
               }
+
               return []
             }
 
@@ -573,17 +645,21 @@ export function createTableStore<
             if (effectiveStrategy === "merge") {
               // Merge mode: records accumulate, order reflects latest query
               const currentState = get()
+
               records = new Map(currentState.records)
               order = []
 
               for (const row of data) {
                 const id = rowId(row)
                 const existing = records.get(id)
+
                 if (existing?._anchor_pending) {
                   // Keep pending version but include in order
                   order.push(id)
+
                   continue
                 }
+
                 records.set(id, row as TrackedRow<Row>)
                 order.push(id)
               }
@@ -595,12 +671,14 @@ export function createTableStore<
               // narrower fetch silently drop the first fetch's rows from every
               // read while `records.size` still counted them.
               const orderSet = new Set(order)
+
               for (const id of currentState.order) {
                 if (!orderSet.has(id)) {
                   order.push(id)
                   orderSet.add(id)
                 }
               }
+
               for (const [id, existing] of currentState.records) {
                 if (existing._anchor_pending && !orderSet.has(id)) {
                   order.push(id)
@@ -610,11 +688,13 @@ export function createTableStore<
             } else {
               // Replace mode (default): existing behavior
               const mapped = rowsToMap(data)
+
               records = mapped.records
               order = mapped.order
 
               // Preserve rows with pending mutations
               const currentState = get()
+
               for (const [id, existing] of currentState.records) {
                 if (existing._anchor_pending && !records.has(id)) {
                   records.set(id, existing)
@@ -627,17 +707,18 @@ export function createTableStore<
 
             logger.fetchSuccess(table, data.length, Date.now() - start)
             set({
-              records,
-              order,
-              isLoading: false,
               error: null,
+              isLoading: false,
               lastFetchedAt: Date.now(),
+              order,
+              records,
             } as Partial<TableStore<Row, InsertRow, UpdateRow>>)
+
             if (keyable) {
               setQueryEntry(key, {
                 count,
-                isLoading: false,
                 error: null,
+                isLoading: false,
                 lastFetchedAt: Date.now(),
               })
             }
@@ -645,15 +726,19 @@ export function createTableStore<
             persistIfConfigured()
 
             return recordsToArray(records, order)
-          } catch (err) {
-            logger.fetchError(table, err instanceof Error ? err.message : String(err))
+          } catch (error_) {
+            logger.fetchError(table, error_ instanceof Error ? error_.message : String(error_))
+
             if (thisGeneration === generations.get(key)) {
-              const error = err instanceof Error ? err : new Error(String(err))
-              set({ isLoading: false, error } as Partial<
+              const error = error_ instanceof Error ? error_ : new Error(String(error_))
+
+              set({ error, isLoading: false } as Partial<
                 TableStore<Row, InsertRow, UpdateRow>
               >)
-              if (keyable) setQueryEntry(key, { isLoading: false, error })
+
+              if (keyable) {setQueryEntry(key, { error, isLoading: false })}
             }
+
             return []
           }
         }
@@ -663,10 +748,12 @@ export function createTableStore<
         // settling later would otherwise evict its replacement and let the next
         // caller issue a duplicate request instead of joining the live one.
         const promise: Promise<TrackedRow<Row>[]> = doFetch().finally(() => {
-          if (inflight.get(key) === promise) inflight.delete(key)
+          if (inflight.get(key) === promise) {inflight.delete(key)}
         })
+
         inflight.set(key, promise)
-        return promise
+
+        return await promise
       },
 
       async fetchOne(id) {
@@ -682,49 +769,96 @@ export function createTableStore<
 
         if (error) {
           set({ error } as Partial<TableStore<Row, InsertRow, UpdateRow>>)
+
           return null
         }
-        if (!data) return null
+
+        if (!data) {return null}
 
         const tracked = data as TrackedRow<Row>
+
         // Derived from the row itself, not the caller's `key` — the two agree
         // whenever the fetch matched, and this is the same pattern every other
         // mutator uses to key a confirmed server row.
         const rowKey = rowId(tracked as unknown as Row)
+
         set((prev) => {
           const records = new Map(prev.records)
-          const order = [...prev.order]
+          const order = Array.from(prev.order)
+
           records.set(rowKey, tracked)
-          if (!prev.records.has(rowKey)) order.push(rowKey)
-          return { ...prev, records, order }
+
+          if (!prev.records.has(rowKey)) {order.push(rowKey)}
+
+          return { ...prev, order, records }
         })
 
         persistIfConfigured()
+
         return tracked
       },
 
-      async refetch() {
-        // Replay every live query, not just the one whose options were written
-        // last. `appLifecycle`'s foreground handler calls this for every stale
-        // store, so with a single slot, backgrounding an app with two screens
-        // on one table and reopening it refetched one of them and — under
-        // "replace" — evicted the other's rows.
-        if (liveQueryOptions.size === 0) return actions.fetch(undefined)
+      async flushQueue() {
+        if (_queue) {
+          const q = _queue as OfflineQueue
 
-        const results = await Promise.all(
-          [...liveQueryOptions.values()].map((opts) => actions.fetch(opts)),
-        )
-        // The rows of the most recently registered query, matching what a
-        // single-query caller got before.
-        return results[results.length - 1] ?? []
+          await q.flush()
+        }
+      },
+
+      getQueueSize() {
+        if (_queue) {
+          const q = _queue as OfflineQueue
+
+          return q.pendingMutations.filter((m) => m.table === table).length
+        }
+
+        return 0
       },
 
       // ── Mutations ─────────────────────────────────────────────
 
+      async hydrate() {
+        if (!persistence) {return}
+
+        set({ isRestoring: true } as Partial<
+          TableStore<Row, InsertRow, UpdateRow>
+        >)
+
+        try {
+          const key = persistenceKey
+          const data = await persistence.adapter.getItem<Row[]>(key)
+
+          if (data && Array.isArray(data)) {
+            const { order, records } = rowsToMap(data)
+
+            set({
+              isHydrated: true,
+              isRestoring: false,
+              order,
+              records,
+            } as Partial<TableStore<Row, InsertRow, UpdateRow>>)
+          } else {
+            set({ isHydrated: true, isRestoring: false } as Partial<
+              TableStore<Row, InsertRow, UpdateRow>
+            >)
+          }
+        } catch (error) {
+          logger.fetchError(table, `Hydration failed: ${error instanceof Error ? error.message : String(error)}`)
+          set({
+            error: error instanceof Error ? error : new Error(String(error)),
+            isHydrated: true,
+            isRestoring: false,
+          } as Partial<TableStore<Row, InsertRow, UpdateRow>>)
+        }
+      },
+
       async insert(row) {
         assertNotView()
         runValidation(validate?.insert, row, "insert")
+
         const start = Date.now()
+
         logger.mutationStart(table, "INSERT")
 
         // Optimistically add.
@@ -735,15 +869,18 @@ export function createTableStore<
         // is required to carry every one of them already, and the "temp" id
         // is really just that row's real, final key, computed up front.
         let tempId: string | number
+
         if (isComposite) {
           const record = row as Record<string, unknown>
           const missing = pkColumns.filter((c) => record[c] == null)
+
           if (missing.length > 0) {
             throw new AnchorError(
               `insert on composite-key table "${table}" requires every primary key column ` +
               `(${pkColumns.join(", ")}) in the payload; missing: ${missing.join(", ")}.`,
             )
           }
+
           tempId = encodeKey(record, primaryKeyArg)
         } else {
           tempId = ((row as Record<string, unknown>)[primaryKeyColumn] as
@@ -751,29 +888,33 @@ export function createTableStore<
             | number
             | undefined) ?? createTempId()
         }
+
         const optimisticRow: TrackedRow<Row> = {
           ...(row as unknown as Row),
           ...(isComposite ? {} : { [primaryKeyColumn]: tempId }),
-          _anchor_pending: "insert",
           _anchor_optimistic: true,
+          _anchor_pending: "insert",
         }
 
         set((prev) => {
           const records = new Map(prev.records)
-          const order = [...prev.order]
-          records.set(tempId as string | number, optimisticRow)
-          order.push(tempId as string | number)
-          return { ...prev, records, order, error: null }
+          const order = Array.from(prev.order)
+
+          records.set(tempId, optimisticRow)
+          order.push(tempId)
+
+          return { ...prev, error: null, order, records }
         })
 
         // A queued insert keeps its temp id: `mutationPipeline`'s INSERT arm
         // strips it before sending, and `onTempIdResolved` maps it to the
         // server's on the drain.
-        const queueInsert = () =>
-          enqueueWrite("INSERT", tempId as string | number, { ...(row as object) }, undefined)
+        const queueInsert = async () =>
+          { await enqueueWrite("INSERT", tempId, { ...(row as object) }, undefined); }
 
-        if (mustQueue(tempId as string | number)) {
+        if (mustQueue(tempId)) {
           await queueInsert()
+
           return optimisticRow
         }
 
@@ -786,16 +927,22 @@ export function createTableStore<
         if (error) {
           if (failedInTransit(error, status)) {
             await queueInsert()
+
             return optimisticRow
           }
+
+
           // Rollback
           logger.mutationError(table, "INSERT", error.message)
           set((prev) => {
             const records = new Map(prev.records)
             const order = prev.order.filter((o) => o !== tempId)
-            records.delete(tempId as string | number)
-            return { ...prev, records, order, error: fromSupabaseError(error) }
+
+            records.delete(tempId)
+
+            return { ...prev, error: fromSupabaseError(error), order, records }
           })
+
           throw fromSupabaseError(error)
         }
 
@@ -805,23 +952,29 @@ export function createTableStore<
         // Confirm: replace optimistic with server response
         set((prev) => {
           const records = new Map(prev.records)
-          const order = [...prev.order]
+          const order = Array.from(prev.order)
 
           // Remove temp entry if ID changed
           if (serverId !== tempId) {
-            records.delete(tempId as string | number)
-            const idx = order.indexOf(tempId as string | number)
-            if (idx >= 0) order[idx] = serverId
+            records.delete(tempId)
+
+            const idx = order.indexOf(tempId)
+
+            if (idx !== -1) {order[idx] = serverId}
           }
 
           records.set(serverId, serverRow as TrackedRow<Row>)
+
+
           // Ensure serverId is in order (handles edge case where optimistic set threw)
-          if (!order.includes(serverId)) order.push(serverId)
-          return { ...prev, records, order }
+          if (!order.includes(serverId)) {order.push(serverId)}
+
+          return { ...prev, order, records }
         })
 
         logger.mutationSuccess(table, "INSERT", Date.now() - start)
         persistIfConfigured()
+
         return serverRow as TrackedRow<Row>
       },
 
@@ -838,10 +991,13 @@ export function createTableStore<
        */
       async insertMany(rows) {
         assertNotView()
+
         for (const row of rows) {
           runValidation(validate?.insert, row, "insert")
         }
+
         const start = Date.now()
+
         logger.mutationStart(table, "INSERT")
 
         // Build optimistic rows. See `insert()`'s comment on why a
@@ -849,39 +1005,47 @@ export function createTableStore<
         // than minting a temp id.
         const tempIds: (string | number)[] = []
         const optimisticRows: TrackedRow<Row>[] = []
+
         for (const row of rows) {
           const record = row as Record<string, unknown>
+
           let tempId: string | number
+
           if (isComposite) {
             const missing = pkColumns.filter((c) => record[c] == null)
+
             if (missing.length > 0) {
               throw new AnchorError(
                 `insertMany on composite-key table "${table}" requires every primary key ` +
                 `column (${pkColumns.join(", ")}) in every row's payload; missing: ${missing.join(", ")}.`,
               )
             }
+
             tempId = encodeKey(record, primaryKeyArg)
           } else {
             tempId = (record[primaryKeyColumn] as string | number | undefined) ?? createTempId()
           }
+
           tempIds.push(tempId)
           optimisticRows.push({
             ...(row as unknown as Row),
             ...(isComposite ? {} : { [primaryKeyColumn]: tempId }),
-            _anchor_pending: "insert",
             _anchor_optimistic: true,
+            _anchor_pending: "insert",
           } as TrackedRow<Row>)
         }
 
         // Single batched optimistic apply
         set((prev) => {
           const records = new Map(prev.records)
-          const order = [...prev.order]
-          for (let i = 0; i < tempIds.length; i++) {
-            records.set(tempIds[i]!, optimisticRows[i]!)
-            order.push(tempIds[i]!)
+          const order = Array.from(prev.order)
+
+          for (const [i, tempId] of tempIds.entries()) {
+            records.set(tempId, optimisticRows[i]!)
+            order.push(tempId)
           }
-          return { ...prev, records, order, error: null }
+
+          return { ...prev, error: null, order, records }
         })
 
         // Batched remote insert
@@ -892,20 +1056,26 @@ export function createTableStore<
         if (error) {
           // Rollback all optimistic inserts
           logger.mutationError(table, "INSERT", error.message)
+
           const tempIdSet = new Set(tempIds)
+
           set((prev) => {
             const records = new Map(prev.records)
             const order = prev.order.filter(
               (o) => !tempIdSet.has(o),
             )
-            for (const id of tempIds) records.delete(id)
-            return { ...prev, records, order, error: fromSupabaseError(error) }
+
+            for (const id of tempIds) {records.delete(id)}
+
+            return { ...prev, error: fromSupabaseError(error), order, records }
           })
+
           throw fromSupabaseError(error)
         }
 
         // Confirm: replace optimistic with server responses
         const serverRows = (data as unknown as Row[]) ?? []
+
         set((prev) => {
           const records = new Map(prev.records)
 
@@ -921,23 +1091,372 @@ export function createTableStore<
           // Add server rows to records and order
           for (const serverRow of serverRows) {
             const serverId = rowId(serverRow)
+
             records.set(serverId, serverRow as TrackedRow<Row>)
             order.push(serverId)
           }
 
-          return { ...prev, records, order }
+          return { ...prev, order, records }
         })
 
         logger.mutationSuccess(table, "INSERT", Date.now() - start)
         persistIfConfigured()
+
         return serverRows as TrackedRow<Row>[]
       },
 
+      mergeRecords(rows) {
+        set((prev) => {
+          const records = new Map(prev.records)
+          const order = Array.from(prev.order)
+
+          for (const row of rows) {
+            const id = rowId(row as unknown as Row)
+
+            // Don't overwrite pending records
+            const existing = records.get(id)
+
+            if (existing?._anchor_pending) {continue}
+
+            const isNew = !records.has(id)
+
+            records.set(id, row as TrackedRow<Row>)
+
+            if (isNew) {order.push(id)}
+          }
+
+          return { ...prev, order, records }
+        })
+        persistIfConfigured()
+      },
+
+      async persist() {
+        persistIfConfigured()
+      },
+
+      async refetch() {
+        // Replay every live query, not just the one whose options were written
+        // last. `appLifecycle`'s foreground handler calls this for every stale
+        // store, so with a single slot, backgrounding an app with two screens
+        // on one table and reopening it refetched one of them and — under
+        // "replace" — evicted the other's rows.
+        if (liveQueryOptions.size === 0) {return await actions.fetch(undefined)}
+
+        const results = await Promise.all(
+          Array.from(liveQueryOptions.values(), async (opts) => await actions.fetch(opts)),
+        )
+
+
+        // The rows of the most recently registered query, matching what a
+        // single-query caller got before.
+        return results.at(-1) ?? []
+      },
+
+      // ── Local-only ────────────────────────────────────────────
+
+      releaseQuery(fetchOptions) {
+        const key = queryKey(actions.resolveFetchOptions(fetchOptions))
+        const next = (retainCounts.get(key) ?? 0) - 1
+
+        if (next > 0) {
+          retainCounts.set(key, next)
+
+          return
+        }
+
+        retainCounts.delete(key)
+        liveQueryOptions.delete(key)
+      },
+
+      async remove(rawId) {
+        assertNotView()
+
+        const id = normalizeId(rawId)
+        const start = Date.now()
+
+        logger.mutationStart(table, "DELETE")
+
+        // Snapshot for rollback
+        const snapshot = get().records.get(id)
+
+        // Optimistic remove
+        set((prev) => {
+          const records = new Map(prev.records)
+          const order = prev.order.filter((o) => o !== id)
+
+          records.delete(id)
+
+          return { ...prev, error: null, order, records }
+        })
+
+        // The row is already gone from `records` and `order`, so there is no
+        // pending tombstone to render and nothing for `selectQueryRows` to
+        // filter — a queued delete simply looks deleted until it drains, and
+        // `onRollback` puts the snapshot back if it never does.
+        const queueRemove = async () => { await enqueueWrite("DELETE", id, null, snapshot); }
+
+        if (mustQueue(id)) {
+          await queueRemove()
+
+          return
+        }
+
+        // Execute remote
+        const { error, status } = await applyPkFilters(
+          fromTable(supabase as unknown as SupabaseClient, table, schema).delete(),
+          primaryKeyArg,
+          id,
+        )
+
+        if (error) {
+          if (failedInTransit(error, status)) {
+            await queueRemove()
+
+            return
+          }
+
+
+          // Rollback — re-insert row into current order (preserves concurrent changes)
+          logger.mutationError(table, "DELETE", error.message)
+          set((prev) => {
+            const records = new Map(prev.records)
+            const order = Array.from(prev.order)
+
+            if (snapshot) {
+              records.set(id, snapshot)
+
+              if (!order.includes(id)) {order.push(id)}
+            }
+
+            return { ...prev, error: fromSupabaseError(error), order, records }
+          })
+
+          throw fromSupabaseError(error)
+        }
+
+        logger.mutationSuccess(table, "DELETE", Date.now() - start)
+        persistIfConfigured()
+      },
+
+      removeRecord(rawId) {
+        const id = normalizeId(rawId)
+
+        set((prev) => {
+          const records = new Map(prev.records)
+          const order = prev.order.filter((o) => o !== id)
+
+          records.delete(id)
+
+          return { ...prev, order, records }
+        })
+        persistIfConfigured()
+      },
+
+      /**
+       * Not queued either, and this one is a correctness rule rather than a
+       * shape mismatch. The optimistic pass below matches rows locally and is
+       * deliberately conservative — `default: return true` for every operator
+       * beyond `eq`/`neq`. That is safe for an optimistic hide the server
+       * immediately corrects, and unsafe as the basis of a replay: queuing it as
+       * N deletes-by-id would delete rows the server's own filter would have
+       * spared, permanently, with nothing to compare against by the time it runs.
+       */
+      async removeWhere(filters) {
+        assertNotView()
+
+        const start = Date.now()
+
+        logger.mutationStart(table, "DELETE")
+
+        // Find matching rows client-side for optimistic removal
+        const snapshots = new Map<string | number, TrackedRow<Row>>()
+        const current = get()
+
+        for (const [id, record] of current.records) {
+          const matches = filters.every((f) => {
+            const val = (record as Record<string, unknown>)[f.column]
+
+            switch (f.op) {
+              case "eq": { return val === f.value
+              }
+              case "neq": { return val !== f.value
+              }
+
+              default: { return true
+              } // conservative: assume match for complex ops
+            }
+          })
+
+          if (matches) {snapshots.set(id, record)}
+        }
+
+        // Optimistic remove
+        if (snapshots.size > 0) {
+          set((prev) => {
+            const records = new Map(prev.records)
+            const removedIds = new Set(snapshots.keys())
+            const order = prev.order.filter((o) => !removedIds.has(o))
+
+            for (const id of removedIds) {records.delete(id)}
+
+            return { ...prev, error: null, order, records }
+          })
+        }
+
+        // Execute remote DELETE with filters
+        let query = fromTable(supabase as unknown as SupabaseClient, table, schema).delete()
+
+        query = applyFilters(query, filters as any[])
+
+        const { error } = await query
+
+        if (error) {
+          logger.mutationError(table, "DELETE", error.message)
+
+          // Rollback — restore all snapshots
+          set((prev) => {
+            const records = new Map(prev.records)
+            const order = Array.from(prev.order)
+            const orderSet = new Set(order)
+
+            for (const [id, snapshot] of snapshots) {
+              records.set(id, snapshot)
+
+              if (!orderSet.has(id)) {
+                order.push(id)
+                orderSet.add(id)
+              }
+            }
+
+            return { ...prev, error: fromSupabaseError(error), order, records }
+          })
+
+          throw fromSupabaseError(error)
+        }
+
+        logger.mutationSuccess(table, "DELETE", Date.now() - start)
+        persistIfConfigured()
+      },
+
+      resolveFetchOptions(fetchOptions) {
+        return {
+          ...fetchOptions,
+          filters: mergeFilters(fetchOptions?.filters),
+          select: fetchOptions?.select ?? defaultSelect,
+          sort: fetchOptions?.sort ?? defaultSort,
+        }
+      },
+
+      // ── Realtime ──────────────────────────────────────────────
+      //
+      // These two were permanent no-ops returning `() => {}`, which made
+      // `hooks/useRealtime.ts`'s subscribe path and `appLifecycle`'s
+      // `pauseRealtimeOnBackground` do nothing at all while reporting success.
+      // Realtime only ever worked declaratively, through
+      // `createSupabaseStores({realtime: {enabled: true}})`.
+
+      retainQuery(fetchOptions) {
+        const key = queryKey(actions.resolveFetchOptions(fetchOptions))
+
+        retainCounts.set(key, (retainCounts.get(key) ?? 0) + 1)
+        liveQueryOptions.set(key, fetchOptions)
+
+        return key
+      },
+
+      setRecord(rawId, row) {
+        const id = normalizeId(rawId)
+
+        set((prev) => {
+          const records = new Map(prev.records)
+          const order = Array.from(prev.order)
+
+          records.set(id, row)
+
+          if (!prev.records.has(id)) {order.push(id)}
+
+          return { ...prev, order, records }
+        })
+        persistIfConfigured()
+      },
+
+      // ── Persistence ───────────────────────────────────────────
+
+      subscribe(filter) {
+        const manager = _realtimeManager as RealtimeManager | undefined
+
+        if (!manager) {
+          // Throwing beats returning a no-op: a caller who asked for realtime
+          // and silently got none has no way to find out, which is the whole
+          // bug this replaces.
+          throw new Error(
+            `[anchor:${table}] subscribe() needs the shared RealtimeManager, which only ` +
+              "createSupabaseStores() creates. Build the store with createSupabaseStores(), " +
+              "or call bindRealtimeToStore(manager, store, {...}) yourself.",
+          )
+        }
+
+        if (isView) {
+          // Postgres publishes changes under the underlying table's name, so a
+          // channel on a view's name never fires. Same reason
+          // `createSupabaseStores` skips realtime for views.
+          throw new Error(
+            `[anchor:${table}] is a view. Postgres publishes changes under the underlying ` +
+              "table's name, so a channel on a view never fires — subscribe to that table instead.",
+          )
+        }
+
+        if (isComposite) {
+          // `bindRealtimeToStore`/`RealtimeManager` take a single-column
+          // `primaryKey: string` — composite-key support here is scoped to
+          // the store's own CRUD/queue paths, not realtime.
+          throw new Error(
+            `[anchor:${table}] has a composite primary key (${pkColumns.join(", ")}); ` +
+              "realtime is not supported for composite-key tables.",
+          )
+        }
+
+        // One subscription per store: a second call replaces the first rather
+        // than leaving an orphaned channel nothing can reach.
+        realtimeCleanup?.()
+
+        const cleanup = bindRealtimeToStore(manager, storeRef!, {
+          conflict: conflictOpts,
+          events: realtimeOpts?.events,
+          filter: (filter ?? realtimeOpts?.filter) as FilterDescriptor[] | string | undefined,
+
+          getPendingMutations: (t) =>
+            (queue?.pendingMutations ?? []).filter((m) => m.table === t),
+
+          primaryKey: primaryKeyColumn,
+          schema,
+          select: realtimeOpts?.select,
+          table,
+        })
+
+        realtimeCleanup = () => {
+          cleanup()
+          realtimeCleanup = null
+        }
+
+        return realtimeCleanup
+      },
+
+      unsubscribe() {
+        realtimeCleanup?.()
+      },
+
+      // ── Queue (stub — implemented in offlineQueue) ────────────
+
       async update(rawId, changes) {
         assertNotView()
+
         const id = normalizeId(rawId)
+
         runValidation(validate?.update, changes, "update")
+
         const start = Date.now()
+
         logger.mutationStart(table, "UPDATE")
 
         // Unique ID for this mutation (used for compare-and-swap rollback)
@@ -950,20 +1469,22 @@ export function createTableStore<
         set((prev) => {
           const records = new Map(prev.records)
           const existing = records.get(id)
+
           if (existing) {
             records.set(id, {
               ...existing,
               ...(changes as Record<string, unknown>),
-              _anchor_pending: "update",
-              _anchor_optimistic: true,
               _anchor_mutationId: mutationId,
+              _anchor_optimistic: true,
+              _anchor_pending: "update",
             } as TrackedRow<Row>)
           }
-          return { ...prev, records, error: null }
+
+          return { ...prev, error: null, records }
         })
 
-        const queueUpdate = () =>
-          enqueueWrite("UPDATE", id, { ...(changes as object) }, snapshot)
+        const queueUpdate = async () =>
+          { await enqueueWrite("UPDATE", id, { ...(changes as object) }, snapshot); }
 
         /**
           * A queued update needs the row to be here, and this is the one place
@@ -984,11 +1505,13 @@ export function createTableStore<
           if (!canQueue()) {
             throw new AnchorError(
               `Cannot queue an update to "${table}" row ${String(id)}: the store does not hold it. ` +
-              `Fetch the row first, or write while online.`,
+              "Fetch the row first, or write while online.",
             )
           }
+
           await queueUpdate()
-          return get().records.get(id) as TrackedRow<Row>
+
+          return get().records.get(id)!
         }
 
         // Execute remote
@@ -1004,8 +1527,11 @@ export function createTableStore<
         if (error) {
           if (failedInTransit(error, status) && canQueue()) {
             await queueUpdate()
-            return get().records.get(id) as TrackedRow<Row>
+
+            return get().records.get(id)!
           }
+
+
           // Compare-and-swap rollback: only roll back if this mutation's
           // optimistic write is still the current value (not overwritten
           // by a concurrent mutation)
@@ -1013,36 +1539,46 @@ export function createTableStore<
           set((prev) => {
             const records = new Map(prev.records)
             const current = records.get(id)
+
             if (current?._anchor_mutationId === mutationId && snapshot) {
               records.set(id, snapshot)
             }
-            return { ...prev, records, error: fromSupabaseError(error) }
+
+            return { ...prev, error: fromSupabaseError(error), records }
           })
+
           throw fromSupabaseError(error)
         }
 
         // Confirm with server response
         set((prev) => {
           const records = new Map(prev.records)
-          const order = [...prev.order]
+          const order = Array.from(prev.order)
+
           records.set(id, data as unknown as TrackedRow<Row>)
+
+
           // An update by id on a row the store had not fetched leaves the
           // optimistic apply a no-op, so this is the first time the row exists
           // locally and nothing else would put it in `order` — where every
           // projection reads from.
-          if (!order.includes(id)) order.push(id)
-          return { ...prev, records, order }
+          if (!order.includes(id)) {order.push(id)}
+
+          return { ...prev, order, records }
         })
 
         logger.mutationSuccess(table, "UPDATE", Date.now() - start)
         persistIfConfigured()
+
         return data as unknown as TrackedRow<Row>
       },
 
       async upsert(row, options) {
         assertNotView()
         runValidation(validate?.insert, row, "upsert")
+
         const start = Date.now()
+
         logger.mutationStart(table, "UPSERT")
 
         // Optimistic apply with CAS mutation ID.
@@ -1072,12 +1608,13 @@ export function createTableStore<
           ? (pkColumns.every((c) => record[c] != null) ? encodeKey(record, primaryKeyArg) : undefined)
           : (record[primaryKeyColumn] as string | number | undefined)
         const optimisticId =
-          givenId ?? findByConflict(get().records, row, options?.onConflict) ?? createTempId()
+          givenId ?? lookupByConflict(get().records, row, options?.onConflict) ?? createTempId()
         const snapshot = get().records.get(optimisticId)
 
         set((prev) => {
           const records = new Map(prev.records)
-          const order = [...prev.order]
+          const order = Array.from(prev.order)
+
           records.set(optimisticId, {
             // Merged over the row it replaces, not substituted for it: an
             // upsert payload carries only the columns the caller is writing, so
@@ -1086,22 +1623,25 @@ export function createTableStore<
             ...(snapshot as object | undefined),
             ...(row as unknown as Row),
             ...(isComposite ? {} : { [primaryKeyColumn]: optimisticId }),
-            _anchor_pending: "update",
-            _anchor_optimistic: true,
             _anchor_mutationId: mutationId,
+            _anchor_optimistic: true,
+            _anchor_pending: "update",
           } as TrackedRow<Row>)
-          if (!prev.records.has(optimisticId)) order.push(optimisticId)
-          return { ...prev, records, order, error: null }
+
+          if (!prev.records.has(optimisticId)) {order.push(optimisticId)}
+
+          return { ...prev, error: null, order, records }
         })
 
         // `options` rides along, or the drain conflicts on the primary key and
         // writes a different row than this call would have.
-        const queueUpsert = () =>
-          enqueueWrite("UPSERT", optimisticId, { ...(row as object) }, snapshot, options)
+        const queueUpsert = async () =>
+          { await enqueueWrite("UPSERT", optimisticId, { ...(row as object) }, snapshot, options); }
 
         if (mustQueue(optimisticId)) {
           await queueUpsert()
-          return get().records.get(optimisticId) as TrackedRow<Row>
+
+          return get().records.get(optimisticId)!
         }
 
         const upsertQuery = fromTable(supabase as unknown as SupabaseClient, table, schema)
@@ -1118,27 +1658,37 @@ export function createTableStore<
         if (error) {
           if (failedInTransit(error, status)) {
             await queueUpsert()
-            return get().records.get(optimisticId) as TrackedRow<Row>
+
+            return get().records.get(optimisticId)!
           }
+
           logger.mutationError(table, "UPSERT", error.message)
+
           // Compare-and-swap rollback
           set((prev) => {
             const records = new Map(prev.records)
-            const order = [...prev.order]
+            const order = Array.from(prev.order)
             const current = records.get(optimisticId)
+
+
             // Only roll back if this mutation's write is still current
             if (current?._anchor_mutationId !== mutationId) {
               return { ...prev, error: fromSupabaseError(error) }
             }
+
             if (snapshot) {
               records.set(optimisticId, snapshot)
             } else {
               records.delete(optimisticId)
+
               const idx = order.indexOf(optimisticId)
-              if (idx >= 0) order.splice(idx, 1)
+
+              if (idx !== -1) {order.splice(idx, 1)}
             }
-            return { ...prev, records, order, error: fromSupabaseError(error) }
+
+            return { ...prev, error: fromSupabaseError(error), order, records }
           })
+
           throw fromSupabaseError(error)
         }
 
@@ -1151,20 +1701,24 @@ export function createTableStore<
           set((prev) => {
             const records = new Map(prev.records)
             const current = records.get(optimisticId)
+
             if (current?._anchor_mutationId === mutationId) {
               const {
-                _anchor_pending: _pending,
-                _anchor_optimistic: _optimistic,
                 _anchor_mutationId: _mutationId,
+                _anchor_optimistic: _optimistic,
+                _anchor_pending: _pending,
                 ...resolved
               } = current as Record<string, unknown>
+
               records.set(optimisticId, resolved as TrackedRow<Row>)
             }
+
             return { ...prev, records }
           })
           logger.mutationSuccess(table, "UPSERT", Date.now() - start)
           persistIfConfigured()
-          return get().records.get(optimisticId) as TrackedRow<Row>
+
+          return get().records.get(optimisticId)!
         }
 
         const serverRow = data as unknown as Row
@@ -1172,15 +1726,17 @@ export function createTableStore<
 
         set((prev) => {
           const records = new Map(prev.records)
-          const order = [...prev.order]
+          const order = Array.from(prev.order)
 
           // Clean up the optimistic entry when the server named a different id
           // — the temp-id path above, and any case where `onConflict` matched
           // no local row because its columns are outside `defaultSelect`.
           if (optimisticId !== id) {
             records.delete(optimisticId)
+
             const idx = order.indexOf(optimisticId)
-            if (idx >= 0) {
+
+            if (idx !== -1) {
               // Overwriting the slot is only safe while the server's id is not
               // already somewhere in `order`. When it is — the store held the
               // row and could not recognise it — the slot has to go, or `order`
@@ -1188,355 +1744,22 @@ export function createTableStore<
               // projection renders that row twice, with duplicate React keys,
               // until the next full fetch. `order` and `records` staying in
               // sync is the invariant the whole store rests on.
-              if (order.includes(id)) order.splice(idx, 1)
-              else order[idx] = id
+              if (order.includes(id)) {order.splice(idx, 1)}
+              else {order[idx] = id}
             }
           }
 
           records.set(id, serverRow as TrackedRow<Row>)
-          if (!order.includes(id)) order.push(id)
-          return { ...prev, records, order }
+
+          if (!order.includes(id)) {order.push(id)}
+
+          return { ...prev, order, records }
         })
 
         logger.mutationSuccess(table, "UPSERT", Date.now() - start)
         persistIfConfigured()
+
         return serverRow as TrackedRow<Row>
-      },
-
-      async remove(rawId) {
-        assertNotView()
-        const id = normalizeId(rawId)
-        const start = Date.now()
-        logger.mutationStart(table, "DELETE")
-
-        // Snapshot for rollback
-        const snapshot = get().records.get(id)
-
-        // Optimistic remove
-        set((prev) => {
-          const records = new Map(prev.records)
-          const order = prev.order.filter((o) => o !== id)
-          records.delete(id)
-          return { ...prev, records, order, error: null }
-        })
-
-        // The row is already gone from `records` and `order`, so there is no
-        // pending tombstone to render and nothing for `selectQueryRows` to
-        // filter — a queued delete simply looks deleted until it drains, and
-        // `onRollback` puts the snapshot back if it never does.
-        const queueRemove = () => enqueueWrite("DELETE", id, null, snapshot)
-
-        if (mustQueue(id)) {
-          await queueRemove()
-          return
-        }
-
-        // Execute remote
-        const { error, status } = await applyPkFilters(
-          fromTable(supabase as unknown as SupabaseClient, table, schema).delete(),
-          primaryKeyArg,
-          id,
-        )
-
-        if (error) {
-          if (failedInTransit(error, status)) {
-            await queueRemove()
-            return
-          }
-          // Rollback — re-insert row into current order (preserves concurrent changes)
-          logger.mutationError(table, "DELETE", error.message)
-          set((prev) => {
-            const records = new Map(prev.records)
-            const order = [...prev.order]
-            if (snapshot) {
-              records.set(id, snapshot)
-              if (!order.includes(id)) order.push(id)
-            }
-            return { ...prev, records, order, error: fromSupabaseError(error) }
-          })
-          throw fromSupabaseError(error)
-        }
-
-        logger.mutationSuccess(table, "DELETE", Date.now() - start)
-        persistIfConfigured()
-      },
-
-      /**
-       * Not queued either, and this one is a correctness rule rather than a
-       * shape mismatch. The optimistic pass below matches rows locally and is
-       * deliberately conservative — `default: return true` for every operator
-       * beyond `eq`/`neq`. That is safe for an optimistic hide the server
-       * immediately corrects, and unsafe as the basis of a replay: queuing it as
-       * N deletes-by-id would delete rows the server's own filter would have
-       * spared, permanently, with nothing to compare against by the time it runs.
-       */
-      async removeWhere(filters) {
-        assertNotView()
-        const start = Date.now()
-        logger.mutationStart(table, "DELETE")
-
-        // Find matching rows client-side for optimistic removal
-        const snapshots = new Map<string | number, TrackedRow<Row>>()
-        const current = get()
-        for (const [id, record] of current.records) {
-          const matches = filters.every((f) => {
-            const val = (record as Record<string, unknown>)[f.column as string]
-            switch (f.op) {
-              case "eq": return val === f.value
-              case "neq": return val !== f.value
-              default: return true // conservative: assume match for complex ops
-            }
-          })
-          if (matches) snapshots.set(id, record)
-        }
-
-        // Optimistic remove
-        if (snapshots.size > 0) {
-          set((prev) => {
-            const records = new Map(prev.records)
-            const removedIds = new Set(snapshots.keys())
-            const order = prev.order.filter((o) => !removedIds.has(o))
-            for (const id of removedIds) records.delete(id)
-            return { ...prev, records, order, error: null }
-          })
-        }
-
-        // Execute remote DELETE with filters
-        let query = fromTable(supabase as unknown as SupabaseClient, table, schema).delete()
-        query = applyFilters(query, filters as any[])
-        const { error } = await query
-
-        if (error) {
-          logger.mutationError(table, "DELETE", error.message)
-          // Rollback — restore all snapshots
-          set((prev) => {
-            const records = new Map(prev.records)
-            const order = [...prev.order]
-            for (const [id, snapshot] of snapshots) {
-              records.set(id, snapshot)
-              if (!order.includes(id)) order.push(id)
-            }
-            return { ...prev, records, order, error: fromSupabaseError(error) }
-          })
-          throw fromSupabaseError(error)
-        }
-
-        logger.mutationSuccess(table, "DELETE", Date.now() - start)
-        persistIfConfigured()
-      },
-
-      // ── Local-only ────────────────────────────────────────────
-
-      setRecord(rawId, row) {
-        const id = normalizeId(rawId)
-        set((prev) => {
-          const records = new Map(prev.records)
-          const order = [...prev.order]
-          records.set(id, row)
-          if (!prev.records.has(id)) order.push(id)
-          return { ...prev, records, order }
-        })
-        persistIfConfigured()
-      },
-
-      removeRecord(rawId) {
-        const id = normalizeId(rawId)
-        set((prev) => {
-          const records = new Map(prev.records)
-          const order = prev.order.filter((o) => o !== id)
-          records.delete(id)
-          return { ...prev, records, order }
-        })
-        persistIfConfigured()
-      },
-
-      clearAll() {
-        // Cancel any pending debounced persist to avoid re-persisting stale data
-        if (persistTimer) {
-          clearTimeout(persistTimer)
-          persistTimer = null
-        }
-        forgetQueries()
-        set({
-          records: new Map(),
-          order: [],
-          queries: new Map(),
-          error: null,
-          lastFetchedAt: null,
-        } as Partial<TableStore<Row, InsertRow, UpdateRow>>)
-        if (persistence) {
-          persistence.adapter
-            .removeItem(persistenceKey)
-            .catch((err) => {
-              logger.mutationError(table, "PERSIST" as any, err instanceof Error ? err.message : String(err))
-            })
-        }
-      },
-
-      mergeRecords(rows) {
-        set((prev) => {
-          const records = new Map(prev.records)
-          const order = [...prev.order]
-          for (const row of rows) {
-            const id = rowId(row as unknown as Row)
-            // Don't overwrite pending records
-            const existing = records.get(id)
-            if (existing?._anchor_pending) continue
-            const isNew = !records.has(id)
-            records.set(id, row as TrackedRow<Row>)
-            if (isNew) order.push(id)
-          }
-          return { ...prev, records, order }
-        })
-        persistIfConfigured()
-      },
-
-      async clearAndFetch(fetchOpts) {
-        // Clear records
-        if (persistTimer) {
-          clearTimeout(persistTimer)
-          persistTimer = null
-        }
-        forgetQueries()
-        set({
-          records: new Map(),
-          order: [],
-          queries: new Map(),
-          error: null,
-          lastFetchedAt: null,
-        } as Partial<TableStore<Row, InsertRow, UpdateRow>>)
-        if (persistence) {
-          persistence.adapter
-            .removeItem(persistenceKey)
-            .catch((err) => {
-              logger.mutationError(table, "PERSIST" as any, err instanceof Error ? err.message : String(err))
-            })
-        }
-        // Fetch with replace strategy forced
-        return actions.fetch({ ...fetchOpts, cacheStrategy: "replace" })
-      },
-
-      // ── Realtime ──────────────────────────────────────────────
-      //
-      // These two were permanent no-ops returning `() => {}`, which made
-      // `hooks/useRealtime.ts`'s subscribe path and `appLifecycle`'s
-      // `pauseRealtimeOnBackground` do nothing at all while reporting success.
-      // Realtime only ever worked declaratively, through
-      // `createSupabaseStores({realtime: {enabled: true}})`.
-
-      subscribe(filter) {
-        const manager = _realtimeManager as RealtimeManager | undefined
-        if (!manager) {
-          // Throwing beats returning a no-op: a caller who asked for realtime
-          // and silently got none has no way to find out, which is the whole
-          // bug this replaces.
-          throw new Error(
-            `[anchor:${table}] subscribe() needs the shared RealtimeManager, which only ` +
-              `createSupabaseStores() creates. Build the store with createSupabaseStores(), ` +
-              `or call bindRealtimeToStore(manager, store, {...}) yourself.`,
-          )
-        }
-        if (isView) {
-          // Postgres publishes changes under the underlying table's name, so a
-          // channel on a view's name never fires. Same reason
-          // `createSupabaseStores` skips realtime for views.
-          throw new Error(
-            `[anchor:${table}] is a view. Postgres publishes changes under the underlying ` +
-              `table's name, so a channel on a view never fires — subscribe to that table instead.`,
-          )
-        }
-        if (isComposite) {
-          // `bindRealtimeToStore`/`RealtimeManager` take a single-column
-          // `primaryKey: string` — composite-key support here is scoped to
-          // the store's own CRUD/queue paths, not realtime.
-          throw new Error(
-            `[anchor:${table}] has a composite primary key (${pkColumns.join(", ")}); ` +
-              `realtime is not supported for composite-key tables.`,
-          )
-        }
-
-        // One subscription per store: a second call replaces the first rather
-        // than leaving an orphaned channel nothing can reach.
-        realtimeCleanup?.()
-
-        const cleanup = bindRealtimeToStore(manager, storeRef!, {
-          table,
-          schema,
-          primaryKey: primaryKeyColumn,
-          events: realtimeOpts?.events,
-          filter: (filter ?? realtimeOpts?.filter) as FilterDescriptor[] | string | undefined,
-          select: realtimeOpts?.select,
-          conflict: conflictOpts,
-          getPendingMutations: (t) =>
-            (queue?.pendingMutations ?? []).filter((m) => m.table === t),
-        })
-
-        realtimeCleanup = () => {
-          cleanup()
-          realtimeCleanup = null
-        }
-        return realtimeCleanup
-      },
-
-      unsubscribe() {
-        realtimeCleanup?.()
-      },
-
-      // ── Persistence ───────────────────────────────────────────
-
-      async hydrate() {
-        if (!persistence) return
-
-        set({ isRestoring: true } as Partial<
-          TableStore<Row, InsertRow, UpdateRow>
-        >)
-
-        try {
-          const key = persistenceKey
-          const data = await persistence.adapter.getItem<Row[]>(key)
-
-          if (data && Array.isArray(data)) {
-            const { records, order } = rowsToMap(data)
-            set({
-              records,
-              order,
-              isHydrated: true,
-              isRestoring: false,
-            } as Partial<TableStore<Row, InsertRow, UpdateRow>>)
-          } else {
-            set({ isHydrated: true, isRestoring: false } as Partial<
-              TableStore<Row, InsertRow, UpdateRow>
-            >)
-          }
-        } catch (err) {
-          logger.fetchError(table, `Hydration failed: ${err instanceof Error ? err.message : String(err)}`)
-          set({
-            isHydrated: true,
-            isRestoring: false,
-            error: err instanceof Error ? err : new Error(String(err)),
-          } as Partial<TableStore<Row, InsertRow, UpdateRow>>)
-        }
-      },
-
-      async persist() {
-        persistIfConfigured()
-      },
-
-      // ── Queue (stub — implemented in offlineQueue) ────────────
-
-      async flushQueue() {
-        if (_queue) {
-          const q = _queue as import("./mutation/offlineQueue.js").OfflineQueue
-          await q.flush()
-        }
-      },
-
-      getQueueSize() {
-        if (_queue) {
-          const q = _queue as import("./mutation/offlineQueue.js").OfflineQueue
-          return q.pendingMutations.filter((m) => m.table === table).length
-        }
-        return 0
       },
     }
 
@@ -1569,6 +1792,7 @@ export function createTableStore<
       typeof devtoolsOption === "object"
         ? devtoolsOption.name ?? `anchor:${table}`
         : `anchor:${table}`
+
     combinedCreator = devtools(combinedCreator, { name: devtoolsName })
   }
 
@@ -1577,27 +1801,30 @@ export function createTableStore<
   }
 
   const store = createStore<TableStore<Row, InsertRow, UpdateRow> & Extensions>()(
-    combinedCreator as any,
+    combinedCreator,
   )
+
   storeRef = store
 
   // Auto-hydrate if persistence configured
   if (persistence) {
-    store.getState().hydrate()
+    void store.getState().hydrate()
   }
 
   // Set up cross-tab sync if configured
   if (options.crossTab?.enabled) {
-    import("./sync/crossTabSync.js").then(({ setupCrossTabSync }) => {
+    void import("./sync/crossTabSync.js").then(({ setupCrossTabSync }) => {
       const cleanup = setupCrossTabSync(
         store as any,
         options.crossTab!.name ?? `${schema}:${table}`,
         options.crossTab!.sessionId,
       )
+
+
       // Attach cleanup so createSupabaseStores._destroy() can call it
       ;(store as any)._destroyCrossTab = cleanup
-    }).catch((err) => {
-      logger.fetchError(table, `Cross-tab sync setup failed: ${err instanceof Error ? err.message : String(err)}`)
+    }).catch((error: unknown) => {
+      logger.fetchError(table, `Cross-tab sync setup failed: ${error instanceof Error ? error.message : String(error)}`)
     })
   }
 

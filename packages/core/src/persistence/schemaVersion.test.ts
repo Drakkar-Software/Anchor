@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach } from "vitest"
+import { beforeEach,describe, expect, it } from "vitest"
+
 import { MemoryAdapter } from "./persistenceAdapter.js"
 import { checkSchemaVersion, getSchemaVersion, setSchemaVersion } from "./schemaVersion.js"
 
@@ -12,6 +13,7 @@ describe("schemaVersion", () => {
   describe("checkSchemaVersion", () => {
     it("returns no change on first run and stores version", async () => {
       const result = await checkSchemaVersion(adapter, 1)
+
       expect(result.versionChanged).toBe(true)
       expect(result.previousVersion).toBeNull()
       expect(await getSchemaVersion(adapter)).toBe(1)
@@ -19,7 +21,9 @@ describe("schemaVersion", () => {
 
     it("returns no change when version matches", async () => {
       await setSchemaVersion(adapter, 2)
+
       const result = await checkSchemaVersion(adapter, 2)
+
       expect(result.versionChanged).toBe(false)
       expect(result.previousVersion).toBe(2)
     })
@@ -31,6 +35,7 @@ describe("schemaVersion", () => {
       await adapter.setItem("anchor:__mutation_queue", [{ id: "m1" }])
 
       const result = await checkSchemaVersion(adapter, 2)
+
       expect(result.versionChanged).toBe(true)
       expect(result.previousVersion).toBe(1)
 
@@ -58,6 +63,7 @@ describe("schemaVersion", () => {
       await adapter.setItem("anchor:public:todos", [{ id: 1 }])
 
       const result = await checkSchemaVersion(adapter, 3)
+
       expect(result.versionChanged).toBe(true)
       expect(result.previousVersion).toBe(5)
       expect(await adapter.getItem("anchor:public:todos")).toBeNull()
@@ -81,6 +87,7 @@ describe("schemaVersion", () => {
       await setSchemaVersion(adapter, 5)
 
       expect(await getSchemaVersion(adapter)).toBe(5)
+
       // Data should not be cleared
       expect(await adapter.getItem("anchor:public:todos")).toEqual([{ id: 1 }])
     })
