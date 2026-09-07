@@ -1,0 +1,4 @@
+{
+  "name": "Anchor",
+  "install": "pnpm install --frozen-lockfile && pnpm build"
+}
