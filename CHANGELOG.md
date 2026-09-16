@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.4.1] - 2026-09-16
+
 ### Fixed
 
 - **Adapter npm publish** no longer runs `npm pkg set "dependencies.@drakkar.software/anchor=$VERSION"`.
@@ -9,9 +11,10 @@
   `"dependencies": { "@drakkar": { "software/anchor": "…" } }` — a non-string
   spec — and `npm publish` failed with `must provide string spec` after core
   3.4.0 had already landed. Adapters already declare a `peerDependency` on
-  core. Tag version rewrite is now `version` only, matching core. The
-  publish workflow can be re-run via `workflow_dispatch`; an already-published
-  version is skipped so core 3.4.0 does not block the adapters.
+  core; they were never added as a `dependencies` field. Tag version rewrite
+  is now `version` only, matching core. Already-published versions are
+  skipped. Adapters never reached npm at 3.4.0; this patch is the republish
+  line (`v3.4.1`). Core 3.4.0 stays on the registry.
 
 ## [3.4.0] - 2026-09-16
 

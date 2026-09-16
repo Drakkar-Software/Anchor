@@ -1,8 +1,8 @@
 # Anchor, LLM reference
 
-Machine-oriented reference for `@drakkar.software/anchor` (core, v3.4.0) and its two
+Machine-oriented reference for `@drakkar.software/anchor` (core, v3.4.1) and its two
 adapter packages, `@drakkar.software/anchor-adapter-web` and
-`@drakkar.software/anchor-adapter-react-native` (both v3.4.0). Written for a model
+`@drakkar.software/anchor-adapter-react-native` (both v3.4.1). Written for a model
 generating or reviewing Anchor code, not for a human onboarding: no narrative, no
 marketing language, one fact per line, every claim sourced from `packages/*/src`.
 
