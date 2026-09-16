@@ -47,6 +47,7 @@ export type {
   SupabaseStores,
   // Logger
   SyncLogger,
+  TableFreshness,
   TableInsert,
   TableNames,
   TableRow,

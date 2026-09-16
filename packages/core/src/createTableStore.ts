@@ -53,6 +53,7 @@ export function createTableStore<
     defaultQueryFn,
     defaultSelect,
     defaultSort,
+    freshness = "local-first",
     devtools: devtoolsOption,
     extend,
     immer: immerMiddleware,
@@ -418,6 +419,7 @@ export function createTableStore<
 
     const initialState: TableStoreState<Row> = {
       error: null,
+      freshness,
       isHydrated: false,
       isLoading: false,
       isRestoring: false,

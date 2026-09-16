@@ -336,9 +336,27 @@ export type TableStoreActions<
   upsert: (row: InsertRow, options?: UpsertOptions) => Promise<TrackedRow<Row>>
 }
 
+/**
+ * Per-table read policy for `useQuery`.
+ *
+ * `"local-first"` (default): omit `staleTime` on `useQuery` and it stays at
+ * 5000 ms — skip a remount fetch while this query is still fresh.
+ *
+ * `"server"`: the network is authoritative. `useQuery` defaults `staleTime`
+ * to `0` so every mount refetches; a successful result overwrites in-memory
+ * and persisted rows. An explicit hook `staleTime` still wins.
+ */
+export type TableFreshness = "local-first" | "server"
+
 export type TableStoreState<Row> = {
   /** Error from the last operation on any query */
   error: Error | null
+
+  /**
+   * Read freshness for this store. Set at construction; `useQuery` reads it
+   * when the caller omits `staleTime`.
+   */
+  freshness: TableFreshness
 
   /** Whether initial data has been hydrated from persistence */
   isHydrated: boolean
@@ -851,6 +869,7 @@ export type CreateSupabaseStoresOptions<
         defaultQueryFn?: (builder: unknown) => unknown
         defaultSelect?: string
         defaultSort?: SortDescriptor[]
+        freshness?: TableFreshness
         primaryKey?: string | string[]
         realtime?: {
           enabled?: boolean
@@ -892,6 +911,7 @@ export type CreateSupabaseStoresOptions<
         defaultQueryFn?: (builder: unknown) => unknown
         defaultSelect?: string
         defaultSort?: SortDescriptor[]
+        freshness?: TableFreshness
         primaryKey?: string
       }
     >
@@ -968,6 +988,15 @@ export type CreateTableStoreOptions<
   defaultSelect?: string
 
   defaultSort?: SortDescriptor<Row>[]
+
+  /**
+   * Read freshness for `useQuery` on this store.
+   *
+   * `"local-first"` (default): today's 5s `staleTime` when the hook omits one.
+   * `"server"`: default `staleTime` to `0` so mount always refetches; successful
+   * network data overwrites local + persisted rows. Hook `staleTime` still wins.
+   */
+  freshness?: TableFreshness
 
   devtools?: boolean | { name?: string }
 

@@ -24,11 +24,13 @@ import type { StoreApi } from "zustand"
 import type { VerifyOtpParams as AnchorVerifyOtpParams } from "./auth/authCallbacks.js"
 import { createSchemaRpc, type RpcResult } from "./rpc/rpcAction.js"
 import type {
+  CreateTableStoreOptions,
   ExtractSchema,
   FunctionNames,
   RpcArgs,
   RpcReturns,
   SupabaseStores,
+  TableFreshness,
   TableNames,
   TableRow,
   TableStore,
@@ -360,4 +362,33 @@ export async function _upsertOptionsProbe(
   // supabase-js takes it — an array is the shape people reach for first.
   // @ts-expect-error - onConflict is a string, not string[]
   await actions.upsert({ pain: 3 }, { onConflict: ["journey_id", "date"] })
+}
+
+/**
+ * `freshness` is a closed enum on store construction. A typo must fail `tsc`,
+ * not fall through as `string`.
+ *
+ * Never called. Exported so `noUnusedLocals` keeps it.
+ */
+export function _freshnessOptionsProbe(
+  options: CreateTableStoreOptions<
+    unknown,
+    { id: string },
+    { id: string },
+    { id?: string }
+  >,
+): TableFreshness {
+  const fromOptions: TableFreshness = options.freshness ?? "local-first"
+  const server: TableFreshness = "server"
+  const local: TableFreshness = "local-first"
+
+  void server
+  void local
+
+  // @ts-expect-error - "remote" is not a TableFreshness
+  const bad: TableFreshness = "remote"
+
+  void bad
+
+  return fromOptions
 }
