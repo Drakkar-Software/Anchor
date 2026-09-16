@@ -51,16 +51,18 @@ describe("useQuery", () => {
   }
 
   function Rows({ options, store }: { options?: any; store: any; }) {
-    const { count, data, error, isLoading } = useQuery<Todo, any, any>(store, options)
+    const { count, data, error, isLoading } = useQuery<any, any, any>(store, options)
+    const first = data[0] as { id?: unknown; status?: string; title?: string; user_id?: unknown } | undefined
 
     return (
       <div>
         <span data-testid="loading">{String(isLoading)}</span>
         <span data-testid="error">{error?.message ?? "none"}</span>
         <span data-testid="count">{String(count)}</span>
+        <span data-testid="status">{first?.status ?? "none"}</span>
         <ul data-testid="rows">
-          {data.map((row) => (
-            <li key={row.id}>{row.title}</li>
+          {data.map((row: { id?: unknown; status?: string; title?: string; user_id?: unknown }) => (
+            <li key={String(row.id ?? row.user_id)}>{row.title ?? row.status}</li>
           ))}
         </ul>
       </div>
@@ -204,7 +206,9 @@ describe("useQuery", () => {
 
   it("does not refetch on remount inside the default staleTime window", async () => {
     const store = createStore()
+
     let fetches = 0
+
     const realFetch = store.getState().fetch
 
     store.setState({
@@ -230,18 +234,6 @@ describe("useQuery", () => {
       user_id: string
     }
 
-    function VerificationRows({ options, store }: { options?: any; store: any }) {
-      const { data, error } = useQuery<Verification, any, any>(store, options)
-      const row = data[0]
-
-      return (
-        <div>
-          <span data-testid="status">{row?.status ?? "none"}</span>
-          <span data-testid="error">{error?.message ?? "none"}</span>
-        </div>
-      )
-    }
-
     it("refetches a hydrated stale row and persists the server result", async () => {
       const adapter = new MemoryAdapter()
 
@@ -265,7 +257,7 @@ describe("useQuery", () => {
       expect(store.getState().records.get("u1")?.status).toBe("pending")
 
       render(
-        <VerificationRows
+        <Rows
           options={{ filters: [eq<Verification, "user_id">("user_id", "u1")] }}
           store={store}
         />,
@@ -289,7 +281,9 @@ describe("useQuery", () => {
         supabase,
         table: "todos",
       })
+
       let fetches = 0
+
       const realFetch = store.getState().fetch
 
       store.setState({
@@ -335,7 +329,7 @@ describe("useQuery", () => {
       await store.getState().hydrate()
 
       render(
-        <VerificationRows
+        <Rows
           options={{ filters: [eq<Verification, "user_id">("user_id", "u1")] }}
           store={store}
         />,
