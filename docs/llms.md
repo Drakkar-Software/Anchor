@@ -198,6 +198,14 @@ type CreateTableStoreOptions<DB, Row, InsertRow, UpdateRow, Extensions = Record<
 
   cacheStrategy?: CacheStrategy                // "replace" (default) | "merge"
 
+  /**
+   * Read policy for `useQuery`. `"local-first"` (default): hook `staleTime`
+   * defaults to 5000. `"server"`: hook `staleTime` defaults to 0 so every mount
+   * refetches; successful network data overwrites local + persisted rows.
+   * Explicit `useQuery(..., { staleTime })` always wins.
+   */
+  freshness?: TableFreshness                   // "local-first" (default) | "server"
+
   persistence?: { adapter: PersistenceAdapter; key?: string }  // key default: `anchor:${schema}:${table}`
 
   // Require createSupabaseStores(), console.warn and no-op otherwise:
@@ -305,6 +313,7 @@ type CreateSupabaseStoresOptions<DB, SchemaName = "public"> = {
     realtime?: { enabled?: boolean; events?: RealtimeEvent[]; filter?: string | FilterDescriptor[]; select?: string[] }
     conflict?: ConflictConfig
     cacheStrategy?: CacheStrategy
+    freshness?: TableFreshness               // "local-first" (default) | "server"
   }>>
 
   viewOptions?: Partial<Record<ViewNames<DB, SchemaName>, {
@@ -314,6 +323,7 @@ type CreateSupabaseStoresOptions<DB, SchemaName = "public"> = {
     defaultSelect?: string
     defaultQueryFn?: (builder: unknown) => unknown
     cacheStrategy?: CacheStrategy
+    freshness?: TableFreshness               // "local-first" (default) | "server"
   }>>
 
   tableOrder?: TableNames<DB, SchemaName>[]
@@ -384,12 +394,15 @@ which `useQuery` calls internally, so a store built this way **cannot be read wi
 ## Store state and actions
 
 ```typescript
+type TableFreshness = "local-first" | "server"
+
 type TableStoreState<Row> = {
   records: Map<string | number, TrackedRow<Row>>
   order: (string | number)[]
   queries: Map<string, QueryEntry>            // keyed by queryKey(); see Query layer
   isLoading: boolean                          // table-wide: whichever query fetched last
   error: Error | null
+  freshness: TableFreshness                   // construction-time; `useQuery` reads when staleTime omitted
   isHydrated: boolean
   isRestoring: boolean                        // true while restoring from persistence
   lastFetchedAt: number | null
@@ -869,7 +882,7 @@ their first argument; a few take a `SupabaseClient` directly.
 
 | Hook | Signature | Notes |
 |---|---|---|
-| `useQuery(store, options?)` | `options: FetchOptions<Row> & { deps?, enabled?, refetchInterval?, staleTime? (default 5000) }` → `{ data, isLoading, error, count, refetch, isHydrated }` | Keyed by `queryKey`; retains/releases the query for `refetch()`. |
+| `useQuery(store, options?)` | `options: FetchOptions<Row> & { deps?, enabled?, refetchInterval?, staleTime? }` → `{ data, isLoading, error, count, refetch, isHydrated }` | Keyed by `queryKey`; retains/releases the query for `refetch()`. `staleTime` default 5000, or 0 when the store's `freshness` is `"server"`. Explicit `staleTime` always wins. |
 | `useMutation(store)` | → `{ insert, insertMany, update, upsert, remove, removeWhere, isLoading, error }` | Thin wrapper over the store's own mutators plus loading/error tracking. |
 | `createTableHook(store)` | → overloaded `useHook(): State` / `useHook(selector): Selected` | Selector-based, like a scoped `useStore`. |
 | `useRecords(store)` | → `TrackedRow<Row>[]` | All rows in `order`. |
@@ -1093,6 +1106,12 @@ setupMultiDeviceSync(supabase, stores, {
   function.
 - `checkSchemaVersion`'s mismatch path clears the offline mutation queue and temp-id map
   too, since they share the `anchor:` key prefix.
+- `freshness: "server"` does not enable realtime and does not skip persistence. It only
+  changes the default `useQuery` `staleTime` to 0. Hydrate still paints persisted rows
+  until the refetch succeeds. A failed refetch leaves those rows and sets `error`.
+- Do not reach for `useLinkedQuery({ staleTime: 0, mergeToStore })` on a simple PK table
+  that another actor updates; set `tableOptions[table].freshness: "server"` and use
+  `useQuery`. Keep `useLinkedQuery` for joins and custom selects.
 
 ## Recipes
 
@@ -1129,6 +1148,28 @@ function TodoList() {
   )
 }
 ```
+
+### Server-authoritative table
+
+```typescript
+const stores = createSupabaseStores<Database>({
+  supabase,
+  tables: ['user_verifications'],
+  persistence: { adapter: new LocalStorageAdapter() },
+  tableOptions: {
+    user_verifications: { primaryKey: 'user_id', freshness: 'server' },
+  },
+})
+
+const { data, error } = useQuery(stores.user_verifications, {
+  filters: [eq('user_id', userId)],
+  enabled: !!userId,
+})
+```
+
+Hydrated cache may paint first. Successful fetch overwrites store + persistence.
+`useQuery(..., { staleTime: 60_000 })` overrides the table default. Not a substitute
+for `useRealtime` while the screen stays open.
 
 ### Auth-gated stores with callback handling
 
@@ -1211,6 +1252,7 @@ const cleanup = await setupBackgroundSync(
 | Task | API |
 |---|---|
 | Render a filtered/sorted list, reactive | `useQuery(store, { filters, sort })` |
+| Server-authoritative / admin-mutated status row | `tableOptions[table].freshness: "server"` then `useQuery` |
 | Insert/update/delete with optimistic UI | `useMutation(store)` |
 | A list backed by a join or complex select | `views:` in `createSupabaseStores`, or `useLinkedQuery` if it needs to stay outside the store model |
 | Cursor-based infinite scroll | `useInfiniteQuery(supabase, options)` (bypasses the store) |

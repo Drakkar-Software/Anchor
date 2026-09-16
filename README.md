@@ -247,6 +247,37 @@ const { data, isLoading, error, refetch, isHydrated } = useQuery(
 )
 ```
 
+#### Server-authoritative tables
+
+Offline-first is the default. For a row another session or backend job can
+change (moderation status, billing, role grants), mark the table so
+`useQuery` always refetches on mount and the network result overwrites
+persisted cache:
+
+```tsx
+const stores = createSupabaseStores<Database>({
+  supabase,
+  tables: ['user_verifications'],
+  persistence: { adapter: new LocalStorageAdapter() },
+  tableOptions: {
+    user_verifications: {
+      primaryKey: 'user_id',
+      freshness: 'server',
+    },
+  },
+})
+
+const { data, error } = useQuery(stores.user_verifications, {
+  filters: [eq('user_id', userId)],
+  enabled: !!userId,
+})
+```
+
+Hydrated rows may paint for one frame (stale-while-revalidate). After a
+successful fetch, store, UI, and persistence hold the server row. Pass
+`staleTime` on the hook to override the table default. `useLinkedQuery`
+remains the right tool for joins and custom selects.
+
 #### `useMutation(store)`
 
 Type-safe mutations with loading/error tracking.

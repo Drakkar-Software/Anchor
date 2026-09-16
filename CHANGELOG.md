@@ -4,6 +4,20 @@
 
 ### Added
 
+- **`tableOptions.freshness: "local-first" | "server"`** (also on
+  `createTableStore` / `viewOptions`). Default `"local-first"` keeps today's
+  `useQuery` 5s `staleTime`. `"server"` is for rows another actor owns after
+  the local write (admin moderation, billing webhooks, role grants):
+  `useQuery` defaults `staleTime` to `0`, so every mount refetches and a
+  successful result overwrites in-memory and persisted rows. An explicit
+  `useQuery(..., { staleTime })` still wins. Instant paint from hydrate is
+  unchanged (stale-while-revalidate). Opt-in; unmarked tables are unchanged.
+
+  Consumers that currently paper over this with `useLinkedQuery({ staleTime: 0,
+  mergeToStore })` on a simple PK table (e.g. Aesthemedstaff
+  `user_verifications`) can switch to `freshness: "server"` and `useQuery`
+  after bumping Anchor.
+
 - **ESLint via [`eslint-config-hardcore`](https://github.com/EvgenyOrekhov/eslint-config-hardcore)**
   across publishable packages (`pnpm lint` / per-package `lint`). Configs chosen
   per package: `core` extends `hardcore` + `ts` + `react` + `react-performance` +

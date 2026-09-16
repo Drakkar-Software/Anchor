@@ -5,6 +5,7 @@ import { beforeEach,describe, expect, it } from "vitest"
 
 import { createMockSupabase } from "../__tests__/mockSupabase.js"
 import { createTableStore } from "../createTableStore.js"
+import { MemoryAdapter } from "../persistence/persistenceAdapter.js"
 import { eq } from "../query/filters.js"
 import { useQuery } from "./useQuery.js"
 
@@ -199,5 +200,151 @@ describe("useQuery", () => {
 
     // The entry may remain, but nothing re-requested it.
     expect(supabase._tables.todos).toHaveLength(3)
+  })
+
+  it("does not refetch on remount inside the default staleTime window", async () => {
+    const store = createStore()
+    let fetches = 0
+    const realFetch = store.getState().fetch
+
+    store.setState({
+      fetch: async (opts?: any) => {
+        fetches++
+
+        return await realFetch(opts)
+      },
+    } as any)
+
+    const { unmount } = render(<Rows store={store} />)
+
+    await waitFor(() => expect(fetches).toBe(1))
+    unmount()
+    render(<Rows store={store} />)
+    await waitFor(() => expect(titles()).toHaveLength(3))
+    expect(fetches).toBe(1)
+  })
+
+  describe("freshness: server", () => {
+    type Verification = {
+      status: string
+      user_id: string
+    }
+
+    function VerificationRows({ options, store }: { options?: any; store: any }) {
+      const { data, error } = useQuery<Verification, any, any>(store, options)
+      const row = data[0]
+
+      return (
+        <div>
+          <span data-testid="status">{row?.status ?? "none"}</span>
+          <span data-testid="error">{error?.message ?? "none"}</span>
+        </div>
+      )
+    }
+
+    it("refetches a hydrated stale row and persists the server result", async () => {
+      const adapter = new MemoryAdapter()
+
+      await adapter.setItem("anchor:public:user_verifications", [
+        { status: "pending", user_id: "u1" },
+      ])
+
+      supabase = createMockSupabase({
+        user_verifications: [{ status: "rejected", user_id: "u1" }],
+      })
+
+      const store = createTableStore<any, Verification, Partial<Verification>, Partial<Verification>>({
+        freshness: "server",
+        persistence: { adapter },
+        primaryKey: "user_id",
+        supabase,
+        table: "user_verifications",
+      })
+
+      await store.getState().hydrate()
+      expect(store.getState().records.get("u1")?.status).toBe("pending")
+
+      render(
+        <VerificationRows
+          options={{ filters: [eq<Verification, "user_id">("user_id", "u1")] }}
+          store={store}
+        />,
+      )
+
+      await waitFor(() =>
+        expect(screen.getByTestId("status").textContent).toBe("rejected"),
+      )
+      expect(store.getState().records.get("u1")?.status).toBe("rejected")
+
+      await waitFor(async () => {
+        const persisted = await adapter.getItem<Verification[]>("anchor:public:user_verifications")
+
+        expect(persisted?.[0]?.status).toBe("rejected")
+      })
+    })
+
+    it("lets an explicit hook staleTime skip the table default refetch", async () => {
+      const store = createTableStore<any, Todo, Partial<Todo>, Partial<Todo>>({
+        freshness: "server",
+        supabase,
+        table: "todos",
+      })
+      let fetches = 0
+      const realFetch = store.getState().fetch
+
+      store.setState({
+        fetch: async (opts?: any) => {
+          fetches++
+
+          return await realFetch(opts)
+        },
+      } as any)
+
+      const { unmount } = render(<Rows options={{ staleTime: 60_000 }} store={store} />)
+
+      await waitFor(() => expect(fetches).toBe(1))
+      unmount()
+      render(<Rows options={{ staleTime: 60_000 }} store={store} />)
+      await waitFor(() => expect(titles()).toHaveLength(3))
+      expect(fetches).toBe(1)
+    })
+
+    it("surfaces a mount refetch error instead of leaving stale rows silent", async () => {
+      const adapter = new MemoryAdapter()
+
+      await adapter.setItem("anchor:public:user_verifications", [
+        { status: "pending", user_id: "u1" },
+      ])
+
+      supabase = createMockSupabase({
+        user_verifications: [{ status: "pending", user_id: "u1" }],
+      })
+      supabase._setError("user_verifications", "select", {
+        code: "57014",
+        message: "statement timeout",
+      })
+
+      const store = createTableStore<any, Verification, Partial<Verification>, Partial<Verification>>({
+        freshness: "server",
+        persistence: { adapter },
+        primaryKey: "user_id",
+        supabase,
+        table: "user_verifications",
+      })
+
+      await store.getState().hydrate()
+
+      render(
+        <VerificationRows
+          options={{ filters: [eq<Verification, "user_id">("user_id", "u1")] }}
+          store={store}
+        />,
+      )
+
+      await waitFor(() =>
+        expect(screen.getByTestId("error").textContent).toBe("statement timeout"),
+      )
+      expect(screen.getByTestId("status").textContent).toBe("pending")
+    })
   })
 })

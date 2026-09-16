@@ -149,4 +149,33 @@ describe("createSupabaseStores", () => {
     // Store should be empty since we didn't fetch on boot
     expect(stores.todos.getState().records.size).toBe(0)
   })
+
+  it("threads tableOptions.freshness onto the store", () => {
+    const supabase = createMockSupabase({
+      todos: [{ id: 1, title: "A" }],
+    })
+
+    const stores = createSupabaseStores<any>({
+      fetchRemoteOnBoot: false,
+      supabase,
+      tableOptions: { todos: { freshness: "server" } },
+      tables: ["todos"],
+    })
+
+    expect(stores.todos.getState().freshness).toBe("server")
+  })
+
+  it("defaults freshness to local-first when omitted", () => {
+    const supabase = createMockSupabase({
+      todos: [{ id: 1, title: "A" }],
+    })
+
+    const stores = createSupabaseStores<any>({
+      fetchRemoteOnBoot: false,
+      supabase,
+      tables: ["todos"],
+    })
+
+    expect(stores.todos.getState().freshness).toBe("local-first")
+  })
 })

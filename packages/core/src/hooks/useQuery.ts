@@ -6,7 +6,7 @@ import { useShallow } from "zustand/react/shallow"
 
 import { isKeyable,queryKey } from "../query/queryKey.js"
 import { selectQueryRows } from "../query/selectRows.js"
-import type { FetchOptions,TableStore, TrackedRow } from "../types.js"
+import type { FetchOptions, TableFreshness, TableStore, TrackedRow } from "../types.js"
 
 type UseQueryOptions<Row> = FetchOptions<Row> & {
   deps?: unknown[]
@@ -39,7 +39,8 @@ type UseQueryResult<Row> = {
  * falls back to the table's own flags, which is what every query did before.
  *
  * @param options.staleTime - Time in ms before THIS query is considered stale
- *   and refetched on mount. Defaults to 5000 (5s). Set to 0 to always refetch.
+ *   and refetched on mount. Defaults to 5000 (5s), or 0 when the store was
+ *   created with `freshness: "server"`. An explicit value always wins.
  */
 export function useQuery<
   Row extends Record<string, unknown>,
@@ -52,7 +53,10 @@ export function useQuery<
   const enabled = options?.enabled ?? true
   const deps = options?.deps ?? []
   const refetchInterval = options?.refetchInterval
-  const staleTime = options?.staleTime ?? 5000
+  const staleTime = resolveQueryStaleTime(
+    options?.staleTime,
+    store.getState().freshness,
+  )
   const optionsRef = useRef(options)
 
   useEffect(() => {
@@ -108,16 +112,23 @@ export function useQuery<
     }
 
 
-    // Error is captured in the query's entry; prevent an unhandled rejection.
-    fetch().catch(() => {})
+    // fetch() writes the failure onto the query entry / store `error`. Catch
+    // here only so a rejected promise from this effect is not unhandled.
+    fetch().catch((error: unknown) => {
+      void error
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, fetch, key, ...deps])
+  }, [enabled, fetch, key, staleTime, ...deps])
 
   // Refetch interval
   useEffect(() => {
     if (!enabled || !refetchInterval) {return}
 
-    const interval = setInterval(() => { fetch().catch(() => {}) }, refetchInterval)
+    const interval = setInterval(() => {
+      fetch().catch((error: unknown) => {
+        void error
+      })
+    }, refetchInterval)
 
     return () => { clearInterval(interval); }
   }, [enabled, refetchInterval, fetch])
@@ -133,6 +144,19 @@ export function useQuery<
     isLoading: entry ? entry.isLoading : storeIsLoading,
     refetch: fetch,
   }
+}
+
+const DEFAULT_STALE_TIME_MS = 5000
+
+function resolveQueryStaleTime(
+  explicit: number | undefined,
+  freshness: TableFreshness | undefined,
+): number {
+  if (explicit !== undefined) {
+    return explicit
+  }
+
+  return freshness === "server" ? 0 : DEFAULT_STALE_TIME_MS
 }
 
 /** The four options that belong to the hook, not to the fetch. */
