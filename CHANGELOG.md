@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.4.0] - 2026-09-16
+
 ### Added
 
 - **`tableOptions.freshness: "local-first" | "server"`** (also on
@@ -17,6 +19,10 @@
   mergeToStore })` on a simple PK table (e.g. Aesthemedstaff
   `user_verifications`) can switch to `freshness: "server"` and `useQuery`
   after bumping Anchor.
+
+- **PR CI** (`.github/workflows/ci.yml`): `pnpm lint`, `pnpm typecheck`, and
+  `pnpm test` on pull requests and pushes to `main`. The publish workflow
+  remains tag-only (`v*`) and is no longer the PR test gate.
 
 - **ESLint via [`eslint-config-hardcore`](https://github.com/EvgenyOrekhov/eslint-config-hardcore)**
   across publishable packages (`pnpm lint` / per-package `lint`). Configs chosen
@@ -74,6 +80,23 @@
   `EncryptedAdapter.multiSet` fallback, schema-version cache clear, and
   storage-quota estimate/evict helpers (`Promise.all`). Offline-queue flush
   and priority sync stay sequential on purpose (`dependsOn` / priority order).
+
+- **`adapter-web` LocalStorageAdapter tests install an in-memory `Storage`.**
+  jsdom 30 has no Storage on opaque origins, and Node 25+ exposes a global
+  `localStorage` getter that is `undefined` without `--localstorage-file`.
+  Without the shim, `pnpm test` failed the package as soon as the recursive
+  suite included it.
+
+- **`tsc --noEmit` accepts unicode-sets regex (`/v`)** by setting
+  `compilerOptions.target` to ES2024 (Node 22). `lib` stays ES2022 so ESLint 8's
+  parser still loads the project. Previously `pnpm typecheck` failed on
+  `authCallbacks.ts` and the mock client while `pnpm test` stayed green.
+
+### Changed
+
+- **Adapter package versions aligned to 3.4.0** (`anchor-adapter-web` and
+  `anchor-adapter-react-native` were still 3.1.0 in git). No adapter public API
+  change in this cut; the next `v*` publish can ship one version line.
 
 ## [3.3.0] - 2026-08-26
 

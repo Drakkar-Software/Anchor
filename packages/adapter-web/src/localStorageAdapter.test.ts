@@ -82,7 +82,7 @@ describe("LocalStorageAdapter", () => {
   })
 
   it("throws a quota message naming the key when the write is rejected", async () => {
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+    vi.spyOn(localStorage, "setItem").mockImplementation(() => {
       throw new DOMException("exceeded the quota", "QuotaExceededError")
     })
 
