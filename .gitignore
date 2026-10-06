@@ -3,3 +3,5 @@ node_modules/
 dist/
 *.tsbuildinfo
 .turbo/
+# npm lockfile. Installs use pnpm (packageManager, pnpm-lock.yaml).
+package-lock.json
