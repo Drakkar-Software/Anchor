@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **`useInfiniteQuery` samples imported it from `/hooks`.** That subpath does
+  not re-export the hook (it is root-only). The todo app example also still
+  called `useInfiniteQuery(store, options)` and read `hasNextPage` /
+  `fetchNextPage`. The README import and the example now pass the Supabase
+  client and read `hasMore` / `loadMore`.
+
 ## [3.4.1] - 2026-09-16
 
 ### Fixed

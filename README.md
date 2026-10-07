@@ -369,7 +369,7 @@ and no persistence. Reach for `useQuery` first; use this only when a screen
 genuinely needs cursor pagination a store's `records`/`order` can't express.
 
 ```tsx
-import { useInfiniteQuery } from '@drakkar.software/anchor/hooks'
+import { useInfiniteQuery } from '@drakkar.software/anchor'
 
 function InfiniteTodoList() {
   const { data, hasMore, loadMore, isLoading, isLoadingMore } = useInfiniteQuery(
