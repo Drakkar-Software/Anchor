@@ -27,9 +27,10 @@ import {
   eq,
   query,
   isPending,
+  useInfiniteQuery,
 } from "@drakkar.software/anchor"
-import { useInfiniteQuery, useLinkedQuery } from "@drakkar.software/anchor/hooks"
-import { stores, todosStore } from "./stores"
+import { useLinkedQuery } from "@drakkar.software/anchor/hooks"
+import { stores, supabase, todosStore } from "./stores"
 
 // ─── Auth ────────────────────────────────────────────────────────────
 
@@ -228,9 +229,10 @@ function TodoItem({
 // ─── Infinite Scroll Example ─────────────────────────────────────────
 
 function InfiniteTodoList() {
-  const { data, hasNextPage, fetchNextPage, isLoading } = useInfiniteQuery(
-    stores.todos,
+  const { data, hasMore, loadMore, isLoading } = useInfiniteQuery(
+    supabase,
     {
+      table: "todos",
       cursorColumn: "created_at",
       pageSize: 20,
       sort: [{ column: "created_at", ascending: false }],
@@ -249,8 +251,8 @@ function InfiniteTodoList() {
               <li key={t.id}>{t.title}</li>
             ))}
           </ul>
-          {hasNextPage && (
-            <button onClick={fetchNextPage}>Load more</button>
+          {hasMore && (
+            <button onClick={() => loadMore()}>Load more</button>
           )}
         </>
       )}

@@ -28,7 +28,7 @@ import type { Database } from "./database.types"
 // ─── Supabase Client ─────────────────────────────────────────────────
 
 // VITE_SUPABASE_PUBLISHABLE_KEY: sb_publishable_... (new format) or the legacy anon key
-const supabase = createClient<Database>(
+export const supabase = createClient<Database>(
   import.meta.env.VITE_SUPABASE_URL,
   import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
 )
