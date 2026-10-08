@@ -15,6 +15,44 @@ type SyncableState = {
 }
 
 /**
+ * The next store snapshot for one incoming payload, or null when it must be ignored.
+ *
+ * BroadcastChannel and the localStorage fallback both used to paste this merge.
+ * They have to stay identical: a pending row is local-only until its write lands,
+ * so whichever transport delivers the other tab's snapshot has to put that row
+ * back, and put its id back on `order` when the sender never had it.
+ */
+function mergedCrossTabState(
+  store: StoreApi<SyncableState>,
+  payload: CrossTabPayload,
+  sessionId?: string,
+): Pick<SyncableState, "isRestoring" | "order" | "records"> | null {
+  if (sessionId && payload.sessionId && payload.sessionId !== sessionId) {return null}
+
+  const current = store.getState()
+
+  // Don't apply cross-tab data during hydration. It would overwrite a partial load.
+  if (!current.isHydrated) {return null}
+
+  const records = new Map(payload.records)
+  const order = Array.from(payload.order)
+  const orderSet = new Set<string | number>(order)
+
+  for (const [id, row] of current.records) {
+    if (!(row as any)?._anchor_pending) {continue}
+
+    records.set(id, row)
+
+    if (!orderSet.has(id)) {
+      order.push(id)
+      orderSet.add(id)
+    }
+  }
+
+  return { isRestoring: false, order, records }
+}
+
+/**
  * Sets up cross-tab synchronization using the BroadcastChannel API.
  * State changes in one tab are automatically reflected in others.
  *
@@ -30,43 +68,14 @@ export function setupBroadcastSync(
   let receiving = false
 
   channel.onmessage = (event: MessageEvent<CrossTabPayload>) => {
-    // Ignore messages from different auth sessions
-    if (sessionId && event.data.sessionId && event.data.sessionId !== sessionId) {return}
+    const next = mergedCrossTabState(store, event.data, sessionId)
 
-    const current = store.getState()
-
-
-    // Don't apply cross-tab data during hydration — it would overwrite partially-loaded state
-    if (!current.isHydrated) {return}
+    if (!next) {return}
 
     receiving = true
 
     try {
-      const incoming = new Map(event.data.records)
-
-
-      // Preserve locally pending rows (optimistic mutations in flight)
-      for (const [id, row] of current.records) {
-        if ((row as any)?._anchor_pending) {
-          incoming.set(id, row)
-        }
-      }
-
-      const order = Array.from(event.data.order)
-      const orderSet = new Set<string | number>(order)
-
-      for (const [id] of current.records) {
-        if ((current.records.get(id) as any)?._anchor_pending && !orderSet.has(id)) {
-          order.push(id)
-          orderSet.add(id)
-        }
-      }
-
-      store.setState({
-        isRestoring: false,
-        order,
-        records: incoming,
-      } as Partial<SyncableState>)
+      store.setState(next)
     } finally {
       receiving = false
     }
@@ -144,44 +153,14 @@ export function setupStorageFallback(
 
     try {
       const payload = JSON.parse(event.newValue) as CrossTabPayload
+      const next = mergedCrossTabState(store, payload, sessionId)
 
-      // Ignore messages from different auth sessions
-      if (sessionId && payload.sessionId && payload.sessionId !== sessionId) {return}
-
-      const current = store.getState()
-
-
-      // Don't apply cross-tab data during hydration
-      if (!current.isHydrated) {return}
+      if (!next) {return}
 
       receiving = true
 
       try {
-        const incoming = new Map(payload.records)
-
-
-        // Preserve locally pending rows
-        for (const [id, row] of current.records) {
-          if ((row as any)?._anchor_pending) {
-            incoming.set(id, row)
-          }
-        }
-
-        const order = Array.from(payload.order)
-        const orderSet = new Set<string | number>(order)
-
-        for (const [id] of current.records) {
-          if ((current.records.get(id) as any)?._anchor_pending && !orderSet.has(id)) {
-            order.push(id)
-            orderSet.add(id)
-          }
-        }
-
-        store.setState({
-          isRestoring: false,
-          order,
-          records: incoming,
-        } as Partial<SyncableState>)
+        store.setState(next)
       } finally {
         receiving = false
       }
