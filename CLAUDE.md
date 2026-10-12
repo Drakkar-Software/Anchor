@@ -10,6 +10,11 @@ TypeScript library that binds Zustand state management to Supabase. Auto-generat
 - `packages/adapter-react-native` — RN adapters (`@drakkar.software/anchor-adapter-react-native`)
 - `examples/todo-app` — complete example app
 
+## Toolchain
+
+- **Node.js** `>=22` (`engines` in root `package.json`)
+- **pnpm** `10.25.0` (`packageManager` in root `package.json`; use Corepack, do not bump casually)
+
 ## Build & Test Commands
 
 ```bash
