@@ -20,6 +20,9 @@
   called `useInfiniteQuery(store, options)` and read `hasNextPage` /
   `fetchNextPage`. The README import and the example now pass the Supabase
   client and read `hasMore` / `loadMore`.
+- **`@drakkar.software/anchor-adapter-react-native`** no longer types the expo-sqlite
+  handle, rows, background task handler, or OAuth provider as `any`. Public signatures
+  and runtime behavior are unchanged.
 
 ## [3.4.1] - 2026-09-16
 

@@ -1,4 +1,4 @@
-import type { SupabaseClient } from "@supabase/supabase-js"
+import type { Provider, SupabaseClient } from "@supabase/supabase-js"
 
 export interface ExpoOAuthHandler {
   /** Get the configured redirect URL */
@@ -98,7 +98,7 @@ export function createExpoOAuthHandler(
     async signInWithProvider(provider: string) {
       const { data, error } = await supabase.auth.signInWithOAuth({
         options: { redirectTo: redirectUrl },
-        provider: provider as any,
+        provider: provider as Provider,
       })
 
       if (error) {throw error}
