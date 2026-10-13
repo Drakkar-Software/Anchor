@@ -19,7 +19,6 @@ TypeScript library that binds Zustand state management to Supabase. Auto-generat
 
 ```bash
 # Type-check every package (excludes test files via tsconfig).
-# CI does NOT run this — the publish workflow runs build + test only.
 pnpm -r typecheck
 
 # Lint every package (eslint-config-hardcore; ESLint 8 eslintrc).
@@ -39,9 +38,9 @@ cd packages/core && ./node_modules/.bin/tsup
 pnpm install
 ```
 
-`pnpm test` at the root is `pnpm -r test`, and only `core` defines a `test`
-script — so `packages/adapter-react-native/src/expoOAuth.test.ts` exists and has
-never run, in CI or locally. Do not read a green root run as covering it.
+`pnpm test` at the root is `pnpm -r test` and runs `vitest` in `packages/core`,
+`packages/adapter-web`, and `packages/adapter-react-native` (see each package's
+`test` script). CI runs the same via `.github/workflows/ci.yml`.
 
 ## Architecture
 

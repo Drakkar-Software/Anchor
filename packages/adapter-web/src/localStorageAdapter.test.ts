@@ -4,10 +4,7 @@ import { afterEach,beforeEach, describe, expect, it, vi } from "vitest"
 
 import { LocalStorageAdapter } from "./localStorageAdapter.js"
 
-/**
- * The first test in this package. `adapter-web` had none, and no `test` script
- * to run them with, so nothing here was ever exercised.
- */
+/** LocalStorageAdapter persistence and JSON round-trip behavior. */
 describe("LocalStorageAdapter", () => {
   let adapter: LocalStorageAdapter
 
