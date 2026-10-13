@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { type PrioritizedStore , syncAllByPriority } from "./selectiveSync.js"
+import {
+  type PrioritizedStore,
+  syncAllByPriority,
+} from "./selectiveSync.js"
 
 function createMockStore(name: string, fetchOrder: string[]) {
   const fetch = vi.fn().mockImplementation(async () => {
@@ -43,9 +46,12 @@ describe("syncAllByPriority", () => {
       { priority: 2, store: storeB },
     ]
 
-    await syncAllByPriority(stores)
+    const results = await syncAllByPriority(stores)
 
     expect(fetchOrder).toEqual(["a", "b", "c"])
+    expect(results).toHaveLength(3)
+    expect(results.map((r) => r.priority)).toEqual([1, 2, 3])
+    expect(results.every((r) => r.error === null)).toBe(true)
   })
 
   it("handles equal priorities", async () => {
@@ -62,27 +68,51 @@ describe("syncAllByPriority", () => {
     expect(fetchOrder).toHaveLength(2)
   })
 
-  it("continues on fetch error", async () => {
+  it("continues on fetch error and returns rejection as error", async () => {
     const fetchOrder: string[] = []
     const storeA = createMockStore("a", fetchOrder)
     const storeB = createMockStore("b", fetchOrder)
 
-    // Make storeA's fetch fail
-    storeA.getState().fetch.mockRejectedValueOnce(new Error("fail"))
+    const rejection = new Error("fail")
+
+    storeA.getState().fetch.mockImplementationOnce(async () => {
+      fetchOrder.push("a")
+      throw rejection
+    })
 
     const stores: PrioritizedStore[] = [
       { priority: 1, store: storeA },
       { priority: 2, store: storeB },
     ]
 
-    await syncAllByPriority(stores)
+    const results = await syncAllByPriority(stores)
 
-    // storeB should still be fetched even though storeA failed
-    expect(fetchOrder).toContain("b")
+    expect(fetchOrder).toEqual(["a", "b"])
+    expect(results).toHaveLength(2)
+    expect(results[0]!.error).toBe(rejection)
+    expect(results[1]!.error).toBeNull()
+  })
+
+  it("returns store state error when fetch resolves", async () => {
+    const fetchOrder: string[] = []
+    const storeA = createMockStore("a", fetchOrder)
+    const stateError = new Error("fetch failed silently")
+
+    const originalGetState = storeA.getState.bind(storeA)
+
+    storeA.getState = vi.fn(() => ({
+      ...originalGetState(),
+      error: stateError,
+    }))
+
+    const results = await syncAllByPriority([{ priority: 1, store: storeA }])
+
+    expect(results).toHaveLength(1)
+    expect(results[0]!.error).toBe(stateError)
   })
 
   it("handles empty store list", async () => {
-    await expect(syncAllByPriority([])).resolves.toBeUndefined()
+    await expect(syncAllByPriority([])).resolves.toEqual([])
   })
 
   it("does not mutate the input array", async () => {

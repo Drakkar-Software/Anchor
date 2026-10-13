@@ -14,6 +14,12 @@ export type PrioritizedStore = {
   store: StoreApi<TableStore<any, any, any>>
 }
 
+export type PrioritySyncResult = {
+  priority: number
+  store: PrioritizedStore["store"]
+  error: Error | null
+}
+
 export type SelectiveSyncOptions<Row = Record<string, unknown>> =
   IncrementalSyncOptions & {
     /** Conflict resolution config */
@@ -71,12 +77,28 @@ export async function selectiveSync<
  */
 export async function syncAllByPriority(
   stores: PrioritizedStore[],
-): Promise<void> {
+): Promise<PrioritySyncResult[]> {
   const sorted = Array.from(stores).sort((a, b) => a.priority - b.priority)
+  const results: PrioritySyncResult[] = []
 
-  for (const { store } of sorted) {
-    // Sequential by design — see docstring (avoid saturating the server).
-    // react-doctor-disable-next-line react-doctor/async-await-in-loop
-    await store.getState().fetch().catch(() => {})
+  for (const { priority, store } of sorted) {
+    let error: Error | null = null
+
+    try {
+      // Sequential by design — see docstring (avoid saturating the server).
+      // react-doctor-disable-next-line react-doctor/async-await-in-loop
+      await store.getState().fetch()
+    } catch (rejection) {
+      error =
+        rejection instanceof Error ? rejection : new Error(String(rejection))
+    }
+
+    if (error === null) {
+      error = store.getState().error
+    }
+
+    results.push({ priority, store, error })
   }
+
+  return results
 }

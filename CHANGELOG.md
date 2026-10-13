@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`syncAllByPriority()`** returns `Promise<PrioritySyncResult[]>` with per-store
+  `error` (`Error | null`) in execution order; sequential fetch still runs every
+  store and never throws. Export `PrioritySyncResult`.
+
 ### Fixed
 
 - **`useInfiniteQuery` samples imported it from `/hooks`.** That subpath does
