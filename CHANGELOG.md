@@ -15,6 +15,7 @@
 
 ### Fixed
 
+- **`useAuthCallback` ignored every auth URL after the first.** The hook now tracks the last processed URL instead of a one-shot flag, so each distinct callback URL is processed once. A URL with no auth params no longer blocks later callbacks, and a result from a superseded URL is dropped.
 - **`useInfiniteQuery` samples imported it from `/hooks`.** That subpath does
   not re-export the hook (it is root-only). The todo app example also still
   called `useInfiniteQuery(store, options)` and read `hasNextPage` /

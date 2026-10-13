@@ -94,7 +94,7 @@ export type UseAuthCallbackResult = {
  *
  * - Calls `createSessionFromUrl` when the URL contains auth tokens
  * - Updates the anchor auth store via `setState`
- * - Fires `onSuccess` or `onError` once, then stops (one-shot processing)
+ * - Fires `onSuccess` or `onError` once per distinct URL; a re-render with the same URL is skipped
  *
  * Works on both web (`window.location.href`) and native (Expo deep links).
  * Platform-specific URL retrieval is the caller's responsibility via `getUrl`.
@@ -133,21 +133,28 @@ export function useAuthCallback(
 ): UseAuthCallbackResult {
   const [isProcessing, setIsProcessing] = useState(false)
   const [error, setError] = useState<Error | null>(null)
-  const processed = useRef(false)
+  const processedUrl = useRef<string | null>(null)
+  const latestRequest = useRef(0)
 
   // Call getUrl() in the render cycle so changes (native deep-link arriving)
   // trigger a re-render and re-run the effect.
   const url = options.getUrl()
 
   useEffect(() => {
-    if (processed.current || !url) {return}
+    if (!url || url === processedUrl.current) {return}
 
-    processed.current = true
+    processedUrl.current = url
+
+    const request = ++latestRequest.current
+    const isCurrent = () => request === latestRequest.current
+
     setIsProcessing(true)
     setError(null)
 
     createSessionFromUrl(supabase, url)
       .then((result) => {
+        if (!isCurrent()) {return}
+
         setIsProcessing(false)
 
         if (!result) {return} // URL had no auth params — nothing to do
@@ -185,6 +192,8 @@ export function useAuthCallback(
         }
       })
       .catch((error_: unknown) => {
+        if (!isCurrent()) {return}
+
         const wrapped = error_ instanceof Error ? error_ : new Error(String(error_))
 
         setError(wrapped)
