@@ -768,7 +768,7 @@ local row if the resolver returns `null`.
 | `setupCrossTabSync(store, name, sessionId?)` | `() => void` | BroadcastChannel, falling back to `localStorage` events. Pending rows always preserved; incoming updates ignored while `!isHydrated`. |
 | `incrementalSync(supabase, table, primaryKey, store, options?)` | `Promise<{ fetchedCount, mergedCount }>` | Delta fetch since `state.lastFetchedAt` on `timestampColumn` (default `"updated_at"`); rows with a NULL timestamp are included on purpose; skips `_anchor_pending` rows. |
 | `selectiveSync(supabase, table, primaryKey, store, options?)` | same as above | `IncrementalSyncOptions & { filters?, conflict? }`, sync a filtered subset. |
-| `syncAllByPriority(stores: {store, priority}[])` | `Promise<void>` | Ascending priority (lower number first), sequential, swallows per-store errors. |
+| `syncAllByPriority(stores: {store, priority}[])` | `Promise<PrioritySyncResult[]>` | Ascending priority (lower number first), sequential; one result per store with `error` from fetch rejection or `store.getState().error`, never throws. |
 | `fetchPage(store, options: CursorPaginationOptions)` | `Promise<{data, pagination}>` | `buildCursorQuery` → `store.fetch()` → `processCursorResults`, composed. |
 | `setupMultiDeviceSync(supabase, stores, options?)` | `() => void` | Supabase Realtime **broadcast** (not `postgres_changes`), event `"sync"`; own broadcasts ignored by `deviceId`; delta-only, debounced per table (default 1000 ms). |
 | `setupBackgroundSync(queue, adapter, options?)` | `Promise<() => Promise<void>>` | Registers a `BackgroundTaskAdapter` task (default name `"anchor:background-sync"`) that calls `queue.flush()`. |

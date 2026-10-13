@@ -209,7 +209,7 @@ export { setupBroadcastSync, setupCrossTabSync, setupStorageFallback } from "./s
 export { incrementalSync } from "./sync/incrementalSync.js"
 
 // ─── Selective Sync ─────────────────────────────────────────────────
-export type { PrioritizedStore,SelectiveSyncOptions } from "./sync/selectiveSync.js"
+export type { PrioritizedStore, PrioritySyncResult, SelectiveSyncOptions } from "./sync/selectiveSync.js"
 export { fetchPage,selectiveSync, syncAllByPriority } from "./sync/selectiveSync.js"
 
 // ─── Multi-Device Sync ──────────────────────────────────────────────
