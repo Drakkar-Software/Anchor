@@ -77,6 +77,7 @@ describe("syncAllByPriority", () => {
 
     storeA.getState().fetch.mockImplementationOnce(async () => {
       fetchOrder.push("a")
+
       throw rejection
     })
 
