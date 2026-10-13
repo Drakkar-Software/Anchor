@@ -843,15 +843,15 @@ const cleanup = setupMultiDeviceSync(supabase, {
 })
 ```
 
-### Selective Sync
+### Incremental sync
 
-Sync only relevant subsets of data:
+Delta-fetch changed rows; optional filters narrow what is merged:
 
 ```typescript
-import { selectiveSync, syncAllByPriority } from '@drakkar.software/anchor'
+import { incrementalSync, syncAllByPriority } from '@drakkar.software/anchor'
 
 // Sync only active todos
-await selectiveSync(supabase, 'todos', 'id', stores.todos, {
+await incrementalSync(supabase, 'todos', 'id', stores.todos, {
   filters: [eq('status', 'active')],
   timestampColumn: 'updated_at',
 })
@@ -1197,7 +1197,8 @@ import { createStorageActions } from '@drakkar.software/anchor/storage/storageAc
 // New entry points
 import { setupAppLifecycle } from '@drakkar.software/anchor/lifecycle'
 import { setupBackgroundSync } from '@drakkar.software/anchor/sync/background'
-import { selectiveSync } from '@drakkar.software/anchor/sync/selective'
+import { incrementalSync } from '@drakkar.software/anchor/sync/incremental'
+// `selectiveSync` from `@drakkar.software/anchor/sync/selective` is deprecated; use incrementalSync (same options).
 import { setupMultiDeviceSync } from '@drakkar.software/anchor/sync/multiDevice'
 import { SyncMetrics } from '@drakkar.software/anchor/sync/metrics'
 import { EncryptedAdapter } from '@drakkar.software/anchor/persistence/encrypted'

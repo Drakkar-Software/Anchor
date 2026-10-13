@@ -86,7 +86,7 @@ listed throws `ERR_PACKAGE_PATH_NOT_EXPORTED` regardless of what `dist/` contain
 | `/rpc` | `callRpc`, `createRpcAction`, `createSchemaRpc`, `invalidateRpcCache` |
 | `/sync` | `setupCrossTabSync`, `setupBroadcastSync`, `setupStorageFallback` |
 | `/sync/incremental` | `incrementalSync`, `IncrementalSyncOptions` (subpath-only) |
-| `/sync/selective` | `selectiveSync`, `syncAllByPriority`, `fetchPage` |
+| `/sync/selective` | `selectiveSync` (deprecated; use `incrementalSync`), `syncAllByPriority`, `fetchPage` |
 | `/sync/multiDevice` | `setupMultiDeviceSync` |
 | `/sync/background` | `setupBackgroundSync`, `isBackgroundSyncRegistered` |
 | `/sync/metrics` | `SyncMetrics` |
@@ -766,8 +766,8 @@ local row if the resolver returns `null`.
 | Function | Signature | Behavior |
 |---|---|---|
 | `setupCrossTabSync(store, name, sessionId?)` | `() => void` | BroadcastChannel, falling back to `localStorage` events. Pending rows always preserved; incoming updates ignored while `!isHydrated`. |
-| `incrementalSync(supabase, table, primaryKey, store, options?)` | `Promise<{ fetchedCount, mergedCount }>` | Delta fetch since `state.lastFetchedAt` on `timestampColumn` (default `"updated_at"`); rows with a NULL timestamp are included on purpose; skips `_anchor_pending` rows. |
-| `selectiveSync(supabase, table, primaryKey, store, options?)` | same as above | `IncrementalSyncOptions & { filters?, conflict? }`, sync a filtered subset. |
+| `incrementalSync(supabase, table, primaryKey, store, options?)` | `Promise<{ fetchedCount, mergedCount }>` | Delta fetch since `state.lastFetchedAt` on `timestampColumn` (default `"updated_at"`); optional `filters` and `conflict`; rows with a NULL timestamp are included on purpose; skips `_anchor_pending` rows. |
+| `selectiveSync(supabase, table, primaryKey, store, options?)` | same as above | **Deprecated.** Delegates to `incrementalSync` with the same options (including `filters`). Prefer `incrementalSync`. |
 | `syncAllByPriority(stores: {store, priority}[])` | `Promise<PrioritySyncResult[]>` | Ascending priority (lower number first), sequential; one result per store with `error` from fetch rejection or `store.getState().error`, never throws. |
 | `fetchPage(store, options: CursorPaginationOptions)` | `Promise<{data, pagination}>` | `buildCursorQuery` → `store.fetch()` → `processCursorResults`, composed. |
 | `setupMultiDeviceSync(supabase, stores, options?)` | `() => void` | Supabase Realtime **broadcast** (not `postgres_changes`), event `"sync"`; own broadcasts ignored by `deviceId`; delta-only, debounced per table (default 1000 ms). |
@@ -1270,7 +1270,7 @@ const cleanup = await setupBackgroundSync(
 | Auto-flush/refresh/revalidate on app foreground | `setupAppLifecycle` / `useAppLifecycle` |
 | Sync across browser tabs | `setupCrossTabSync` |
 | Sync across devices (not tabs) | `setupMultiDeviceSync` |
-| Delta-fetch only changed rows | `incrementalSync` / `selectiveSync` |
+| Delta-fetch only changed rows | `incrementalSync` (`selectiveSync` is deprecated) |
 | Background-flush the queue on mobile | `setupBackgroundSync` + `RNBackgroundSync` |
 | Session-gated stores (clear/refetch on auth change) | `setupAuthGate` |
 | Handle magic-link/recovery/invite redirect | `useAuthCallback` or `createSessionFromUrl` directly |
