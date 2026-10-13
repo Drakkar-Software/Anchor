@@ -48,8 +48,7 @@ export async function fetchPage<
 }
 
 /**
- * Incremental sync with additional user-defined filters.
- * Only syncs rows matching the given criteria.
+ * @deprecated Use {@link incrementalSync} instead. It accepts the same options, including `filters` and `conflict`.
  */
 export async function selectiveSync<
   Row extends Record<string, unknown>,
@@ -62,7 +61,7 @@ export async function selectiveSync<
   store: StoreApi<TableStore<Row, InsertRow, UpdateRow>>,
   options?: SelectiveSyncOptions<Row>,
 ): Promise<{ fetchedCount: number; mergedCount: number }> {
-  // selectiveSync delegates to incrementalSync with filters applied via queryFn
+  // Direct delegation; incrementalSync applies filters (and other options) internally.
   return await incrementalSync(supabase, table, primaryKey, store, {
     conflict: options?.conflict,
     filters: options?.filters,

@@ -8,6 +8,11 @@
   `error` (`Error | null`) in execution order; sequential fetch still runs every
   store and never throws. Export `PrioritySyncResult`.
 
+### Deprecated
+
+- **`EvictionOptions.maxAge`** on `StorageQuotaManager.evictByCount` is documented as ignored (never read) and scheduled for removal in the next major release.
+- **`selectiveSync`** is deprecated in favor of **`incrementalSync`**, which accepts the same options including `filters`.
+
 ### Fixed
 
 - **`useInfiniteQuery` samples imported it from `/hooks`.** That subpath does

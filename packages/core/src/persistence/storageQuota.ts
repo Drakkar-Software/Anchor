@@ -1,7 +1,9 @@
 import type { PersistenceAdapter } from "../types.js"
 
 export type EvictionOptions = {
-  /** Remove keys not accessed within this many milliseconds */
+  /**
+   * @deprecated Ignored: `evictByCount` never reads this field. It will be removed in the next major release.
+   */
   maxAge?: number
 
   /** Maximum number of records to keep */
@@ -110,7 +112,8 @@ getTableLimit(table: string): number | undefined {
   }
 
   /**
-   * Evict the oldest entries by key prefix.
+   * Evict entries by key prefix until at most `maxRecords` data keys remain.
+   * Removal order follows `adapter.keys(prefix)` (first keys in that list are removed first), not key age or access time.
    * Returns the number of entries removed.
    */
   async evictByCount(
@@ -138,7 +141,7 @@ getTableLimit(table: string): number | undefined {
 
     if (dataKeys.length <= maxRecords) {return 0}
 
-    // Remove oldest keys (first in list) to get under the limit
+    // Remove keys in adapter.keys() order (first in list) to get under the limit
     const toRemove = dataKeys.slice(0, dataKeys.length - maxRecords)
 
     await Promise.all(toRemove.map(async (key) => { await adapter.removeItem(key); }))
