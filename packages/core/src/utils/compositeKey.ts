@@ -1,11 +1,15 @@
+type EqFilterBuilder<TBuilder> = {
+  eq: (column: string, value: unknown) => TBuilder
+}
+
 /**
  * Apply primary key equality filters to a Supabase builder.
  */
-export function applyPkFilters(
-  builder: any,
+export function applyPkFilters<TBuilder extends EqFilterBuilder<TBuilder>>(
+  builder: TBuilder,
   primaryKey: string | string[],
   id: string | number,
-): any {
+): TBuilder {
   if (typeof primaryKey === "string") {
     return builder.eq(primaryKey, id)
   }

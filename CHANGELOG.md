@@ -15,6 +15,7 @@
 
 ### Fixed
 
+- **`applyPkFilters` is typed.** It is generic over the builder it receives and returns that same builder type, instead of `any` in both places.
 - **`useInfiniteQuery` samples imported it from `/hooks`.** That subpath does
   not re-export the hook (it is root-only). The todo app example also still
   called `useInfiniteQuery(store, options)` and read `hasNextPage` /

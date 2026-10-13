@@ -23,6 +23,7 @@ import type { StoreApi } from "zustand"
 
 import type { VerifyOtpParams as AnchorVerifyOtpParams } from "./auth/authCallbacks.js"
 import { createSchemaRpc, type RpcResult } from "./rpc/rpcAction.js"
+import { applyPkFilters } from "./utils/compositeKey.js"
 import type {
   CreateTableStoreOptions,
   ExtractSchema,
@@ -391,4 +392,22 @@ export function _freshnessOptionsProbe(
   void bad
 
   return fromOptions
+}
+
+/**
+ * `applyPkFilters` hands back the builder it was given, so a typed PostgREST
+ * chain keeps its type through a primary-key filter. Returning `any` would
+ * pass a plain assignment; `Eq` is what catches it.
+ *
+ * Never called. Exported so `noUnusedLocals` keeps it.
+ */
+type PkFilterBuilder = ReturnType<ReturnType<SupabaseClient["from"]>["select"]>
+
+export function _applyPkFiltersProbe(builder: PkFilterBuilder) {
+  const single = applyPkFilters(builder, "id", 1)
+  const composite = applyPkFilters(builder, ["user_id", "post_id"], "[1,2]")
+  const singleKeepsBuilder: Expect<Eq<typeof single, PkFilterBuilder>> = true
+  const compositeKeepsBuilder: Expect<Eq<typeof composite, PkFilterBuilder>> = true
+
+  return [singleKeepsBuilder, compositeKeepsBuilder]
 }
