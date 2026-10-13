@@ -216,13 +216,15 @@ describe("setupAppLifecycle", () => {
   })
 
   it("resumes realtime on foreground after background pause", () => {
-    const unsubscribe = vi.fn()
-    const subscribe = vi.fn(() => () => {})
-    const store = createMockStore({
-      realtimeStatus: "disconnected" as const,
-      subscribe,
-      unsubscribe,
+    const overrides: Record<string, unknown> = { realtimeStatus: "connected" }
+    const unsubscribe = vi.fn(() => {
+      overrides.realtimeStatus = "disconnected"
     })
+    const subscribe = vi.fn(() => () => {})
+
+    Object.assign(overrides, { subscribe, unsubscribe })
+
+    const store = createMockStore(overrides)
 
     setupAppLifecycle({
       adapter,
@@ -230,8 +232,13 @@ describe("setupAppLifecycle", () => {
       stores: [store],
     })
 
-    // Foreground should call subscribe since status is disconnected
+    adapter.triggerBackground()
+
+    expect(unsubscribe).toHaveBeenCalledOnce()
+    expect(subscribe).not.toHaveBeenCalled()
+
     adapter.triggerForeground()
+
     expect(subscribe).toHaveBeenCalledOnce()
   })
 
