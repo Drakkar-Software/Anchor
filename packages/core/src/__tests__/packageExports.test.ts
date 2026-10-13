@@ -24,6 +24,8 @@ const pkg = JSON.parse(
   readFileSync(fileURLToPath(new URL("../../package.json", import.meta.url)), "utf8"),
 ) as {
   exports: Record<string, { import: string; require: string; types: string; }>
+  peerDependencies: Record<string, string>
+  peerDependenciesMeta: Record<string, { optional?: boolean }>
 }
 
 const entries = (tsupConfig as { entry: Record<string, string> }).entry
@@ -70,5 +72,15 @@ describe("package exports cover every build entry", () => {
     ]) {
       expect(Object.keys(pkg.exports)).toContain(subpath)
     }
+  })
+
+  it("lists react and immer as optional peers so the meta is honored", () => {
+    // npm ignores peerDependenciesMeta unless the same name is also in
+    // peerDependencies. The ranges match zustand's own optional peers.
+    expect(pkg.peerDependencies.react).toBe(">=18.0.0")
+    expect(pkg.peerDependencies.immer).toBe(">=9.0.6")
+    expect(pkg.peerDependencies.zustand).toBe(">=4.5.0")
+    expect(pkg.peerDependenciesMeta.react?.optional).toBe(true)
+    expect(pkg.peerDependenciesMeta.immer?.optional).toBe(true)
   })
 })

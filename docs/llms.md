@@ -16,8 +16,8 @@ Realtime / Storage / Edge Functions semantics not reproduced here, use
 <https://supabase.com/llms.txt>. `docs/supabase-api-coverage.md` in this repo maps what
 Anchor wires versus what it doesn't, but is not repeated in this file.
 
-Requirements: `zustand >= 4.5.0` (peer), `react >= 18` (optional peer, for hooks),
-`immer` (optional peer, for draft-based mutations), Node >= 22, TypeScript >= 5
+Requirements: `zustand >= 4.5.0` (peer), `react >= 18.0.0` (optional peer, for hooks),
+`immer >= 9.0.6` (optional peer, for draft-based mutations), Node >= 22, TypeScript >= 5
 recommended. `@supabase/supabase-js` is a direct dependency of core since 3.1.0, it is
 installed automatically and its types are re-exported from the root entry; a consumer
 does not need to depend on it directly.
