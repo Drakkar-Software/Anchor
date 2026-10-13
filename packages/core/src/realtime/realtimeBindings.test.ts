@@ -161,6 +161,15 @@ describe("bindRealtimeToStore", () => {
     cleanup()
     expect(supabase.removeChannel).toHaveBeenCalled()
   })
+
+  it("mirrors the channel status into realtimeStatus", () => {
+    const store = createTestStore()
+    const { manager } = createTestManager()
+
+    bindRealtimeToStore(manager, store, { primaryKey: "id", table: "todos" })
+
+    expect(store.getState().realtimeStatus).toBe("connected")
+  })
 })
 
 describe("store.subscribe() is no longer a no-op", () => {
