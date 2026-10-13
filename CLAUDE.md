@@ -24,7 +24,8 @@ pnpm -r typecheck
 # Lint every package (eslint-config-hardcore; ESLint 8 eslintrc).
 pnpm lint
 
-# React Doctor (all rules enabled via doctor.config.json).
+# React Doctor (all rules enabled via doctor.config.json). Advisory and local-only:
+# it runs with `--blocking none`, so findings never fail a check, and CI does not run it.
 pnpm lint:doctor
 
 # Run tests. The binaries live under the PACKAGE's node_modules under pnpm;
