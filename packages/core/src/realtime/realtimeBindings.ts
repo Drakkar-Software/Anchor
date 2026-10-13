@@ -47,7 +47,7 @@ export function bindRealtimeToStore<
     filter,
 
     onDelete(oldRow: Partial<Row>) {
-      store.setState((prev: any) => {
+      store.setState((prev) => {
         const id = (oldRow as Record<string, unknown>)[primaryKey] as
           | string
           | number
@@ -72,7 +72,7 @@ export function bindRealtimeToStore<
     },
 
     onInsert(row: Row) {
-      store.setState((prev: any) => {
+      store.setState((prev) => {
         const records = new Map(prev.records) as Map<string | number, TrackedRow<Row>>
         const order = Array.from(prev.order) as (string | number)[]
         const id = (row as Record<string, unknown>)[primaryKey] as
@@ -93,11 +93,11 @@ export function bindRealtimeToStore<
     },
 
     onStatus(status) {
-      store.setState({ realtimeStatus: status } as any)
+      store.setState({ realtimeStatus: status })
     },
 
     onUpdate(row: Row) {
-      store.setState((prev: any) => {
+      store.setState((prev) => {
         const records = new Map(prev.records) as Map<string | number, TrackedRow<Row>>
         const id = (row as Record<string, unknown>)[primaryKey] as
           | string

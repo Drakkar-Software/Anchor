@@ -1,8 +1,27 @@
-import { describe, expect,it } from "vitest"
+import { describe, expect,it, vi } from "vitest"
 
 import { createMockSupabase } from "../__tests__/mockSupabase.js"
 import { createTableStore } from "../createTableStore.js"
-import { isExpired,isStale } from "./cacheTtl.js"
+import { fetchWithSwr,isExpired,isStale } from "./cacheTtl.js"
+
+describe("fetchWithSwr", () => {
+  it("serves cached rows and surfaces a failed background refetch on error", async () => {
+    const supabase = createMockSupabase({ todos: [{ id: 1, title: "A" }] })
+    const store = createTableStore<any, any, any, any>({
+      supabase,
+      table: "todos",
+    })
+
+    await store.getState().fetch()
+    store.setState({ lastFetchedAt: Date.now() - 6 * 60 * 1000 })
+    store.setState({ fetch: vi.fn().mockRejectedValue(new Error("offline")) })
+
+    await fetchWithSwr(store)
+
+    await vi.waitFor(() => { expect(store.getState().error?.message).toBe("offline"); })
+    expect(store.getState().records.get(1)).toMatchObject({ title: "A" })
+  })
+})
 
 describe("isStale", () => {
   it("returns true when never fetched", () => {
