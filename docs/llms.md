@@ -85,7 +85,7 @@ listed throws `ERR_PACKAGE_PATH_NOT_EXPORTED` regardless of what `dist/` contain
 | `/persistence/schemaVersion` | `checkSchemaVersion`, `getSchemaVersion`, `setSchemaVersion` |
 | `/rpc` | `callRpc`, `createRpcAction`, `createSchemaRpc`, `invalidateRpcCache` |
 | `/sync` | `setupCrossTabSync`, `setupBroadcastSync`, `setupStorageFallback` |
-| `/sync/incremental` | `incrementalSync`, `IncrementalSyncOptions` (subpath-only) |
+| `/sync/incremental` | `incrementalSync` (also exported from the root), `IncrementalSyncOptions` (subpath-only type) |
 | `/sync/selective` | `selectiveSync` (deprecated; use `incrementalSync`), `syncAllByPriority`, `fetchPage` |
 | `/sync/multiDevice` | `setupMultiDeviceSync` |
 | `/sync/background` | `setupBackgroundSync`, `isBackgroundSyncRegistered` |
