@@ -107,6 +107,8 @@ async function getOrCreateSuspensePromise<
     promise = store.getState().fetch(options)
   }
 
+  // Marks the cached promise as handled for the runtime only; rejections still
+  // land on store/query state and are thrown to the boundary before suspend.
   promise.catch(() => {})
   promises.set(cacheKey, promise)
 
