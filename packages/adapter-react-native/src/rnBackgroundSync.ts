@@ -7,7 +7,7 @@ interface BackgroundFetchModule {
 }
 
 interface TaskManagerModule {
-  defineTask: (name: string, handler: () => Promise<any>) => void
+  defineTask: (name: string, handler: () => Promise<unknown>) => void
   isTaskRegisteredAsync: (name: string) => Promise<boolean>
 }
 

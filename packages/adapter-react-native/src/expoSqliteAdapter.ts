@@ -1,7 +1,17 @@
 import type { PersistenceAdapter } from "@drakkar.software/anchor/persistence"
 
+type SQLiteBindValue = string | number | null | boolean | Uint8Array
+
+interface SQLiteDatabase {
+  execSync: (source: string) => void
+  runSync: (source: string, params: SQLiteBindValue[]) => unknown
+  getFirstSync: <T = Record<string, unknown>>(source: string, params: SQLiteBindValue[]) => T | null
+  getAllSync: <T = Record<string, unknown>>(source: string, params: SQLiteBindValue[]) => T[]
+  withTransactionSync: (task: () => void) => void
+}
+
 interface SQLiteModule {
-  openDatabaseSync: (name: string) => any
+  openDatabaseSync: (name: string) => SQLiteDatabase
 }
 
 /**
@@ -16,7 +26,7 @@ interface SQLiteModule {
  * new ExpoSqliteAdapter(SQLite, 'anchor-kv')
  */
 export class ExpoSqliteAdapter implements PersistenceAdapter {
-  private readonly db: any // SQLiteDatabase
+  private readonly db: SQLiteDatabase
 
   constructor(SQLite: SQLiteModule, databaseName = "anchor") {
     this.db = SQLite.openDatabaseSync(databaseName)
@@ -26,7 +36,7 @@ export class ExpoSqliteAdapter implements PersistenceAdapter {
   }
 
   async getItem<T>(key: string): Promise<T | null> {
-    const row = this.db.getFirstSync(
+    const row = this.db.getFirstSync<{ value?: string | null }>(
       "SELECT value FROM kv WHERE key = ?",
       [key],
     )
@@ -66,15 +76,15 @@ export class ExpoSqliteAdapter implements PersistenceAdapter {
 
   async keys(prefix?: string): Promise<string[]> {
     const rows = prefix
-      ? this.db.getAllSync("SELECT key FROM kv WHERE key LIKE ?", [
+      ? this.db.getAllSync<{ key: string }>("SELECT key FROM kv WHERE key LIKE ?", [
           `${prefix}%`,
         ])
-      : this.db.getAllSync("SELECT key FROM kv")
+      : this.db.getAllSync<{ key: string }>("SELECT key FROM kv", [])
 
-    return rows.map((r: any) => r.key as string)
+    return rows.map((r) => r.key)
   }
 
   async clear(): Promise<void> {
-    this.db.runSync("DELETE FROM kv WHERE key LIKE 'anchor:%'")
+    this.db.runSync("DELETE FROM kv WHERE key LIKE 'anchor:%'", [])
   }
 }
