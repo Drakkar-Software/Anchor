@@ -1127,10 +1127,6 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
       async setAuth(_token: string | null) {},
     },
 
-    removeAllChannels() {
-      channels.length = 0
-    },
-
     removeChannel(channel: any) {
       const idx = channels.indexOf(channel)
 
@@ -1230,10 +1226,6 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
     const sent: { event: string; payload?: any; type: string; }[] = []
 
     const channel: any = {
-      // Test drivers
-      _bindings: bindings,
-
-
       /** Deliver a payload to every binding whose type and event match. */
       _fireEvent(type: string, payload: any, event?: string) {
         if (channel._removed) {return}
@@ -1282,15 +1274,9 @@ export function createMockSupabase(initialData: Record<string, MockRow[]> = {}) 
         return channel
       },
 
-      topic,
-
       async track(payload: Record<string, unknown>) {
         presence[topic] = [{ presence_ref: "ref-1", ...payload }]
 
-        return "ok"
-      },
-
-      async unsubscribe() {
         return "ok"
       },
 

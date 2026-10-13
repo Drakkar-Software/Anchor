@@ -92,7 +92,7 @@ describe("createTableStore performance optimizations", () => {
 
   /** Creates a mock supabase that always returns an error */
   function createFailingSupabase() {
-    return createDelayedSupabase([], 0).from ? {
+    return {
       ...createDelayedSupabase([], 0),
 
       from: () => ({
@@ -111,7 +111,7 @@ describe("createTableStore performance optimizations", () => {
           return builder
         },
       }),
-    } : null
+    }
   }
 
   describe("stale-while-revalidate", () => {
